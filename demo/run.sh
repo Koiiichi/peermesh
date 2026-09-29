@@ -17,10 +17,15 @@ git -c user.email=demo@example.invalid -c user.name=demo commit -qm "demo: initi
 git worktree add -q "$DEMO/wt-claude" -b claude-work
 git worktree add -q "$DEMO/wt-codex" -b codex-work
 
+# Each session must start clean: variables inherited from the launching agent session make the
+# demo sessions look like its children (Claude then turns off transcript saving).
+CLEAN='for v in $(env | grep -E "^(CLAUDE_CODE_|CODEX_|CLAUDECODE=|CLAUDE_PID=)" | cut -d= -f1); do unset "$v"; done'
 cat > "$DEMO/start-codex.sh" <<EOS
+$CLEAN
 cd "$DEMO/wt-codex" && exec codex "\$(cat "$HERE/codex-prompt.txt")"
 EOS
 cat > "$DEMO/start-claude.sh" <<EOS
+$CLEAN
 cd "$DEMO/wt-claude" && exec claude "\$(cat "$HERE/claude-prompt-$MODE.txt")"
 EOS
 
