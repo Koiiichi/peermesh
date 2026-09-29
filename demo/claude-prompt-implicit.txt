@@ -1,0 +1,1 @@
+In cart.py, rename the function total to sum_prices. Commit the change.

@@ -1,0 +1,4 @@
+Use peers_list to find the Codex peer in this repository.
+In cart.py, rename the function total to sum_prices. Commit the change.
+Send the Codex peer a message: tell it the rename, the commit hash, and ask it to update checkout.py on its branch for the new name. Use kind request.
+When the Codex peer replies, report the reply to me.

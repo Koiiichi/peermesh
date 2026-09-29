@@ -1,0 +1,3 @@
+You work in this worktree on branch codex-work. Other agent sessions can work in other worktrees of this repository.
+Run `peers list` once. Then end your turn.
+When a peer message arrives, read it. If it asks for work in this repository, do the work, commit it, and reply with `peers reply <msg> --body "<text>"`. Include the commit hash in the reply.
