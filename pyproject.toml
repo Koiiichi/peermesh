@@ -3,7 +3,7 @@ name = "peermesh"
 version = "0.1.0"
 description = "Local peer messaging between Claude Code and Codex sessions"
 requires-python = ">=3.11"
-dependencies = ["mcp>=1.2"]
+dependencies = ["mcp>=2.2,<3"]
 
 [project.scripts]
 peers = "peermesh.cli:main"
