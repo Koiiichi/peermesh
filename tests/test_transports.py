@@ -214,3 +214,29 @@ def test_unanswered_steer_is_not_queued_again(
     outcome = transport.deliver(b, "R", msg)
     assert outcome.status == "refused" and "Do not resend" in outcome.note
     assert [list(e) for e in _log(stub_codex)] == [["steer"]]
+
+
+def test_steer_write_failure_is_not_steered() -> None:
+    from peermesh.transports.codex import _Rpc
+
+    class DeadProc:
+        stdout: list[str] = []
+
+        class stdin:  # noqa: N801 - mimics Popen.stdin
+            @staticmethod
+            def write(text: str) -> None:
+                raise BrokenPipeError("proxy exited")
+
+            @staticmethod
+            def flush() -> None:
+                pass
+
+    steerer = AppServerSteerer("codex", timeout=1.0)
+    rpc = _Rpc(DeadProc(), 1.0)  # type: ignore[arg-type]
+    rpc.request = lambda method, params: (  # type: ignore[method-assign]
+        {"thread": {"turns": [{"id": "t", "status": "inProgress"}]}}
+        if method != "turn/steer"
+        else _Rpc.request(rpc, method, params)
+    )
+    rpc.notify = lambda method, params: None  # type: ignore[method-assign]
+    assert steerer._steer(rpc, "t-1", "x") == "not_steered"

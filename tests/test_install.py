@@ -155,3 +155,33 @@ def test_run_reports_install_error(
     ns = argparse.Namespace(cmd="install", runtime="both", dry_run=False)
     assert install.run(ns) == 1
     assert "reason here" in capsys.readouterr().err
+
+
+def test_out_of_order_markers_stop_install() -> None:
+    md = paths.claude_dir() / "CLAUDE.md"
+    md.parent.mkdir(parents=True)
+    content = f"# mine\n{install.END}\nuser text\n{install.BEGIN}\n"
+    md.write_text(content)
+    with pytest.raises(install.InstallError, match="CLAUDE.md"):
+        install.install({"claude"}, dry_run=False, runner=Runner(), which=_which)
+    assert md.read_text() == content
+
+
+def test_failed_mcp_add_changes_no_file() -> None:
+    class FailAdd(Runner):
+        def __call__(self, cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+            self.calls.append(cmd)
+            code = 1 if cmd[:3] == ["claude", "mcp", "add"] else 0
+            return subprocess.CompletedProcess(cmd, code, "", "boom")
+
+    with pytest.raises(install.InstallError, match="mcp add"):
+        install.install({"claude", "codex"}, dry_run=False, runner=FailAdd(), which=_which)
+    assert not (paths.claude_dir() / "settings.json").exists()
+    assert not paths.codex_home().exists()
+
+
+def test_uninstall_claude_ignores_malformed_codex_file() -> None:
+    hooks = paths.codex_home() / "hooks.json"
+    hooks.parent.mkdir(parents=True)
+    hooks.write_text("{not json")
+    install.uninstall({"claude"}, runner=Runner())

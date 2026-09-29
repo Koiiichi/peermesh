@@ -42,7 +42,7 @@ Which = Callable[[str], "str | None"]
 
 
 class InstallError(Exception):
-    """A check before install failed. Nothing was changed. The text names the file or command."""
+    """Install or uninstall stopped before it changed a file. The text names the file or command."""
 
 
 def _exe(name: str) -> str:
@@ -141,7 +141,9 @@ def _check_json(path: Path) -> None:
 
 def _check_markers(path: Path) -> None:
     content = path.read_text() if path.exists() else ""
-    if content.count(BEGIN) != content.count(END) or content.count(BEGIN) > 1:
+    begins, ends = content.count(BEGIN), content.count(END)
+    misordered = begins == 1 and ends == 1 and content.index(BEGIN) > content.index(END)
+    if begins != ends or begins > 1 or misordered:
         raise InstallError(
             f"{path} has an unmatched or repeated peermesh marker. "
             "Remove the peermesh block from the file by hand, then retry."
@@ -171,12 +173,8 @@ def install(
     actions: list[str] = []
     peers = _exe("peers")
     if "claude" in runtimes:
-        settings = paths.claude_dir() / "settings.json"
-        merged = merge_hooks(_read_json(settings), peers, "claude")
-        _write(settings, _dump(merged), dry_run, actions)
-        md = paths.claude_dir() / "CLAUDE.md"
-        current = md.read_text() if md.exists() else ""
-        _write(md, upsert_block(current, text.CLAUDE_BLOCK), dry_run, actions)
+        # Register the MCP server first: it is the step that can fail after preflight, and a
+        # failure here leaves every file unchanged.
         mcp_cmd = ["claude", "mcp", "add", "--scope", "user", "peermesh", "--", _exe("peers-mcp")]
         actions.append("run " + " ".join(mcp_cmd))
         if not dry_run:
@@ -189,8 +187,15 @@ def install(
             result = runner(mcp_cmd, capture_output=True, text=True, check=False)
             if result.returncode != 0:
                 raise InstallError(
-                    f"claude mcp add failed: {(result.stderr or result.stdout).strip()[-300:]}"
+                    f"claude mcp add failed: {(result.stderr or result.stdout).strip()[-300:]}. "
+                    "No file was changed."
                 )
+        settings = paths.claude_dir() / "settings.json"
+        merged = merge_hooks(_read_json(settings), peers, "claude")
+        _write(settings, _dump(merged), dry_run, actions)
+        md = paths.claude_dir() / "CLAUDE.md"
+        current = md.read_text() if md.exists() else ""
+        _write(md, upsert_block(current, text.CLAUDE_BLOCK), dry_run, actions)
     if "codex" in runtimes:
         hooks_file = paths.codex_home() / "hooks.json"
         merged = merge_hooks(_read_json(hooks_file), peers, "codex")
@@ -203,8 +208,10 @@ def install(
 
 
 def uninstall(runtimes: set[str], *, runner: Runner = subprocess.run) -> list[str]:
-    for path in (paths.claude_dir() / "settings.json", paths.codex_home() / "hooks.json"):
-        _check_json(path)
+    if "claude" in runtimes:
+        _check_json(paths.claude_dir() / "settings.json")
+    if "codex" in runtimes:
+        _check_json(paths.codex_home() / "hooks.json")
     actions: list[str] = []
     if "claude" in runtimes:
         settings = paths.claude_dir() / "settings.json"

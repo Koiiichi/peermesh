@@ -297,3 +297,48 @@ def test_status_unknown_lists_live_names(world: World) -> None:
     st = world.mesh.status("nobody")
     assert st["alive"] is False
     assert "claude-a" in st["note"] and "codex-b" in st["note"]
+
+
+def _slow(world: World, seconds: float) -> None:
+    import time
+
+    def deliver(target: Peer, rendered: str, msg: Message) -> Outcome:
+        time.sleep(seconds)
+        world.codex.calls.append((target.id, rendered, msg))
+        return Outcome("delivered")
+
+    world.codex.deliver = deliver  # type: ignore[method-assign]
+
+
+def _parallel(n: int, fn: Callable[[int], object]) -> list[object]:
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(n) as pool:
+        return list(pool.map(fn, range(n)))
+
+
+def test_parallel_sends_with_one_id_deliver_once(world: World) -> None:
+    _slow(world, 0.3)
+    results = _parallel(
+        5, lambda i: world.mesh.send(world.peers["ca"], "codex-a", "same", msg_id="dup")[0]
+    )
+    assert sorted(r.status for r in results) == ["delivered"] + ["refused"] * 4  # type: ignore[attr-defined]
+    assert len(world.codex.calls) == 1
+
+
+def test_parallel_burst_respects_rate_limit(world: World) -> None:
+    _slow(world, 0.3)
+    results = _parallel(12, lambda i: world.mesh.send(world.peers["ca"], "codex-a", f"m{i}")[0])
+    assert sum(r.status == "delivered" for r in results) == 6  # type: ignore[attr-defined]
+
+
+def test_reply_while_original_is_still_sending(world: World) -> None:
+    from peermesh.envelope import new_message
+
+    msg = new_message(world.peers["ca"], world.peers["xa"], "question", kind="request")
+    with world.mesh.ledger.locked():
+        world.mesh.ledger.append(
+            msg.to_json() | {"sent_at": 1000.0, "outcome": "sending", "note": ""}
+        )
+    res = world.mesh.reply(world.peers["xa"], msg.id, "the answer is 42")
+    assert res.status == "delivered" and world.claude.calls[0][2].hop == 1

@@ -1,4 +1,8 @@
-"""Append-only message ledger. Callers hold `locked()` across check, deliver and append."""
+"""Append-only message ledger.
+
+A send holds `locked()` for its checks and a "sending" entry, delivers without the lock, then
+appends its outcome under the lock. `latest()` gives one entry for each message.
+"""
 
 from __future__ import annotations
 

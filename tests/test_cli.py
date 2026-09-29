@@ -80,3 +80,13 @@ def test_status_unknown_exit_code(
 ) -> None:
     assert cli.main(["status", "nobody"]) == 1
     assert "claude-p" in capsys.readouterr().out
+
+
+def test_log_shows_each_message_once(
+    setup: tuple[Mesh, Fake], capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli.main(["send", "claude-p", "--body", "only once"])
+    capsys.readouterr()
+    cli.main(["log"])
+    out = capsys.readouterr().out
+    assert out.count("only once") == 1 and "/delivered]" in out

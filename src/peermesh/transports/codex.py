@@ -60,7 +60,11 @@ class _Rpc:
     def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         self._next += 1
         rid = self._next
-        self._write({"id": rid, "method": method, "params": params})
+        try:
+            self._write({"id": rid, "method": method, "params": params})
+        except OSError as exc:
+            # The request did not leave this process, so the server did not receive it.
+            raise RpcError(f"{method} was not sent: {exc}") from exc
         deadline = time.monotonic() + self._timeout
         while True:
             remaining = deadline - time.monotonic()

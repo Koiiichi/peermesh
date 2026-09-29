@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     mesh = _mesh()
     try:
         if args.cmd == "log":
-            entries = mesh.ledger.entries()[-args.limit :]
+            entries = mesh.ledger.latest()[-args.limit :]
             _print(
                 args,
                 entries,
