@@ -44,3 +44,10 @@ def test_change_text(make_peer: Callable[..., Peer]) -> None:
     me = make_peer(id="claude:me")
     other = make_peer(id="codex:x", name="codex-r-22", runtime="codex")
     assert "codex-r-22" in text.change_text(me, [other])
+
+
+def test_blocks_limit_who_receives_updates() -> None:
+    rule = "Do not send a progress or status update to a peer that does not use or wait for it."
+    for block in (text.CLAUDE_BLOCK, text.CODEX_BLOCK, text.TOOL_SEND):
+        assert rule in block
+    assert "Do not send one message to every peer" in text.CODEX_BLOCK

@@ -15,7 +15,9 @@ RULES = (
 WHEN = (
     "Send a message to a peer when: you change code, an interface, or a decision that the peer "
     "uses; you complete work that the peer waits for; the peer blocks you; you need a review. "
-    "Write facts: paths, commit hashes, decisions, blockers. Do not paste a transcript."
+    "Write facts: paths, commit hashes, decisions, blockers. Do not paste a transcript. "
+    "Do not send a progress or status update to a peer that does not use or wait for it. "
+    "Do not send one message to every peer in the list. Select the peers that the change affects."
 )
 
 TOOL_LIST = (
