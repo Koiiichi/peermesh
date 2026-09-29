@@ -26,10 +26,14 @@ HOOK_EVENTS = {
     "Stop": "stop",
     "SessionEnd": "session-end",
 }
+AGENT_SUBCOMMANDS = ("list", "send", "reply", "status", "whoami")
 CODEX_RULE = (
-    "# Installed by peermesh. The `peers` command must run outside the sandbox: it writes\n"
-    "# ~/.peermesh and connects to local inbox sockets. Remove with `peers uninstall`.\n"
-    'prefix_rule(pattern=["peers"], decision="allow")\n'
+    "# Installed by peermesh. These `peers` subcommands must run outside the sandbox: they\n"
+    "# write ~/.peermesh and connect to local inbox sockets. install, uninstall, log and\n"
+    "# doctor are not listed, so they still need approval. Remove with `peers uninstall`.\n"
+    + "".join(
+        f'prefix_rule(pattern=["peers", "{sub}"], decision="allow")\n' for sub in AGENT_SUBCOMMANDS
+    )
 )
 MIN_CLAUDE = (2, 1, 224)
 

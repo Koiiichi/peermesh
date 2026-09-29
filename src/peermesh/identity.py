@@ -66,10 +66,27 @@ def find_host(
     return None
 
 
+def current_claude_session(start: int | None = None) -> str | None:
+    """The session id Claude Code records now for the nearest ancestor with a session file.
+
+    A long-lived child (an MCP server) keeps the id from its start in its environment; after
+    /clear or /resume the host's session file has the current id.
+    """
+    for pid in ancestors(start or os.getpid()):
+        try:
+            data = json.loads((paths.claude_dir() / "sessions" / f"{pid}.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("sessionId"), str):
+            return str(data["sessionId"])
+    return None
+
+
 def session_from_env(env: Mapping[str, str], start: int | None = None) -> tuple[Runtime, str]:
     candidates: list[tuple[Runtime, str]] = []
     if env.get("CLAUDE_CODE_SESSION_ID"):
-        candidates.append(("claude", env["CLAUDE_CODE_SESSION_ID"]))
+        current = current_claude_session(start) or env["CLAUDE_CODE_SESSION_ID"]
+        candidates.append(("claude", current))
     codex_id = env.get("CODEX_THREAD_ID") or env.get("CODEX_SESSION_ID")
     if codex_id:
         candidates.append(("codex", codex_id))

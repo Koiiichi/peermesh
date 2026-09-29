@@ -129,3 +129,15 @@ def test_claude_native_status_mapping() -> None:
     assert claude_native_status(12) == "idle"
     assert claude_native_status(13) is None
     assert claude_native_status(14) is None
+
+
+def test_liveness_ignores_locale_and_timezone(
+    make_peer: Callable[..., Peer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TZ", "Asia/Tokyo")
+    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+    reg = Registry()
+    reg.put(make_peer(id="claude:x"))
+    monkeypatch.setenv("TZ", "UTC")
+    monkeypatch.setenv("LC_ALL", "C")
+    assert [p.id for p in reg.live()] == ["claude:x"]

@@ -34,7 +34,7 @@ peers doctor
 `peers install` changes your global agent configuration:
 
 - Claude Code: four hooks in `~/.claude/settings.json`, a marked block in `~/.claude/CLAUDE.md`, and the `peermesh` MCP server at user scope.
-- Codex: four hooks in `~/.codex/hooks.json`, a marked block in `~/.codex/AGENTS.md`, and `~/.codex/rules/peermesh.rules`, which lets the `peers` command run outside the Codex sandbox without an approval prompt.
+- Codex: four hooks in `~/.codex/hooks.json`, a marked block in `~/.codex/AGENTS.md`, and `~/.codex/rules/peermesh.rules`, which lets `peers list`, `send`, `reply`, `status` and `whoami` run outside the Codex sandbox without an approval prompt. `peers install`, `uninstall` and `log` still ask.
 
 Codex asks once to trust the new hooks. `peers uninstall` reverses every change; the first backup of each file stays as `*.peermesh.bak`.
 
@@ -58,7 +58,7 @@ Codex gets the command instead of MCP tools because Codex does not pass its thre
 | idle | the socket write starts a turn | `codex queue` starts a turn |
 | busy | read between tool calls | runs as the next turn |
 | busy, `--urgent` request | interrupts the current turn | `turn/steer` into the active turn when the app-server daemon hosts it, else queued |
-| gone | refused; the stale record is removed | refused; the stale record is removed |
+| gone | refused; the stale record is removed | refused when its process is gone; a thread hosted by the shared app-server daemon stays listed and is queued |
 
 A Claude result of `delivered` means the socket accepted it. The receiver's `crossSessionInbound` setting can still hold the message for approval; sessions that bypass permission prompts hold messages from peermesh by default.
 

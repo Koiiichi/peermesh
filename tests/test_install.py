@@ -55,7 +55,11 @@ def test_install_and_uninstall_roundtrip() -> None:
     assert install.BEGIN in claude_md.read_text()
     assert install.BEGIN in (paths.codex_home() / "AGENTS.md").read_text()
     rule = (paths.codex_home() / "rules" / "peermesh.rules").read_text()
-    assert 'prefix_rule(pattern=["peers"], decision="allow")' in rule
+    for sub in ("list", "send", "reply", "status", "whoami"):
+        assert f'prefix_rule(pattern=["peers", "{sub}"], decision="allow")' in rule
+    for sub in ("install", "uninstall", "log", "doctor", "hook"):
+        assert f'"{sub}"' not in rule
+    assert 'pattern=["peers"]' not in rule
     assert any(c[:4] == ["claude", "mcp", "add", "--scope"] for c in runner.calls)
     assert (claude_md.with_name("CLAUDE.md.peermesh.bak")).read_text() == "# user rules\n"
 

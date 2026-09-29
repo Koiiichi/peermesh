@@ -47,3 +47,10 @@ def test_detect_codex() -> None:
     peer = identity.detect("codex", "T", os.getcwd(), {}, host_pid=os.getpid())
     assert peer.id == "codex:T" and peer.endpoint == "T" and peer.pid == os.getpid()
     assert peer.status == "idle" and peer.host == "local"
+
+
+def test_claude_session_follows_native_record_after_clear() -> None:
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{os.getppid()}.json").write_text(json.dumps({"sessionId": "NEW"}))
+    assert identity.session_from_env({"CLAUDE_CODE_SESSION_ID": "OLD"}) == ("claude", "NEW")

@@ -36,15 +36,24 @@ def test_session_start_registers_and_returns_context(make_peer: Callable[..., Pe
     assert peer is not None and peer.status == "idle"
 
 
-def test_codex_prefers_thread_env() -> None:
+def test_codex_hook_prefers_payload_over_inherited_env() -> None:
     mesh = _mesh()
     hooks.handle(
         mesh,
         "session-start",
         "codex",
-        {"session_id": "ROOT"},
-        env={"CODEX_THREAD_ID": "THR"},
+        {"session_id": "CHILD"},
+        env={"CODEX_THREAD_ID": "PARENT"},
         host_pid=os.getpid(),
+    )
+    assert mesh.registry.get("codex:CHILD") is not None
+    assert mesh.registry.get("codex:PARENT") is None
+
+
+def test_codex_hook_falls_back_to_env() -> None:
+    mesh = _mesh()
+    hooks.handle(
+        mesh, "session-start", "codex", {}, env={"CODEX_THREAD_ID": "THR"}, host_pid=os.getpid()
     )
     assert mesh.registry.get("codex:THR") is not None
 

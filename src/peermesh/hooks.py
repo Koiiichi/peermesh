@@ -50,9 +50,11 @@ def handle(
     env: Mapping[str, str],
     host_pid: int | None = None,
 ) -> dict[str, Any] | None:
+    # The payload names the session that fired the hook; an env value can be inherited from a
+    # parent session, so it is only a fallback.
     session_id = str(payload.get("session_id") or "")
-    if runtime == "codex":
-        session_id = env.get("CODEX_THREAD_ID") or session_id
+    if runtime == "codex" and not session_id:
+        session_id = env.get("CODEX_THREAD_ID", "")
     if not session_id:
         return None
     peer_id = f"{runtime}:{session_id}"

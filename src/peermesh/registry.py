@@ -48,8 +48,14 @@ def proc_start(pid: int) -> str | None:
     """Return the start time `ps` prints for pid, or None when the pid is not running."""
     if pid <= 0:
         return None
+    # lstart text depends on locale and time zone; pin both so every session compares alike.
+    env = {**os.environ, "LC_ALL": "C", "TZ": "UTC"}
     result = subprocess.run(
-        ["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, check=False
+        ["ps", "-o", "lstart=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
     )
     return result.stdout.strip() or None
 
