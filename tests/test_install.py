@@ -80,3 +80,13 @@ def test_doctor_reports_each_check() -> None:
     names = [c[0] for c in checks]
     assert "claude version" in names and "codex hooks" in names
     assert all(isinstance(ok, bool) for _, ok, _ in checks)
+
+
+def test_install_keeps_non_ascii_text() -> None:
+    settings = paths.claude_dir() / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps({"statusLine": "→ ✓"}, indent=2, ensure_ascii=False) + "\n")
+    install.install({"claude"}, dry_run=False, runner=Runner())
+    assert "→ ✓" in settings.read_text()
+    install.uninstall({"claude"}, runner=Runner())
+    assert settings.read_text() == '{\n  "statusLine": "→ ✓"\n}\n'

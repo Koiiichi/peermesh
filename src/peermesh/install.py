@@ -118,7 +118,7 @@ def _write(path: Path, content: str, dry_run: bool, actions: list[str]) -> None:
 
 
 def _dump(config: dict[str, Any]) -> str:
-    return json.dumps(config, indent=2) + "\n"
+    return json.dumps(config, indent=2, ensure_ascii=False) + "\n"
 
 
 def install(runtimes: set[str], *, dry_run: bool, runner: Runner = subprocess.run) -> list[str]:
