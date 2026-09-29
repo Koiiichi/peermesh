@@ -62,3 +62,13 @@ def test_concurrent_appends_are_whole_lines() -> None:
     lines = Ledger().path.read_text().splitlines()
     assert len(lines) == 200
     assert len({json.loads(line)["id"] for line in lines}) == 200
+
+
+def test_count_recent_counts_each_message_once() -> None:
+    led = Ledger()
+    with led.locked():
+        led.append(_entry(1, sent_at=690.0, outcome="sending"))
+        led.append(_entry(1, sent_at=690.0, outcome="delivered"))
+        led.append(_entry(2, sent_at=695.0, outcome="sending"))
+    assert led.count_recent("a", "b", 600.0, now=700.0) == 2
+    assert led.find("m1") is not None and led.find("m1")["outcome"] == "delivered"

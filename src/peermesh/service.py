@@ -69,6 +69,11 @@ class Mesh:
         runtime, session_id = identity.session_from_env(env)
         existing = self.registry.get(f"{runtime}:{session_id}")
         if existing is not None and is_alive(existing):
+            if existing.pid not in identity.ancestors(os.getpid()):
+                raise PeerError(
+                    f"The session {existing.name} is not an ancestor of this process. "
+                    "Run peers from the shell of your own agent session."
+                )
             return existing
         peer = identity.detect(runtime, session_id, cwd or os.getcwd(), env, host_pid)
         return self.register(peer)
@@ -148,12 +153,12 @@ class Mesh:
     def status(self, target_ref: str) -> dict[str, Any]:
         target = self.registry.resolve(target_ref)
         if target is None:
-            return {"target": target_ref, "alive": False}
+            return {"target": target_ref, "alive": False, "note": self._unknown(target_ref, None)}
         self._enrich(target)
         now = self.clock()
         queued = sum(
             1
-            for e in self.ledger.entries()
+            for e in self.ledger.latest()
             if e.get("to") == target.id
             and e.get("outcome") == "queued"
             and now - float(e.get("sent_at", 0.0)) < 3600
@@ -171,6 +176,13 @@ class Mesh:
             "queued_last_hour": queued,
         }
 
+    def _unknown(self, target_ref: str, me: Peer | None) -> str:
+        names = sorted(p.name for p in self.registry.live() if me is None or p.id != me.id)
+        return (
+            f"No live peer has the name or id {target_ref!r}. "
+            f"Live peers: {', '.join(names) or 'none'}."
+        )
+
     def _send_one(
         self,
         me: Peer,
@@ -187,13 +199,7 @@ class Mesh:
     ) -> SendResult:
         target = self.registry.resolve(target_ref)
         if target is None:
-            names = ", ".join(sorted(p.name for p in self.registry.live() if p.id != me.id))
-            return SendResult(
-                None,
-                target_ref,
-                "refused",
-                f"No live peer has the name or id {target_ref!r}. Live peers: {names or 'none'}.",
-            )
+            return SendResult(None, target_ref, "refused", self._unknown(target_ref, me))
         if target.id == me.id:
             return SendResult(
                 None,
@@ -217,6 +223,9 @@ class Mesh:
             )
         except EnvelopeError as exc:
             return SendResult(None, target.name, "refused", str(exc))
+        # The lock covers only the checks and the "sending" record. Delivery can take tens of
+        # seconds and runs outside it. The record makes a retry of this id a duplicate even if
+        # this process ends during delivery.
         with self.ledger.locked():
             if self.ledger.find(msg.id) is not None:
                 return SendResult(
@@ -234,20 +243,26 @@ class Mesh:
                     f"rate limit: {RATE_LIMIT} messages to this peer in 10 minutes. "
                     "Wait, or ask the user.",
                 )
-            outcome = self.transports[target.runtime].deliver(
-                target, render(msg, target.runtime), msg
-            )
-            if outcome.offline:
-                self.registry.remove(target.id)
-            entry = msg.to_json() | {
-                "sent_at": now,
-                "outcome": outcome.status,
-                "note": outcome.note,
-            }
             try:
-                self.ledger.append(entry)
+                self.ledger.append(
+                    msg.to_json() | {"sent_at": now, "outcome": "sending", "note": ""}
+                )
             except OSError:
                 return SendResult(
-                    msg.id, target.name, outcome.status, "submitted, not recorded, do not resend"
+                    None,
+                    target.name,
+                    "refused",
+                    "The ledger cannot be written. The message was not sent.",
                 )
+        outcome = self.transports[target.runtime].deliver(target, render(msg, target.runtime), msg)
+        if outcome.offline:
+            self.registry.remove(target.id)
+        entry = msg.to_json() | {"sent_at": now, "outcome": outcome.status, "note": outcome.note}
+        try:
+            with self.ledger.locked():
+                self.ledger.append(entry)
+        except OSError:
+            return SendResult(
+                msg.id, target.name, outcome.status, "submitted, not recorded, do not resend"
+            )
         return SendResult(msg.id, target.name, outcome.status, outcome.note)

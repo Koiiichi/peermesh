@@ -4,7 +4,13 @@ import json
 import subprocess
 from typing import Any
 
+import pytest
+
 from peermesh import install, paths
+
+
+def _which(name: str) -> str | None:
+    return f"/usr/local/bin/{name}"
 
 
 class Runner:
@@ -45,7 +51,7 @@ def test_install_and_uninstall_roundtrip() -> None:
     claude_md.parent.mkdir(parents=True)
     claude_md.write_text("# user rules\n")
     runner = Runner()
-    actions = install.install({"claude", "codex"}, dry_run=False, runner=runner)
+    actions = install.install({"claude", "codex"}, dry_run=False, runner=runner, which=_which)
     assert actions
     settings = json.loads((paths.claude_dir() / "settings.json").read_text())
     assert "SessionStart" in settings["hooks"]
@@ -71,7 +77,7 @@ def test_install_and_uninstall_roundtrip() -> None:
 
 
 def test_dry_run_writes_nothing() -> None:
-    actions = install.install({"claude", "codex"}, dry_run=True, runner=Runner())
+    actions = install.install({"claude", "codex"}, dry_run=True, runner=Runner(), which=_which)
     assert actions and not paths.claude_dir().exists() and not paths.codex_home().exists()
 
 
@@ -86,7 +92,66 @@ def test_install_keeps_non_ascii_text() -> None:
     settings = paths.claude_dir() / "settings.json"
     settings.parent.mkdir(parents=True)
     settings.write_text(json.dumps({"statusLine": "→ ✓"}, indent=2, ensure_ascii=False) + "\n")
-    install.install({"claude"}, dry_run=False, runner=Runner())
+    install.install({"claude"}, dry_run=False, runner=Runner(), which=_which)
     assert "→ ✓" in settings.read_text()
     install.uninstall({"claude"}, runner=Runner())
     assert settings.read_text() == '{\n  "statusLine": "→ ✓"\n}\n'
+
+
+def test_strip_keeps_user_hook_in_mixed_group() -> None:
+    ours = "/bin/peers hook stop --runtime claude # peermesh"
+    cfg: dict[str, Any] = {
+        "hooks": {
+            "Stop": [
+                {
+                    "hooks": [
+                        {"type": "command", "command": "say done"},
+                        {"type": "command", "command": ours},
+                    ]
+                }
+            ]
+        }
+    }
+    assert install.strip_hooks(cfg) == {
+        "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "say done"}]}]}
+    }
+
+
+def test_malformed_codex_hooks_stops_before_any_write() -> None:
+    hooks = paths.codex_home() / "hooks.json"
+    hooks.parent.mkdir(parents=True)
+    hooks.write_text("{not json")
+    with pytest.raises(install.InstallError, match="hooks.json"):
+        install.install({"claude", "codex"}, dry_run=False, runner=Runner(), which=_which)
+    assert not (paths.claude_dir() / "settings.json").exists()
+
+
+def test_missing_claude_binary_stops_before_any_write() -> None:
+    runner = Runner()
+    with pytest.raises(install.InstallError, match="claude"):
+        install.install({"claude", "codex"}, dry_run=False, runner=runner, which=lambda n: None)
+    assert not paths.claude_dir().exists() and not paths.codex_home().exists()
+    assert runner.calls == []
+
+
+def test_orphan_begin_marker_stops_install() -> None:
+    md = paths.claude_dir() / "CLAUDE.md"
+    md.parent.mkdir(parents=True)
+    md.write_text(f"# mine\n{install.BEGIN}\nhalf a block\n")
+    with pytest.raises(install.InstallError, match="CLAUDE.md"):
+        install.install({"claude"}, dry_run=False, runner=Runner(), which=_which)
+    assert md.read_text() == f"# mine\n{install.BEGIN}\nhalf a block\n"
+
+
+def test_run_reports_install_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import argparse
+
+    def fail(*args: object, **kwargs: object) -> list[str]:
+        raise install.InstallError("reason here")
+
+    monkeypatch.setattr(install, "install", fail)
+    ns = argparse.Namespace(cmd="install", runtime="both", dry_run=False)
+    assert install.run(ns) == 1
+    assert "reason here" in capsys.readouterr().err

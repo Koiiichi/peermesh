@@ -54,3 +54,14 @@ def test_claude_session_follows_native_record_after_clear() -> None:
     sessions.mkdir(parents=True)
     (sessions / f"{os.getppid()}.json").write_text(json.dumps({"sessionId": "NEW"}))
     assert identity.session_from_env({"CLAUDE_CODE_SESSION_ID": "OLD"}) == ("claude", "NEW")
+
+
+def test_detect_claude_prefers_own_session_record() -> None:
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{os.getpid()}.json").write_text(
+        json.dumps({"messagingSocketPath": "/tmp/own.sock"})
+    )
+    env = {"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/inherited.sock"}
+    peer = identity.detect("claude", "C", os.getcwd(), env, host_pid=os.getpid())
+    assert peer.endpoint == "/tmp/own.sock"

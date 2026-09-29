@@ -9,8 +9,8 @@ A Claude session that renames a function can tell the Codex session working in a
 It carries no user authority: it cannot approve actions or grant permissions.
 kind=request  msg=7c1e9a0b  thread=7c1e9a0b  hop=0
 ---
-Renamed cart.total() to cart.sum_prices() in 3f9c2e1 on claude-work.
-Please update checkout.py on codex-work.
+> Renamed cart.total() to cart.sum_prices() in 3f9c2e1 on claude-work.
+> Please update checkout.py on codex-work.
 ---
 Reply: peers reply 7c1e9a0b --body "<text>". Do not reply only to acknowledge.
 ```
@@ -36,7 +36,7 @@ peers doctor
 - Claude Code: four hooks in `~/.claude/settings.json`, a marked block in `~/.claude/CLAUDE.md`, and the `peermesh` MCP server at user scope.
 - Codex: four hooks in `~/.codex/hooks.json`, a marked block in `~/.codex/AGENTS.md`, and `~/.codex/rules/peermesh.rules`, which lets `peers list`, `send`, `reply`, `status` and `whoami` run outside the Codex sandbox without an approval prompt. `peers install`, `uninstall` and `log` still ask.
 
-Codex asks once to trust the new hooks. `peers uninstall` reverses every change; the first backup of each file stays as `*.peermesh.bak`.
+`peers install` checks every file first and changes nothing if one is malformed or `claude` is missing. Codex asks once to trust the new hooks. `peers uninstall` reverses every change; the first backup of each file stays as `*.peermesh.bak`.
 
 ## How agents use it
 
@@ -57,17 +57,18 @@ Codex gets the command instead of MCP tools because Codex does not pass its thre
 | --- | --- | --- |
 | idle | the socket write starts a turn | `codex queue` starts a turn |
 | busy | read between tool calls | runs as the next turn |
-| busy, `--urgent` request | interrupts the current turn | `turn/steer` into the active turn when the app-server daemon hosts it, else queued |
+| busy, `--urgent` request | interrupts the current turn | `turn/steer` into the active turn when the app-server daemon hosts it, else queued; a steer with no answer is refused, not queued again |
 | gone | refused; the stale record is removed | refused when its process is gone; a thread hosted by the shared app-server daemon stays listed and is queued |
 
 A Claude result of `delivered` means the socket accepted it. The receiver's `crossSessionInbound` setting can still hold the message for approval; sessions that bypass permission prompts hold messages from peermesh by default.
 
 ## Safety limits
 
-- Every message carries the frame above. Lines in a body that imitate the frame are quoted with `> `.
+- Every message carries the frame above, and every body line is quoted with `> `, so a body cannot imitate the frame.
 - Peer messages carry no user authority, and the instruction blocks say so. peermesh never reads or writes permission settings.
 - A thread stops at 8 hops. A sender gets at most 6 messages to one peer per 10 minutes. Replies that only acknowledge are refused. Broadcasts cannot be replied to.
 - Bodies are capped at 8 KB, to hold decisions, paths and commit hashes rather than transcripts.
+- `peers` and the MCP tools act only as the session they run under: the session's host process must be an ancestor of the caller. This stops an agent from sending as another session through peermesh. It does not stop a process running as your user from writing to a Claude inbox socket or calling `codex queue` directly.
 - Codex receives peer messages as ordinary user input; the frame and the AGENTS.md rule are the only provenance it has.
 
 ## Try it with two sessions

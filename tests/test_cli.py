@@ -51,7 +51,7 @@ def test_send_via_cli(setup: tuple[Mesh, Fake], capsys: pytest.CaptureFixture[st
 def test_send_body_from_stdin(setup: tuple[Mesh, Fake], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin", io.StringIO("multi\nline body\n"))
     assert cli.main(["send", "claude-p", "--body", "-"]) == 0
-    assert "multi\nline body" in setup[1].calls[0]
+    assert "> multi\n> line body" in setup[1].calls[0]
 
 
 def test_refused_exit_code(setup: tuple[Mesh, Fake]) -> None:
@@ -73,3 +73,10 @@ def test_log_shows_recent(setup: tuple[Mesh, Fake], capsys: pytest.CaptureFixtur
     capsys.readouterr()
     assert cli.main(["log", "--limit", "5"]) == 0
     assert "codex-me -> claude-p" in capsys.readouterr().out
+
+
+def test_status_unknown_exit_code(
+    setup: tuple[Mesh, Fake], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(["status", "nobody"]) == 1
+    assert "claude-p" in capsys.readouterr().out

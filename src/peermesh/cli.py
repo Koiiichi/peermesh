@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "status":
             data = mesh.status(args.target)
             _print(args, data, [f"{k}: {v}" for k, v in data.items()])
-            return 0
+            return 0 if data["alive"] else 1
         me = mesh.whoami()
         if args.cmd == "whoami":
             _print(args, me.to_json(), [f"{me.name}  ({me.id})"])

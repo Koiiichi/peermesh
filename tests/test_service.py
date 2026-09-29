@@ -199,7 +199,16 @@ def test_ledger_write_failure_is_reported(world: World, monkeypatch: pytest.Monk
     def boom(entry: object) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr(world.mesh.ledger, "append", boom)
+    original = world.mesh.ledger.append
+    calls: list[object] = []
+
+    def fail_second(entry: dict[str, object]) -> None:
+        calls.append(entry)
+        if len(calls) == 2:
+            boom(entry)
+        original(entry)
+
+    monkeypatch.setattr(world.mesh.ledger, "append", fail_second)
     [res] = world.mesh.send(world.peers["ca"], "codex-a", "hello there")
     assert res.status == "delivered" and res.note == "submitted, not recorded, do not resend"
 
@@ -209,7 +218,7 @@ def test_status_live_and_gone(world: World) -> None:
     world.mesh.send(world.peers["ca"], "codex-a", "later")
     st = world.mesh.status("codex-a")
     assert st["alive"] is True and st["queued_last_hour"] == 1 and st["runtime"] == "codex"
-    assert world.mesh.status("nobody") == {"target": "nobody", "alive": False}
+    assert world.mesh.status("nobody")["alive"] is False
 
 
 def test_register_keeps_existing_name(world: World, make_peer: Callable[..., Peer]) -> None:
@@ -217,3 +226,74 @@ def test_register_keeps_existing_name(world: World, make_peer: Callable[..., Pee
     assert world.mesh.register(again).name == "codex-a"
     fresh = make_peer(id="codex:NEW", name="", runtime="codex", endpoint="N", git_root="/r/demo")
     assert world.mesh.register(fresh).name.startswith("codex-demo-")
+
+
+def test_reservation_failure_refuses_without_delivery(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(entry: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(world.mesh.ledger, "append", boom)
+    [res] = world.mesh.send(world.peers["ca"], "codex-a", "hello there")
+    assert res.status == "refused" and "not sent" in res.note
+    assert world.codex.calls == []
+
+
+def test_slow_delivery_does_not_block_other_senders(world: World) -> None:
+    import threading
+
+    release = threading.Event()
+    entered = threading.Event()
+    slow = world.codex
+
+    def blocking(target: Peer, rendered: str, msg: Message) -> Outcome:
+        entered.set()
+        release.wait(10)
+        return Outcome("delivered")
+
+    slow.deliver = blocking  # type: ignore[method-assign]
+    first = threading.Thread(
+        target=world.mesh.send, args=(world.peers["ca"], "codex-a", "slow one")
+    )
+    first.start()
+    assert entered.wait(5)
+    second = threading.Thread(
+        target=world.mesh.send, args=(world.peers["xb"], "claude-b", "fast one")
+    )
+    second.start()
+    second.join(timeout=3)
+    blocked = second.is_alive()
+    release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+    assert not blocked
+    assert world.claude.calls and world.claude.calls[0][0] == "claude:B"
+
+
+def test_whoami_refuses_a_session_that_is_not_an_ancestor(world: World) -> None:
+    import subprocess
+
+    other = subprocess.Popen(["sleep", "30"])
+    try:
+        from peermesh.registry import proc_start
+
+        record = world.peers["xa"]
+        record.pid = other.pid
+        record.proc_start = proc_start(other.pid) or ""
+        world.mesh.registry.put(record)
+        with pytest.raises(PeerError, match="not an ancestor"):
+            world.mesh.whoami(env={"CODEX_THREAD_ID": "A"})
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_whoami_accepts_own_ancestor(world: World) -> None:
+    assert world.mesh.whoami(env={"CODEX_THREAD_ID": "A"}).id == "codex:A"
+
+
+def test_status_unknown_lists_live_names(world: World) -> None:
+    st = world.mesh.status("nobody")
+    assert st["alive"] is False
+    assert "claude-a" in st["note"] and "codex-b" in st["note"]

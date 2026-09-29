@@ -39,6 +39,8 @@ if args[:2] == ["app-server", "proxy"]:
         elif method == "turn/steer":
             with open(log, "a") as fh:
                 fh.write(json.dumps({"steer": msg["params"]}) + "\n")
+            if os.environ.get("STUB_STEER_HANG"):
+                continue
             result = {"turnId": "turn-9"}
         else:
             print(json.dumps({"id": msg["id"], "error": {"message": "unknown"}}), flush=True)
@@ -197,5 +199,18 @@ def test_urgent_without_active_turn_falls_back_to_queue(
     assert [e.get("argv", [None])[0] for e in _log(stub_codex)] == ["queue"]  # type: ignore[index]
 
 
-def test_steer_without_daemon_returns_false(stub_codex: Path) -> None:
-    assert AppServerSteerer(os.environ["PEERMESH_CODEX"]).steer("t-1", "x") is False
+def test_steer_without_daemon_is_not_steered(stub_codex: Path) -> None:
+    assert AppServerSteerer(os.environ["PEERMESH_CODEX"]).steer("t-1", "x") == "not_steered"
+
+
+def test_unanswered_steer_is_not_queued_again(
+    make_peer: Callable[..., Peer], stub_codex: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _daemon_socket()
+    monkeypatch.setenv("STUB_STEER_HANG", "1")
+    a, b = _pair(make_peer, status="busy")
+    msg = new_message(a, b, "stop", kind="request", urgency="now")
+    transport = CodexTransport(steerer_factory=lambda exe: AppServerSteerer(exe, timeout=1.0))
+    outcome = transport.deliver(b, "R", msg)
+    assert outcome.status == "refused" and "Do not resend" in outcome.note
+    assert [list(e) for e in _log(stub_codex)] == [["steer"]]

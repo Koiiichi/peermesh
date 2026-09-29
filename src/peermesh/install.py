@@ -38,6 +38,11 @@ CODEX_RULE = (
 MIN_CLAUDE = (2, 1, 224)
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
+Which = Callable[[str], "str | None"]
+
+
+class InstallError(Exception):
+    """A check before install failed. Nothing was changed. The text names the file or command."""
 
 
 def _exe(name: str) -> str:
@@ -47,10 +52,8 @@ def _exe(name: str) -> str:
     return str(Path(sys.argv[0]).resolve().with_name(name))
 
 
-def _ours(group: Any) -> bool:
-    return isinstance(group, dict) and any(
-        MARK in str(h.get("command", "")) for h in group.get("hooks", []) if isinstance(h, dict)
-    )
+def _is_ours(hook: Any) -> bool:
+    return isinstance(hook, dict) and MARK in str(hook.get("command", ""))
 
 
 def merge_hooks(config: dict[str, Any], exe: str, runtime: str) -> dict[str, Any]:
@@ -70,9 +73,17 @@ def strip_hooks(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(hooks, dict):
         return config
     for event in list(hooks):
-        kept = [g for g in hooks[event] if not _ours(g)]
-        if kept:
-            hooks[event] = kept
+        groups: list[Any] = []
+        for group in hooks[event]:
+            entries = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(entries, list):
+                groups.append(group)
+                continue
+            kept = [h for h in entries if not _is_ours(h)]
+            if kept or len(kept) == len(entries):
+                groups.append({**group, "hooks": kept})
+        if groups:
+            hooks[event] = groups
         else:
             del hooks[event]
     if not hooks:
@@ -121,7 +132,42 @@ def _dump(config: dict[str, Any]) -> str:
     return json.dumps(config, indent=2, ensure_ascii=False) + "\n"
 
 
-def install(runtimes: set[str], *, dry_run: bool, runner: Runner = subprocess.run) -> list[str]:
+def _check_json(path: Path) -> None:
+    try:
+        _read_json(path)
+    except ValueError as exc:
+        raise InstallError(f"{path} is not a valid JSON object. Fix the file, then retry.") from exc
+
+
+def _check_markers(path: Path) -> None:
+    content = path.read_text() if path.exists() else ""
+    if content.count(BEGIN) != content.count(END) or content.count(BEGIN) > 1:
+        raise InstallError(
+            f"{path} has an unmatched or repeated peermesh marker. "
+            "Remove the peermesh block from the file by hand, then retry."
+        )
+
+
+def preflight(runtimes: set[str], which: Which = shutil.which) -> None:
+    """Check every input before install writes anything."""
+    if "claude" in runtimes:
+        if which("claude") is None:
+            raise InstallError("The claude executable is not on PATH. Install Claude Code first.")
+        _check_json(paths.claude_dir() / "settings.json")
+        _check_markers(paths.claude_dir() / "CLAUDE.md")
+    if "codex" in runtimes:
+        _check_json(paths.codex_home() / "hooks.json")
+        _check_markers(paths.codex_home() / "AGENTS.md")
+
+
+def install(
+    runtimes: set[str],
+    *,
+    dry_run: bool,
+    runner: Runner = subprocess.run,
+    which: Which = shutil.which,
+) -> list[str]:
+    preflight(runtimes, which)
     actions: list[str] = []
     peers = _exe("peers")
     if "claude" in runtimes:
@@ -140,7 +186,11 @@ def install(runtimes: set[str], *, dry_run: bool, runner: Runner = subprocess.ru
                 text=True,
                 check=False,
             )
-            runner(mcp_cmd, capture_output=True, text=True, check=True)
+            result = runner(mcp_cmd, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                raise InstallError(
+                    f"claude mcp add failed: {(result.stderr or result.stdout).strip()[-300:]}"
+                )
     if "codex" in runtimes:
         hooks_file = paths.codex_home() / "hooks.json"
         merged = merge_hooks(_read_json(hooks_file), peers, "codex")
@@ -153,6 +203,8 @@ def install(runtimes: set[str], *, dry_run: bool, runner: Runner = subprocess.ru
 
 
 def uninstall(runtimes: set[str], *, runner: Runner = subprocess.run) -> list[str]:
+    for path in (paths.claude_dir() / "settings.json", paths.codex_home() / "hooks.json"):
+        _check_json(path)
     actions: list[str] = []
     if "claude" in runtimes:
         settings = paths.claude_dir() / "settings.json"
@@ -232,10 +284,14 @@ def run(args: argparse.Namespace) -> int:
         for name, ok, detail in checks:
             print(f"{'ok ' if ok else 'BAD'} {name:18} {detail}")
         return 0 if all(ok for _, ok, _ in checks) else 1
-    if args.cmd == "install":
-        for action in install(runtimes, dry_run=args.dry_run):
-            print(("would " if args.dry_run else "") + action)
-        return 0
-    for action in uninstall(runtimes):
-        print(action)
+    try:
+        if args.cmd == "install":
+            for action in install(runtimes, dry_run=args.dry_run):
+                print(("would " if args.dry_run else "") + action)
+            return 0
+        for action in uninstall(runtimes):
+            print(action)
+    except InstallError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     return 0

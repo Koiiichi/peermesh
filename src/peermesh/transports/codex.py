@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from peermesh import __version__, paths
 from peermesh.envelope import Message
@@ -82,20 +82,27 @@ class _Rpc:
             return result if isinstance(result, dict) else {}
 
 
+SteerResult = Literal["steered", "not_steered", "unknown"]
+
+
 class Steerer(Protocol):
-    def steer(self, thread_id: str, text: str) -> bool: ...
+    def steer(self, thread_id: str, text: str) -> SteerResult: ...
 
 
 class AppServerSteerer:
-    """Inject text into the active turn of a daemon-hosted thread. False means: use the queue."""
+    """Inject text into the active turn of a daemon-hosted thread.
+
+    "not_steered" means the text is not in the thread: use the queue. "unknown" means turn/steer
+    was sent without an answer: the text can be in the turn, so it must not be queued too.
+    """
 
     def __init__(self, exe: str, timeout: float = 10.0) -> None:
         self.exe = exe
         self.timeout = timeout
 
-    def steer(self, thread_id: str, text: str) -> bool:
+    def steer(self, thread_id: str, text: str) -> SteerResult:
         if not daemon_socket().exists():
-            return False
+            return "not_steered"
         proc = subprocess.Popen(
             [self.exe, "app-server", "proxy"],
             stdin=subprocess.PIPE,
@@ -104,31 +111,40 @@ class AppServerSteerer:
             text=True,
         )
         try:
-            rpc = _Rpc(proc, self.timeout)
-            rpc.request("initialize", {"clientInfo": {"name": "peermesh", "version": __version__}})
-            rpc.notify("initialized", {})
-            thread = rpc.request("thread/read", {"threadId": thread_id, "includeTurns": True})
-            turns = thread.get("thread", {}).get("turns", [])
-            active = [t for t in turns if isinstance(t, dict) and t.get("status") == "inProgress"]
-            if not active:
-                return False
-            rpc.request(
-                "turn/steer",
-                {
-                    "threadId": thread_id,
-                    "expectedTurnId": str(active[-1]["id"]),
-                    "input": [{"type": "text", "text": text}],
-                },
-            )
-            return True
-        except (RpcError, OSError, ValueError, KeyError, TimeoutError):
-            return False
+            return self._steer(_Rpc(proc, self.timeout), thread_id, text)
         finally:
             proc.terminate()
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
+
+    def _steer(self, rpc: _Rpc, thread_id: str, text: str) -> SteerResult:
+        try:
+            rpc.request("initialize", {"clientInfo": {"name": "peermesh", "version": __version__}})
+            rpc.notify("initialized", {})
+            thread = rpc.request("thread/read", {"threadId": thread_id, "includeTurns": True})
+            turns = thread.get("thread", {}).get("turns", [])
+            active = [t for t in turns if isinstance(t, dict) and t.get("status") == "inProgress"]
+            if not active:
+                return "not_steered"
+            turn_id = str(active[-1]["id"])
+        except (RpcError, OSError, ValueError, KeyError, TimeoutError):
+            return "not_steered"
+        try:
+            rpc.request(
+                "turn/steer",
+                {
+                    "threadId": thread_id,
+                    "expectedTurnId": turn_id,
+                    "input": [{"type": "text", "text": text}],
+                },
+            )
+        except RpcError:
+            return "not_steered"
+        except (OSError, TimeoutError):
+            return "unknown"
+        return "steered"
 
 
 class CodexTransport:
@@ -145,8 +161,15 @@ class CodexTransport:
         if exe is None:
             return Outcome("refused", "The codex executable is not found. Install Codex CLI.")
         if msg.urgency == "now" and target.status == "busy":
-            if self.steerer_factory(exe).steer(target.endpoint, rendered):
+            steered = self.steerer_factory(exe).steer(target.endpoint, rendered)
+            if steered == "steered":
                 return Outcome("delivered", "steered into the active turn")
+            if steered == "unknown":
+                return Outcome(
+                    "refused",
+                    "The steer request got no answer. The message can be in the active turn. "
+                    "Do not resend.",
+                )
         try:
             result = subprocess.run(
                 [exe, "queue", "--thread", target.endpoint, "--message", rendered],

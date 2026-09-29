@@ -123,15 +123,14 @@ def detect(
     host = "local"
     capabilities: list[str] = []
     if runtime == "claude":
-        endpoint = env.get("CLAUDE_CODE_MESSAGING_SOCKET", "")
-        if not endpoint:
-            try:
-                native = json.loads(
-                    (paths.claude_dir() / "sessions" / f"{host_pid}.json").read_text()
-                )
-                endpoint = str(native.get("messagingSocketPath", ""))
-            except (OSError, ValueError, AttributeError):
-                endpoint = ""
+        # The host's own session record names its socket. The variable can be inherited from
+        # an outer Claude session, so it is only a fallback.
+        try:
+            native = json.loads((paths.claude_dir() / "sessions" / f"{host_pid}.json").read_text())
+            endpoint = str(native.get("messagingSocketPath", ""))
+        except (OSError, ValueError, AttributeError):
+            endpoint = ""
+        endpoint = endpoint or env.get("CLAUDE_CODE_MESSAGING_SOCKET", "")
         if not endpoint:
             raise PeerError(
                 "This Claude Code session has no inbox socket. "

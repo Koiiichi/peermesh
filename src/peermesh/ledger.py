@@ -12,7 +12,7 @@ from typing import Any
 
 from peermesh import paths
 
-COUNTED_OUTCOMES = ("delivered", "queued")
+COUNTED_OUTCOMES = ("sending", "delivered", "queued")
 
 
 class Ledger:
@@ -59,10 +59,20 @@ class Ledger:
         with os.fdopen(fd, "a") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    def latest(self) -> list[dict[str, Any]]:
+        """The newest entry of each message id.
+
+        A send writes a "sending" entry, then an entry with its outcome.
+        """
+        by_id: dict[str, dict[str, Any]] = {}
+        for entry in self.entries():
+            by_id[str(entry.get("id"))] = entry
+        return list(by_id.values())
+
     def count_recent(self, from_id: str, to_id: str, window_s: float, now: float) -> int:
         return sum(
             1
-            for e in self.entries()
+            for e in self.latest()
             if e.get("from") == from_id
             and e.get("to") == to_id
             and e.get("outcome") in COUNTED_OUTCOMES
