@@ -22,9 +22,8 @@ Delivery uses each runtime's own inbox: the documented Claude Code inbox socket,
 
 ## Install
 
-From a checkout of this repository:
-
 ```bash
+git clone https://github.com/Koiiichi/peermesh && cd peermesh
 uv tool install --editable .
 peers install --dry-run   # lists every file it would change
 peers install
@@ -57,7 +56,7 @@ Codex gets the command instead of MCP tools because Codex does not pass its thre
 | --- | --- | --- |
 | idle | the socket write starts a turn | `codex queue` starts a turn |
 | busy | read between tool calls | runs as the next turn |
-| busy, `--urgent` request | interrupts the current turn | `turn/steer` into the active turn when the app-server daemon hosts it, else queued; a steer with no answer is refused, not queued again |
+| busy, `--urgent` request | sent with Claude's `now` priority | `turn/steer` into the active turn when the app-server daemon hosts it, else queued; a steer with no answer is refused, not queued again |
 | gone | refused; the stale record is removed | refused when its process is gone; a thread hosted by the shared app-server daemon stays listed and is queued |
 
 A Claude result of `delivered` means the socket accepted it. The receiver's `crossSessionInbound` setting can still hold the message for approval; sessions that bypass permission prompts hold messages from peermesh by default.
@@ -84,4 +83,8 @@ uv run mypy --strict src
 PEERMESH_LIVE=1 uv run pytest -m live   # a real Codex session; spends model turns
 ```
 
-The design and its verified assumptions are in [docs/specs/2026-09-29-peermesh-design.md](docs/specs/2026-09-29-peermesh-design.md).
+[docs/demo-results.md](docs/demo-results.md) records the live test and both demo runs.
+
+## Status and license
+
+Early. Tested on macOS with Claude Code 2.1.285 and codex-cli 0.155.1. The delivery approach builds on ideas from [Postbag](https://github.com/parasxos/postbag) and [AgentBridge](https://github.com/raysonmeng/agent-bridge). Licensed under [Apache-2.0](LICENSE).

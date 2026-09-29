@@ -2,6 +2,8 @@
 name = "peermesh"
 version = "0.1.0"
 description = "Local peer messaging between Claude Code and Codex sessions"
+readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = ["mcp>=2.2,<3"]
 

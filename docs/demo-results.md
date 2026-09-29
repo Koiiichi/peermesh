@@ -23,7 +23,7 @@ Claude was told to find the Codex peer, rename `total` to `sum_prices`, and ask 
 
 Codex was idle; `codex queue` started its turn. It committed `aa58d2d` on `codex-work` and replied with `peers reply`. The reply reached the interactive Claude session through its inbox socket without a token, as a peer message: Claude Code showed the peermesh frame followed by its own "not typed by your user" notice, reported the reply to the user, and did not send an acknowledgement back. Both observations were checked visually in the two Terminal tabs.
 
-This closes spec amendment 9 (tokenless socket writes reach a prompting session as peer messages).
+This confirms that a socket write without a token reaches a prompting Claude Code session as a peer message.
 
 ## Implicit demo (`demo/run.sh implicit`)
 
