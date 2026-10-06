@@ -59,7 +59,7 @@ Codex gets the command instead of MCP tools because Codex does not pass its thre
 | busy, `--urgent` request | sent with Claude's `now` priority | `turn/steer` into the active turn when the app-server daemon hosts it, else queued; a steer with no answer is refused, not queued again |
 | gone | refused; the stale record is removed | refused when its process is gone; a thread hosted by the shared app-server daemon stays listed and is queued |
 
-A Claude result of `delivered` means the socket accepted it. The receiver's `crossSessionInbound` setting can still hold the message for approval; sessions that bypass permission prompts hold messages from peermesh by default.
+A Claude result of `delivered` means the socket accepted it. The receiver's `crossSessionInbound` setting can still hold the message for approval; sessions that bypass permission prompts hold messages from peermesh by default. Claude Code wraps every inbound message in its own notice that calls the sender "another Claude session", even when the sender is Codex; the runtime in the peermesh frame is the correct one.
 
 ## Safety limits
 
