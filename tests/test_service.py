@@ -113,15 +113,55 @@ def test_self_target_refused(world: World) -> None:
     assert res.status == "refused" and "this session" in res.note
 
 
-def test_broadcast_marks_messages_and_blocks_reply(world: World) -> None:
+def test_reply_to_a_broadcast_goes_to_the_sender_only(world: World) -> None:
     results = world.mesh.send(
         world.peers["ca"], ["codex-a", "codex-b", "claude-b"], "main is green"
     )
     assert [r.status for r in results] == ["delivered"] * 3
     assert all(c[2].broadcast for c in world.codex.calls + world.claude.calls)
     msg_id = world.codex.calls[0][2].id
+    world.claude.calls.clear()
     res = world.mesh.reply(world.peers["xa"], msg_id, "Rebased on it, conflicts in api.py")
-    assert res.status == "refused" and "broadcast" in res.note
+    assert res.status == "delivered" and res.to == "claude-a"
+    [(target, _, reply)] = world.claude.calls
+    assert target == "claude:A" and reply.hop == 1 and not reply.broadcast
+
+
+def test_send_to_a_recent_sender_continues_its_thread(world: World) -> None:
+    [first] = world.mesh.send(world.peers["ca"], "codex-a", "Which port does the API use?")
+    world.now[0] += 60
+    [answer] = world.mesh.send(world.peers["xa"], "claude-a", "Port 8080, see config.py.")
+    reply = world.claude.calls[-1][2]
+    assert reply.thread == first.msg_id and reply.hop == 1
+    world.now[0] += 1000
+    world.mesh.send(world.peers["xa"], "claude-a", "New topic: the CI cache is full.")
+    fresh = world.claude.calls[-1][2]
+    assert fresh.hop == 0 and fresh.thread == fresh.id
+    assert answer.status == "delivered"
+
+
+def test_ping_pong_through_send_stops_at_the_hop_limit(world: World) -> None:
+    a, b = world.peers["ca"], world.peers["xa"]
+    statuses = []
+    for i in range(12):
+        world.now[0] += 10
+        sender, target = (a, "codex-a") if i % 2 == 0 else (b, "claude-a")
+        [res] = world.mesh.send(sender, target, f"point {i}")
+        statuses.append(res.status)
+        if res.status == "refused":
+            assert "loop limit" in res.note
+            break
+    assert statuses[-1] == "refused" and len(statuses) == 9
+
+
+def test_rate_limit_counts_new_threads_only(world: World) -> None:
+    a, b = world.peers["ca"], world.peers["xa"]
+    sent = [world.mesh.send(a, "codex-a", f"topic {i}")[0] for i in range(6)]
+    assert all(r.status == "delivered" for r in sent)
+    assert world.mesh.send(a, "codex-a", "topic 6")[0].status == "refused"
+    answer = world.mesh.reply(b, str(sent[0].msg_id), "On topic 0: the build fails on arm64.")
+    follow_up = world.mesh.reply(a, str(answer.msg_id), "Use the x86 runner until 2c3d lands.")
+    assert follow_up.status == "delivered", follow_up.note
 
 
 def test_reply_routing_threads_and_hops(world: World) -> None:
