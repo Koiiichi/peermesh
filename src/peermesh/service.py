@@ -21,6 +21,8 @@ from peermesh.transports.codex import CodexTransport
 
 RATE_LIMIT = 6
 RATE_WINDOW_S = 600.0
+# A reply counts as an acknowledgement only when it left the replying session.
+SENT_OUTCOMES = ("delivered", "queued", "pending", "injected")
 PENDING_NOTE = "The peer reads the message at its next tool call or prompt."
 # How a ledger outcome reads for a person or an agent that tracks one message.
 STATES = {
@@ -395,7 +397,11 @@ class Mesh:
             for e in self.ledger.entries()
             if e.get("id") == msg_id and "outcome" in e
         ]
-        replies = [e for e in self.ledger.latest() if e.get("in_reply_to") == msg_id]
+        replies = [
+            e
+            for e in self.ledger.latest()
+            if e.get("in_reply_to") == msg_id and e.get("outcome") in SENT_OUTCOMES
+        ]
         if any(r.get("done") for r in replies):
             state = "acted: the peer replied and reports that the requested work is complete"
         elif replies:

@@ -271,3 +271,17 @@ def test_hook_status_newer_than_claude_native_status_wins(world: World) -> None:
     world.put("b", status="idle", last_seen=4.0)
     [res] = world.mesh.send(world.peers["a"], "claude-b", "Please rebase again.", kind="request")
     assert res.status == "pending"
+
+
+def test_refused_reply_does_not_count_as_acknowledged(world: World) -> None:
+    world.put("x", status="busy")
+    [res] = world.mesh.send(world.peers["a"], "codex-x", "Please review cart.py", kind="request")
+    world.claude.calls.clear()
+    world.mesh.transports = {"claude": RefusingTransport(), "codex": world.codex}
+    world.mesh.reply(world.peers["x"], str(res.msg_id), "Reviewed: one bug.", done=True)
+    assert world.mesh.track(str(res.msg_id))["state"].startswith("pending")
+
+
+class RefusingTransport:
+    def deliver(self, target: Peer, rendered: str, msg: Message) -> Outcome:
+        return Outcome("refused", "socket write failed")
