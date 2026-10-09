@@ -85,6 +85,18 @@ def _post_tool(mesh: Mesh, peer_id: str, emit: Emit) -> dict[str, Any] | None:
     return out
 
 
+def _continue_turn(runtime: Runtime, body: str) -> dict[str, Any]:
+    """Stop-hook output that keeps the turn going with body as context for the model.
+
+    Claude Code shows the reason of a "block" decision to the user as a hook error, and takes
+    additionalContext as feedback that continues the turn. Codex has no additionalContext for
+    Stop; a "block" decision is its way to continue a turn.
+    """
+    if runtime == "claude":
+        return {"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": body}}
+    return {"decision": "block", "reason": body}
+
+
 def _stop(mesh: Mesh, peer: Peer, payload: Mapping[str, Any], emit: Emit) -> dict[str, Any] | None:
     """Decide what the end of a turn does with waiting messages.
 
@@ -102,10 +114,8 @@ def _stop(mesh: Mesh, peer: Peer, payload: Mapping[str, Any], emit: Emit) -> dic
         mesh.registry.put(peer)
         if block:
             frames = [i.rendered for i in items]
-            out = {
-                "decision": "block",
-                "reason": text.injected_text(frames) + "\n\n" + text.STOP_NOTE,
-            }
+            body = text.injected_text(frames) + "\n\n" + text.STOP_NOTE
+            out = _continue_turn(peer.runtime, body)
             emit(out)
             mesh.record_injected(items, "stop")
             return out

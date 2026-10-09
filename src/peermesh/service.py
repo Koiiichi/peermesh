@@ -24,9 +24,14 @@ RATE_WINDOW_S = 600.0
 # A send to a peer that messaged this session within this window continues that thread, so a
 # reply sent with peers_send counts toward the hop limit like a reply sent with peers_reply.
 CAUSAL_WINDOW_S = 900.0
+# A hop counts only when a message answers its parent within this time. Agents in a loop answer
+# in seconds; an answer that took longer followed work, so the count starts again.
+LOOP_GAP_S = 120.0
 THREAD_LIMIT = 8
 # A reply counts as an acknowledgement only when it left the replying session.
 SENT_OUTCOMES = ("delivered", "queued", "pending", "injected")
+# Agents routed refused messages through Claude Code's own session messaging, which has no limits.
+NO_DETOUR = "Do not send the message through a different channel."
 PENDING_NOTE = "The peer reads the message at its next tool call or prompt."
 # How a ledger outcome reads for a person or an agent that tracks one message.
 STATES = {
@@ -166,7 +171,7 @@ class Mesh:
             broadcast=False,
             in_reply_to=msg_id,
             thread=str(original.get("thread", msg_id)),
-            hop=int(original.get("hop", 0)) + 1,
+            hop=self._next_hop(original),
             done=done,
         )
 
@@ -197,6 +202,11 @@ class Mesh:
             "queued_last_hour": queued,
             "pending_in_inbox": pending,
         }
+
+    def _next_hop(self, parent: dict[str, Any]) -> int:
+        """The hop of a message that answers parent: one more if it is quick, else zero."""
+        quick = self.clock() - float(parent.get("sent_at", 0.0)) < LOOP_GAP_S
+        return int(parent.get("hop", 0)) + 1 if quick else 0
 
     def _causal_parent(self, me: Peer, target: Peer) -> dict[str, Any] | None:
         """The newest message from target to me in CAUSAL_WINDOW_S, which a send answers."""
@@ -286,7 +296,7 @@ class Mesh:
             parent = self._causal_parent(me, target)
             if parent is not None:
                 thread = str(parent.get("thread", parent["id"]))
-                hop = int(parent.get("hop", 0)) + 1
+                hop = self._next_hop(parent)
         try:
             msg = new_message(
                 me,
@@ -315,30 +325,31 @@ class Mesh:
                     "This message id is in the ledger. The message was sent before. Do not resend.",
                 )
             now = self.clock()
-            # The limit applies to new threads; the hop limit bounds each running thread.
+            # The rate limit applies to new threads. In a running thread, the hop limit stops
+            # fast loops, and this cap stops one sender from flooding the thread.
+            starts_thread = msg.thread == msg.id
             recent = self.ledger.count_recent(
                 me.id, target.id, RATE_WINDOW_S, now, new_threads_only=True
             )
-            # Hops measure depth, so many replies to one message stay at hop 1; this cap bounds
-            # the number of messages that one sender adds to one thread.
-            if msg.hop > 0 and self.ledger.count_in_thread(me.id, msg.thread) >= THREAD_LIMIT:
+            in_thread = self.ledger.count_in_thread(me.id, msg.thread, RATE_WINDOW_S, now)
+            if not starts_thread and in_thread >= THREAD_LIMIT:
                 return self._refused(
                     me,
                     target.id,
                     target.name,
                     kind,
-                    f"loop limit: you sent {THREAD_LIMIT} messages in this thread. "
-                    "Stop the exchange and ask the user.",
+                    f"flood limit: you sent {THREAD_LIMIT} messages in this thread in 10 "
+                    "minutes. Wait, or ask the user. " + NO_DETOUR,
                     locked=True,
                 )
-            if msg.hop == 0 and recent >= RATE_LIMIT:
+            if starts_thread and recent >= RATE_LIMIT:
                 return self._refused(
                     me,
                     target.id,
                     target.name,
                     kind,
                     f"rate limit: {RATE_LIMIT} new threads to this peer in 10 minutes. "
-                    "Reply in an open thread, wait, or ask the user.",
+                    "Reply in an open thread, wait, or ask the user. " + NO_DETOUR,
                     locked=True,
                 )
             # The status can change between resolve() and the lock; a Stop hook changes it

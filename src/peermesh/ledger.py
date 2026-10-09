@@ -111,16 +111,17 @@ class Ledger:
             and e.get("to") == to_id
             and e.get("outcome") in COUNTED_OUTCOMES
             and now - float(e.get("sent_at", 0.0)) < window_s
-            and not (new_threads_only and int(e.get("hop", 0)) > 0)
+            and not (new_threads_only and e.get("thread", e.get("id")) != e.get("id"))
         )
 
-    def count_in_thread(self, from_id: str, thread: str) -> int:
+    def count_in_thread(self, from_id: str, thread: str, window_s: float, now: float) -> int:
         return sum(
             1
             for e in self.latest()
             if e.get("from") == from_id
             and e.get("thread") == thread
             and e.get("outcome") in COUNTED_OUTCOMES
+            and now - float(e.get("sent_at", 0.0)) < window_s
         )
 
     def _rotate(self, now: float) -> None:

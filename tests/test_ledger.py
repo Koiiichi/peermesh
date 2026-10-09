@@ -129,8 +129,8 @@ def test_archives_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_count_recent_new_threads_only() -> None:
     led = Ledger()
     with led.locked():
-        led.append(_entry(1, sent_at=690.0) | {"hop": 0})
-        led.append(_entry(2, sent_at=691.0) | {"hop": 3})
+        led.append(_entry(1, sent_at=690.0) | {"thread": "m1"})
+        led.append(_entry(2, sent_at=691.0) | {"thread": "m1", "hop": 0})
     assert led.count_recent("a", "b", 600.0, now=700.0) == 2
     assert led.count_recent("a", "b", 600.0, now=700.0, new_threads_only=True) == 1
 

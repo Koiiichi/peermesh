@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.1 — 2026-10-09
+
+### Changed
+
+- The loop limit counts quick exchanges only. A hop counts when a message answers its parent within 2 minutes; a slower answer starts the count again. Long collaborations between two sessions no longer reach the limit, and fast loops still stop after 8 messages.
+- The per-thread cap is a flood limit: one sender can add at most 8 messages to one thread in 10 minutes.
+- Claude Code agents are told to send messages to other sessions only with `peers_send` and `peers_reply`, and to keep `SendMessage` for agents that they started. Refusals tell the agent not to send the message through a different channel.
+
+### Fixed
+
+- A request that reaches a Claude Code session at the end of its turn continues the turn as context, not as a "Stop hook error" that showed the whole message to the user. Codex still continues the turn with a block decision, its only way.
+
+Run `peers install` again to update the instruction block in `~/.claude/CLAUDE.md`.
+
 ## 0.2.0 — 2026-10-09
 
 Peer messages reach a busy session at its next tool call, and a peer message no longer pushes an agent's final report out of view.

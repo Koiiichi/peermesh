@@ -197,7 +197,7 @@ def test_hop_limit_stops_ping_pong(world: World) -> None:
     senders = [b, a]
     statuses = []
     for i in range(1, 10):
-        world.now[0] += 1000
+        world.now[0] += 20
         assert last is not None
         r = world.mesh.reply(senders[i % 2 == 0], last, f"answer {i}")
         statuses.append(r.status)
@@ -421,3 +421,32 @@ def test_repeated_replies_to_one_message_are_capped(world: World) -> None:
     assert statuses == ["delivered"] * 8 + ["refused"] * 4
     [refused] = [e for e in world.mesh.ledger.latest() if e["outcome"] == "refused"][:1]
     assert "messages in this thread" in refused["note"]
+
+
+def test_slow_collaboration_never_reaches_the_loop_limit(world: World) -> None:
+    """The gaps, in minutes, of a real 32-minute thread that the old hop limit refused."""
+    a, b = world.peers["ca"], world.peers["xa"]
+    [first] = world.mesh.send(a, "codex-a", "Please verify PR 61.", kind="request")
+    last, senders = str(first.msg_id), [b, a]
+    for i, gap in enumerate([0.2, 4.6, 4.6, 14.2, 2.6, 0.9, 5.4, 0.1, 3.0, 6.0, 1.0, 4.0]):
+        world.now[0] += gap * 60
+        res = world.mesh.reply(senders[i % 2], last, f"step {i}: findings and the next check")
+        assert res.status == "delivered", res.note
+        last = str(res.msg_id)
+    world.now[0] += 300
+    [handoff] = world.mesh.send(b, "claude-a", "Merged as fef7a0bc.", kind="handoff")
+    assert handoff.status == "delivered", handoff.note
+
+
+def test_one_sender_cannot_flood_a_thread(world: World) -> None:
+    [first] = world.mesh.send(world.peers["ca"], "codex-a", "Please review cart.py", kind="request")
+    notes = []
+    for i in range(10):
+        world.now[0] += 5
+        res = world.mesh.reply(world.peers["xa"], str(first.msg_id), f"finding {i}")
+        notes.append(res.note if res.status == "refused" else res.status)
+    assert notes[:8] == ["delivered"] * 8 and "flood limit" in notes[8]
+    world.now[0] += 600
+    assert world.mesh.reply(world.peers["xa"], str(first.msg_id), "late finding").status == (
+        "delivered"
+    )
