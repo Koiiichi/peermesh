@@ -93,16 +93,14 @@ def _stop(mesh: Mesh, peer: Peer, payload: Mapping[str, Any], emit: Emit) -> dic
     continued is not continued again; its actionable messages start a new turn instead.
     """
     with mesh.ledger.locked():
-        # The idle status and the claim are one step under the lock, so a sender sees either
-        # a busy peer whose inbox this hook still reads, or an idle peer.
-        peer.status, peer.last_seen = "idle", mesh.clock()
-        mesh.registry.put(peer)
+        # The status and the claim are one step under the lock, so a sender sees either a busy
+        # peer whose inbox a hook still reads, or an idle peer. A continued turn stays busy.
         items = mesh.take_waiting(peer)
         actionable = [i for i in items if i.actionable]
-        if not actionable:
-            mesh.inbox.release(items)
-            return None
-        if not payload.get("stop_hook_active"):
+        block = bool(actionable) and not payload.get("stop_hook_active")
+        peer.status, peer.last_seen = ("busy" if block else "idle"), mesh.clock()
+        mesh.registry.put(peer)
+        if block:
             frames = [i.rendered for i in items]
             out = {
                 "decision": "block",
@@ -112,7 +110,8 @@ def _stop(mesh: Mesh, peer: Peer, payload: Mapping[str, Any], emit: Emit) -> dic
             mesh.record_injected(items, "stop")
             return out
         mesh.inbox.release([i for i in items if not i.actionable])
-    mesh.wake(peer, actionable)
+    if actionable:
+        mesh.wake(peer, actionable)
     return None
 
 
