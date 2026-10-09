@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from peermesh import paths, text
+from peermesh.errors import NoInboxError
 from peermesh.identity import detect
-from peermesh.registry import Peer, Runtime, is_alive
+from peermesh.registry import Peer, Registry, Runtime, current_branch, is_alive, repo_info
 from peermesh.service import Mesh
 
 EVENTS = ("session-start", "prompt", "stop", "session-end")
@@ -35,6 +36,25 @@ def _changed(peer_id: str, peers: list[Peer]) -> bool:
     paths.ensure_private_dir(_seen_file(peer_id).parent)
     _seen_file(peer_id).write_text(json.dumps(current))
     return previous is not None or bool(current)
+
+
+def _refresh(peer: Peer, cwd: str) -> None:
+    """Bring the branch and location up to date; a session can change both after it starts."""
+    if cwd != peer.cwd:
+        info = repo_info(cwd)
+        peer.cwd = cwd
+        peer.git_root, peer.worktree = info.git_root, info.worktree
+        peer.branch, peer.repo_key = info.branch, info.repo_key
+    elif peer.worktree:
+        peer.branch = current_branch(peer.worktree)
+
+
+def _remove_stale_state(registry: Registry) -> None:
+    """Delete the seen-set files of sessions that have no registry record."""
+    live = {p.stem for p in registry.dir.glob("*.json")}
+    for seen in (paths.home() / "state").glob("*.seen"):
+        if seen.stem not in live:
+            seen.unlink(missing_ok=True)
 
 
 def _context(event: str, body: str) -> dict[str, Any]:
@@ -62,10 +82,22 @@ def handle(
         mesh.registry.remove(peer_id)
         _seen_file(peer_id).unlink(missing_ok=True)
         return None
+    cwd = str(payload.get("cwd") or os.getcwd())
     peer = mesh.registry.get(peer_id)
     if peer is None or not is_alive(peer):
-        cwd = str(payload.get("cwd") or os.getcwd())
-        peer = mesh.register(detect(runtime, session_id, cwd, env, host_pid))
+        try:
+            peer = mesh.register(detect(runtime, session_id, cwd, env, host_pid))
+        except NoInboxError:
+            # Claude Code can run SessionStart before it writes the inbox socket path. The
+            # next prompt registers the session; the rules apply from the start.
+            if event == "session-start":
+                return _context(event, text.unregistered_text(runtime))
+            raise
+    elif event in ("session-start", "prompt"):
+        _refresh(peer, cwd)
+    transcript = str(payload.get("transcript_path") or "")
+    if runtime == "codex" and transcript and Path(transcript).exists():
+        peer.transcript = transcript
     peer.status = "busy" if event == "prompt" else "idle"
     peer.last_seen = mesh.clock()
     mesh.registry.put(peer)
@@ -74,6 +106,7 @@ def handle(
     peers = mesh.list_peers(peer, "repo")
     if event == "session-start":
         _changed(peer.id, peers)
+        _remove_stale_state(mesh.registry)
         return _context(event, text.session_start_text(peer, peers))
     if _changed(peer.id, peers):
         return _context(event, text.change_text(peer, peers))

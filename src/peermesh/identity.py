@@ -10,8 +10,9 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from peermesh import paths
-from peermesh.errors import PeerError
+from peermesh.errors import NoInboxError, PeerError
 from peermesh.registry import Peer, Runtime, proc_start, repo_info
+from peermesh.transports.codex import daemon_socket
 
 
 def _ps(field: str, pid: int) -> str:
@@ -132,16 +133,21 @@ def detect(
             endpoint = ""
         endpoint = endpoint or env.get("CLAUDE_CODE_MESSAGING_SOCKET", "")
         if not endpoint:
-            raise PeerError(
+            raise NoInboxError(
                 "This Claude Code session has no inbox socket. "
                 "Use Claude Code 2.1.224 or later on macOS or Linux."
             )
         capabilities.append("urgent_interrupt")
     else:
         endpoint = session_id
-        if "app-server" in command_of(host_pid):
-            host = "daemon"
-            capabilities.append("urgent_interrupt")
+        command = command_of(host_pid)
+        if "app-server" in command:
+            # The Codex app and IDE extensions run a private app-server over stdio, which no
+            # other process can reach. Only the shared daemon serves turn/steer to peermesh.
+            host = "app-server"
+            if "--listen" in command and daemon_socket().exists():
+                host = "daemon"
+                capabilities.append("urgent_interrupt")
     info = repo_info(cwd)
     return Peer(
         id=f"{runtime}:{session_id}",

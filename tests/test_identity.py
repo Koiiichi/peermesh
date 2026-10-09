@@ -65,3 +65,9 @@ def test_detect_claude_prefers_own_session_record() -> None:
     env = {"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/inherited.sock"}
     peer = identity.detect("claude", "C", os.getcwd(), env, host_pid=os.getpid())
     assert peer.endpoint == "/tmp/own.sock"
+
+
+def test_codex_app_server_without_daemon_is_not_steerable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(identity, "command_of", lambda pid: "/x/codex app-server --flag")
+    peer = identity.detect("codex", "T", os.getcwd(), {}, host_pid=os.getpid())
+    assert peer.host == "app-server" and "urgent_interrupt" not in peer.capabilities

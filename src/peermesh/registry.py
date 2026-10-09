@@ -7,7 +7,7 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal
 
@@ -35,34 +35,57 @@ class Peer:
     endpoint: str
     host: str = "local"
     capabilities: list[str] = field(default_factory=list)
+    # The Codex rollout file of the thread. An app-server process hosts many threads, so the
+    # process can outlive a thread; a missing rollout file means the thread is closed.
+    transcript: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Peer:
-        return cls(**data)
+        # Records written by a newer peermesh can carry fields that this version does not know.
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 def proc_start(pid: int) -> str | None:
     """Return the start time `ps` prints for pid, or None when the pid is not running."""
-    if pid <= 0:
-        return None
+    return proc_starts([pid]).get(pid)
+
+
+def proc_starts(pids: list[int]) -> dict[int, str]:
+    """The start time `ps` prints for each running pid, from one `ps` call."""
+    wanted = sorted({pid for pid in pids if pid > 0})
+    if not wanted:
+        return {}
     # lstart text depends on locale and time zone; pin both so every session compares alike.
     env = {**os.environ, "LC_ALL": "C", "TZ": "UTC"}
     result = subprocess.run(
-        ["ps", "-o", "lstart=", "-p", str(pid)],
+        ["ps", "-o", "pid=,lstart=", "-p", ",".join(map(str, wanted))],
         capture_output=True,
         text=True,
         check=False,
         env=env,
     )
-    return result.stdout.strip() or None
+    starts: dict[int, str] = {}
+    for line in result.stdout.splitlines():
+        pid_text, _, start = line.strip().partition(" ")
+        if pid_text.isdigit() and start.strip():
+            starts[int(pid_text)] = start.strip()
+    return starts
 
 
-def is_alive(peer: Peer) -> bool:
-    """A record is live when its pid runs and still has the recorded start time."""
-    return proc_start(peer.pid) == peer.proc_start
+def is_alive(peer: Peer, starts: dict[int, str] | None = None) -> bool:
+    """A record is live when its pid runs with the recorded start time, and its thread is open.
+
+    `starts` is a result of `proc_starts` that covers peer.pid; without it, `ps` runs once.
+    """
+    if starts is None:
+        starts = proc_starts([peer.pid])
+    if starts.get(peer.pid) != peer.proc_start:
+        return False
+    return peer.transcript is None or Path(peer.transcript).exists()
 
 
 @dataclass(frozen=True)
@@ -104,6 +127,17 @@ def repo_info(cwd: str) -> RepoInfo:
     return RepoInfo(
         git_root=git_root, worktree=str(Path(top).resolve()), branch=branch, repo_key=key
     )
+
+
+def current_branch(cwd: str) -> str | None:
+    result = subprocess.run(
+        ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=5,
+    )
+    return result.stdout.strip() or None if result.returncode == 0 else None
 
 
 def _label(peer: Peer) -> str:
@@ -170,14 +204,16 @@ class Registry:
         """Live peers. Records of dead processes, reused pids and corrupt files are deleted."""
         if not self.dir.is_dir():
             return []
-        peers: list[Peer] = []
+        records: list[tuple[Path, Peer]] = []
         for path in sorted(self.dir.glob("*.json")):
             try:
-                peer = Peer.from_json(json.loads(path.read_text()))
+                records.append((path, Peer.from_json(json.loads(path.read_text()))))
             except (OSError, ValueError, TypeError):
                 path.unlink(missing_ok=True)
-                continue
-            if not is_alive(peer):
+        starts = proc_starts([peer.pid for _, peer in records])
+        peers: list[Peer] = []
+        for path, peer in records:
+            if not is_alive(peer, starts):
                 path.unlink(missing_ok=True)
                 continue
             peers.append(peer)

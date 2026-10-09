@@ -191,7 +191,9 @@ class CodexTransport:
             return Outcome("refused", f"codex queue did not start: {exc}.")
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[-300:]
-            return Outcome("refused", f"codex queue failed: {detail}")
+            # Codex reports a closed or archived thread this way; the record is stale.
+            gone = "no rollout found" in detail
+            return Outcome("refused", f"codex queue failed: {detail}", offline=gone)
         if target.status == "idle":
             return Outcome("delivered", "queued; an idle thread starts a new turn")
         return Outcome("queued", "The peer reads the message at its next turn.")

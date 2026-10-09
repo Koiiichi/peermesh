@@ -6,10 +6,11 @@ import stat
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from peermesh import paths
+from peermesh import paths, registry
 from peermesh.registry import (
     Peer,
     Registry,
@@ -141,3 +142,38 @@ def test_liveness_ignores_locale_and_timezone(
     monkeypatch.setenv("TZ", "UTC")
     monkeypatch.setenv("LC_ALL", "C")
     assert [p.id for p in reg.live()] == ["claude:x"]
+
+
+def test_live_runs_ps_once_for_all_peers(
+    make_peer: Callable[..., Peer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reg = Registry()
+    for i in range(4):
+        reg.put(make_peer(id=f"claude:s{i}", name=f"p{i}"))
+    calls: list[list[str]] = []
+    real = registry.subprocess.run
+
+    def counting(args: list[str], **kw: Any) -> Any:
+        calls.append(args)
+        return real(args, **kw)
+
+    monkeypatch.setattr(registry.subprocess, "run", counting)
+    assert len(reg.live()) == 4
+    assert len([c for c in calls if c[0] == "ps"]) == 1
+
+
+def test_codex_record_without_rollout_is_pruned(
+    make_peer: Callable[..., Peer], tmp_path: Path
+) -> None:
+    reg = Registry()
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text("")
+    reg.put(make_peer(id="codex:open", runtime="codex", transcript=str(rollout)))
+    reg.put(make_peer(id="codex:closed", runtime="codex", transcript=str(tmp_path / "gone")))
+    assert [p.id for p in reg.live()] == ["codex:open"]
+    assert reg.get("codex:closed") is None
+
+
+def test_record_from_newer_version_loads(make_peer: Callable[..., Peer]) -> None:
+    data = make_peer().to_json() | {"field_from_the_future": 1}
+    assert Peer.from_json(data).id == "claude:s1"

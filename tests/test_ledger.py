@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import gzip
 import json
 import multiprocessing
 import os
 import stat
+import time
 
+import pytest
+
+from peermesh import ledger
 from peermesh.ledger import Ledger
 
 
@@ -72,3 +77,59 @@ def test_count_recent_counts_each_message_once() -> None:
         led.append(_entry(2, sent_at=695.0, outcome="sending"))
     assert led.count_recent("a", "b", 600.0, now=700.0) == 2
     assert led.find("m1") is not None and led.find("m1")["outcome"] == "delivered"
+
+
+def test_outcome_entries_merge_into_one_record() -> None:
+    led = Ledger()
+    with led.locked():
+        led.append({"id": "m1", "from": "a", "to": "b", "body": "hi", "outcome": "sending"})
+        led.append({"id": "m1", "outcome": "delivered", "note": "ok"})
+    [record] = led.latest()
+    assert record["body"] == "hi" and record["outcome"] == "delivered"
+    found = led.find("m1")
+    assert found is not None and found["body"] == "hi" and found["note"] == "ok"
+
+
+def test_rotation_archives_everything_and_keeps_open_and_recent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(ledger, "ROTATE_BYTES", 2000)
+    led = Ledger()
+    now = time.time()
+    with led.locked():
+        led.append(_entry(1, sent_at=now - 90_000))
+        led.append({"id": "open", "sent_at": now - 90_000, "outcome": "pending"})
+        led.append(_entry(2, sent_at=now - 10))
+        for i in range(3, 30):
+            led.append(_entry(i, sent_at=now - 90_000) | {"pad": "x" * 100})
+    archives = sorted(led.archive_dir.glob("ledger-*.jsonl.gz"))
+    archived: set[str] = set()
+    for archive in archives:
+        with gzip.open(archive, "rt") as fh:
+            archived |= {json.loads(line)["id"] for line in fh}
+        assert stat.S_IMODE(archive.stat().st_mode) == 0o600
+    active = {e["id"] for e in led.entries()}
+    assert {f"m{i}" for i in range(1, 30)} | {"open"} <= archived | active
+    assert {"m1", "open", "m2"} <= archived
+    assert "open" in active and "m2" in active and "m1" not in active
+    found = led.find("m1")
+    assert found is not None and found["outcome"] == "delivered"
+
+
+def test_archives_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ledger, "ROTATE_BYTES", 300)
+    monkeypatch.setattr(ledger, "KEEP_ARCHIVES", 3)
+    led = Ledger()
+    with led.locked():
+        for i in range(40):
+            led.append(_entry(i, sent_at=0.0) | {"pad": "x" * 200})
+    assert len(list(led.archive_dir.glob("ledger-*.jsonl.gz"))) == 3
+
+
+def test_count_recent_new_threads_only() -> None:
+    led = Ledger()
+    with led.locked():
+        led.append(_entry(1, sent_at=690.0) | {"hop": 0})
+        led.append(_entry(2, sent_at=691.0) | {"hop": 3})
+    assert led.count_recent("a", "b", 600.0, now=700.0) == 2
+    assert led.count_recent("a", "b", 600.0, now=700.0, new_threads_only=True) == 1

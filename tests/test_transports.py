@@ -240,3 +240,21 @@ def test_steer_write_failure_is_not_steered() -> None:
     )
     rpc.notify = lambda method, params: None  # type: ignore[method-assign]
     assert steerer._steer(rpc, "t-1", "x") == "not_steered"
+
+
+def test_codex_queue_closed_thread_is_offline(
+    make_peer: Callable[..., Peer],
+    stub_codex: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fail = tmp_path / "bin" / "codex-closed"
+    fail.write_text(
+        "#!/bin/sh\necho 'Error: thread/queue/add failed: no rollout found for thread id t-1' >&2\n"
+        "exit 1\n"
+    )
+    fail.chmod(0o755)
+    monkeypatch.setenv("PEERMESH_CODEX", str(fail))
+    a, b = _pair(make_peer, status="idle")
+    outcome = CodexTransport().deliver(b, "R", new_message(a, b, "hello"))
+    assert outcome.status == "refused" and outcome.offline

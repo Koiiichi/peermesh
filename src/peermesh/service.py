@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -122,19 +123,22 @@ class Mesh:
         if original.get("to") != me.id:
             raise PeerError("That message was not sent to this session. Use peers_send.")
         sender_name = str(original.get("from_name", ""))
+        sender_id = str(original["from"])
         if original.get("broadcast"):
-            return SendResult(
-                None,
+            return self._refused(
+                me,
+                sender_id,
                 sender_name,
-                "refused",
+                "reply",
                 "The message is a broadcast. Do not reply to a broadcast. "
                 "Use peers_send if the sender must know something.",
             )
         if is_ack_only(body):
-            return SendResult(
-                None,
+            return self._refused(
+                me,
+                sender_id,
                 sender_name,
-                "refused",
+                "reply",
                 "The reply only acknowledges the message. Do not send it. "
                 "Send a reply only when it contains new information, an answer, or a decision.",
             )
@@ -176,6 +180,43 @@ class Mesh:
             "queued_last_hour": queued,
         }
 
+    def _refused(
+        self,
+        me: Peer,
+        to_id: str,
+        to_name: str,
+        kind: str,
+        note: str,
+        *,
+        locked: bool = False,
+    ) -> SendResult:
+        """Return a refusal and record it, so refusals appear in the ledger and in `peers log`.
+
+        A refusal record has its own id and no body. A record that cannot be written does not
+        change the refusal.
+        """
+        entry = {
+            "v": 1,
+            "id": f"refused-{uuid.uuid4().hex}",
+            "from": me.id,
+            "from_name": me.name,
+            "to": to_id,
+            "to_name": to_name,
+            "kind": kind,
+            "sent_at": self.clock(),
+            "outcome": "refused",
+            "note": note,
+        }
+        try:
+            if locked:
+                self.ledger.append(entry)
+            else:
+                with self.ledger.locked():
+                    self.ledger.append(entry)
+        except OSError:
+            pass
+        return SendResult(None, to_name, "refused", note)
+
     def _unknown(self, target_ref: str, me: Peer | None) -> str:
         names = sorted(p.name for p in self.registry.live() if me is None or p.id != me.id)
         return (
@@ -199,12 +240,13 @@ class Mesh:
     ) -> SendResult:
         target = self.registry.resolve(target_ref)
         if target is None:
-            return SendResult(None, target_ref, "refused", self._unknown(target_ref, me))
+            return self._refused(me, target_ref, target_ref, kind, self._unknown(target_ref, me))
         if target.id == me.id:
-            return SendResult(
-                None,
+            return self._refused(
+                me,
+                target.id,
                 target.name,
-                "refused",
+                kind,
                 "The target is this session. Send the message to a different peer.",
             )
         self._enrich(target)
@@ -222,7 +264,7 @@ class Mesh:
                 msg_id=msg_id,
             )
         except EnvelopeError as exc:
-            return SendResult(None, target.name, "refused", str(exc))
+            return self._refused(me, target.id, target.name, kind, str(exc))
         # The lock covers only the checks and the "sending" record. Delivery can take tens of
         # seconds and runs outside it. The record makes a retry of this id a duplicate even if
         # this process ends during delivery.
@@ -236,12 +278,14 @@ class Mesh:
                 )
             now = self.clock()
             if self.ledger.count_recent(me.id, target.id, RATE_WINDOW_S, now) >= RATE_LIMIT:
-                return SendResult(
-                    None,
+                return self._refused(
+                    me,
+                    target.id,
                     target.name,
-                    "refused",
+                    kind,
                     f"rate limit: {RATE_LIMIT} messages to this peer in 10 minutes. "
                     "Wait, or ask the user.",
+                    locked=True,
                 )
             try:
                 self.ledger.append(
@@ -257,7 +301,7 @@ class Mesh:
         outcome = self.transports[target.runtime].deliver(target, render(msg, target.runtime), msg)
         if outcome.offline:
             self.registry.remove(target.id)
-        entry = msg.to_json() | {"sent_at": now, "outcome": outcome.status, "note": outcome.note}
+        entry = {"id": msg.id, "outcome": outcome.status, "note": outcome.note, "at": self.clock()}
         try:
             with self.ledger.locked():
                 self.ledger.append(entry)
