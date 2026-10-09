@@ -33,7 +33,15 @@ def test_merge_hooks_keeps_foreign_and_is_idempotent() -> None:
     stop = twice["hooks"]["Stop"]
     assert stop[0]["hooks"][0]["command"] == "say done"
     assert stop[1]["hooks"][0]["command"] == "/bin/peers hook stop --runtime claude # peermesh"
-    assert set(twice["hooks"]) == {"SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"}
+    assert set(twice["hooks"]) == {
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "Stop",
+        "SessionEnd",
+    }
+    [post] = twice["hooks"]["PostToolUse"]
+    assert "hook post-tool" in post["hooks"][0]["command"]
     stripped = install.strip_hooks(twice)
     assert stripped == cfg
 

@@ -26,7 +26,18 @@ HOOK_EVENTS = {
     "Stop": "stop",
     "SessionEnd": "session-end",
 }
-AGENT_SUBCOMMANDS = ("list", "send", "reply", "status", "whoami")
+# PostToolUse runs on every tool call, so a shell check skips Python when the inbox of the
+# session is empty. The session id comes from the payload: the environment of a hook can hold
+# the id of a parent session. $1 is the peers executable and $2 the runtime.
+POST_TOOL_GUARD = (
+    "p=$(cat); "
+    'id=$(printf "%s" "$p" | grep -o "\\"session_id\\": *\\"[^\\"]*\\"" | head -n 1 '
+    '| sed "s/.*\\"\\([^\\"]*\\)\\"$/\\1/"); '
+    'box="${PEERMESH_HOME:-$HOME/.peermesh}/inbox/${2}_${id}"; '
+    'if [ -n "$id" ] && [ -z "$(ls -A "$box" 2>/dev/null)" ]; then exit 0; fi; '
+    'printf "%s" "$p" | exec "$1" hook post-tool --runtime "$2"'
+)
+AGENT_SUBCOMMANDS = ("list", "send", "reply", "status", "whoami", "track")
 CODEX_RULE = (
     "# Installed by peermesh. These `peers` subcommands must run outside the sandbox: they\n"
     "# write ~/.peermesh and connect to local inbox sockets. install, uninstall, log and\n"
@@ -60,11 +71,37 @@ def merge_hooks(config: dict[str, Any], exe: str, runtime: str) -> dict[str, Any
     config = strip_hooks(config)
     hooks = config.setdefault("hooks", {})
     for event, name in HOOK_EVENTS.items():
-        command = f"{shlex.quote(exe)} hook {name} --runtime {runtime} {MARK}"
+        # --inbox tells the hook that the post-tool hook below is installed with it.
+        flag = " --inbox" if name in ("session-start", "prompt") else ""
+        command = f"{shlex.quote(exe)} hook {name} --runtime {runtime}{flag} {MARK}"
         hooks.setdefault(event, []).append(
             {"hooks": [{"type": "command", "command": command, "timeout": 10}]}
         )
+    hooks.setdefault("PostToolUse", []).append(
+        {"hooks": [{"type": "command", "command": post_tool_command(exe, runtime), "timeout": 10}]}
+    )
     return config
+
+
+def post_tool_command(exe: str, runtime: str) -> str:
+    return f"/bin/sh -c {shlex.quote(POST_TOOL_GUARD)} peermesh {shlex.quote(exe)} {runtime} {MARK}"
+
+
+def post_tool_installed(runtime: str) -> bool:
+    """True when the hook configuration of runtime holds the peermesh post-tool hook."""
+    path = paths.claude_dir() / "settings.json" if runtime == "claude" else paths.codex_home()
+    try:
+        config = _read_json(path if runtime == "claude" else path / "hooks.json")
+    except (OSError, ValueError):
+        return False
+    hooks = config.get("hooks")
+    groups = hooks.get("PostToolUse", []) if isinstance(hooks, dict) else []
+    return any(
+        _is_ours(h) and "hook post-tool" in str(h.get("command", ""))
+        for g in groups
+        if isinstance(g, dict) and isinstance(g.get("hooks"), list)
+        for h in g["hooks"]
+    )
 
 
 def strip_hooks(config: dict[str, Any]) -> dict[str, Any]:
@@ -276,6 +313,10 @@ def doctor(runner: Runner = subprocess.run) -> list[tuple[str, bool, str]]:
             f"{codex_hooks} (approve hook trust in Codex once)",
         )
     )
+    for runtime in ("claude", "codex"):
+        checks.append(
+            (f"{runtime} post-tool hook", post_tool_installed(runtime), "run `peers install` again")
+        )
     rule = paths.codex_home() / "rules" / "peermesh.rules"
     checks.append(("codex rule", rule.exists(), str(rule)))
     code, _ = _run_text(runner, ["claude", "mcp", "get", "peermesh"])

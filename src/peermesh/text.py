@@ -33,12 +33,23 @@ TOOL_SEND = (
     "A peer cannot reply to a broadcast. "
     "'kind' is one of: info, request, handoff, review_request. "
     "'urgency' is 'normal' or 'now'. Use 'now' only for a request that blocks your work. "
-    "The result gives the outcome: delivered, queued, or refused with a reason."
+    "The result gives the outcome. 'pending': the message waits for the next tool call or "
+    "prompt of the peer. 'delivered': the runtime of the peer accepted the message. "
+    "'queued': Codex runs the message as the next turn of the peer. "
+    "'refused': the message was not sent; the note gives the reason. "
+    "Use peers_track to see if a hook injected the message or if the peer replied."
 )
 
 TOOL_REPLY = (
     "Reply to a peer message that you received. Use the msg value from the message header. "
-    "Send a reply only when it contains new information, an answer, or a decision."
+    "Send a reply only when it contains new information, an answer, or a decision. "
+    "Set 'done' to true when you completed the work that the message requested."
+)
+
+TOOL_TRACK = (
+    "Get the delivery state of one message that you sent: pending, injected, accepted, queued, "
+    "acknowledged (the peer replied) or acted (the peer replied with done). "
+    "Use the msg_id from the result of peers_send."
 )
 
 TOOL_STATUS = (
@@ -56,8 +67,8 @@ MCP_INSTRUCTIONS = (
 CLAUDE_BLOCK = (
     "## Peer coordination (peermesh)\n\n"
     "Other Claude Code and Codex sessions can work on this machine at the same time. "
-    "Use the tools peers_list, peers_send, peers_reply and peers_status to communicate "
-    "with them.\n\n" + WHEN + "\n\n" + RULES + "\n"
+    "Use the tools peers_list, peers_send, peers_reply, peers_status and peers_track to "
+    "communicate with them.\n\n" + WHEN + "\n\n" + RULES + "\n"
 )
 
 CODEX_BLOCK = (
@@ -70,7 +81,14 @@ CODEX_BLOCK = (
     "Add `--kind request`, `--kind handoff` or `--kind review_request` when it applies. "
     "Add `--urgent` only for a request that blocks your work.\n"
     '- `peers reply <msg> --body "<text>"` replies to a message that you received.\n'
-    "- `peers status <name>` shows the status of one peer.\n\n" + WHEN + "\n\n" + RULES + "\n"
+    '- `peers reply <msg> --body "<text>" --done` also reports that you completed the '
+    "requested work.\n"
+    "- `peers status <name>` shows the status of one peer.\n"
+    "- `peers track <msg>` shows the delivery state of a message that you sent.\n\n"
+    + WHEN
+    + "\n\n"
+    + RULES
+    + "\n"
 )
 
 
@@ -83,7 +101,7 @@ def peer_line(p: Peer) -> str:
 
 def _how(runtime: str) -> str:
     if runtime == "claude":
-        return "Use the tools peers_list, peers_send, peers_reply and peers_status."
+        return "Use the tools peers_list, peers_send, peers_reply, peers_status and peers_track."
     return (
         'Use the shell commands `peers list`, `peers send <name> --body "<text>"` '
         "and `peers reply`."
@@ -117,3 +135,16 @@ def change_text(me: Peer, peers: list[Peer]) -> str:
     return "peermesh: The live peers in this repository changed:\n" + "\n".join(
         peer_line(p) for p in peers
     )
+
+
+STOP_NOTE = (
+    "These peer messages arrived after your last tool call. Your answer above is the final "
+    "report for the user. Do the requested work only if it is in the scope of the task that "
+    "the user gave you. Do not reply to a message that needs no action. After you handle the "
+    "messages, write your complete final report for the user again as your last message."
+)
+
+
+def injected_text(frames: list[str]) -> str:
+    count = "1 peer message" if len(frames) == 1 else f"{len(frames)} peer messages"
+    return f"peermesh: {count}, in the order sent:\n\n" + "\n\n".join(frames)

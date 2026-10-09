@@ -5,18 +5,23 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from peermesh import paths, text
 from peermesh.errors import NoInboxError
 from peermesh.identity import detect
-from peermesh.registry import Peer, Registry, Runtime, current_branch, is_alive, repo_info
+from peermesh.registry import Peer, Runtime, current_branch, is_alive, repo_info
 from peermesh.service import Mesh
 
-EVENTS = ("session-start", "prompt", "stop", "session-end")
-_HOOK_NAMES = {"session-start": "SessionStart", "prompt": "UserPromptSubmit"}
+EVENTS = ("session-start", "prompt", "post-tool", "stop", "session-end")
+_HOOK_NAMES = {
+    "session-start": "SessionStart",
+    "prompt": "UserPromptSubmit",
+    "post-tool": "PostToolUse",
+}
+Emit = Callable[[dict[str, Any]], None]
 
 
 def _seen_file(peer_id: str) -> Path:
@@ -49,12 +54,66 @@ def _refresh(peer: Peer, cwd: str) -> None:
         peer.branch = current_branch(peer.worktree)
 
 
-def _remove_stale_state(registry: Registry) -> None:
-    """Delete the seen-set files of sessions that have no registry record."""
-    live = {p.stem for p in registry.dir.glob("*.json")}
+def _remove_stale_state(mesh: Mesh) -> None:
+    """Clear the seen sets and inboxes of sessions that have no registry record."""
+    live = {p.stem for p in mesh.registry.dir.glob("*.json")}
     for seen in (paths.home() / "state").glob("*.seen"):
         if seen.stem not in live:
             seen.unlink(missing_ok=True)
+    for name in mesh.inbox.peer_ids():
+        if name not in live:
+            mesh.expire_inbox(name)
+
+
+def _post_tool(mesh: Mesh, peer_id: str, emit: Emit) -> dict[str, Any] | None:
+    peer = mesh.registry.get(peer_id)
+    if peer is None:
+        return None
+    with mesh.ledger.locked():
+        items = mesh.take_waiting(peer)
+        if not items:
+            return None
+        if peer.status != "busy":
+            # A native wake starts a turn without a prompt hook; a tool call proves the turn.
+            peer.status, peer.last_seen = "busy", mesh.clock()
+            mesh.registry.put(peer)
+        out = _context("post-tool", text.injected_text([i.rendered for i in items]))
+        # Emit before the record, so a crash leaves the messages claimed for a retry and
+        # never marks a message injected that the runtime did not get.
+        emit(out)
+        mesh.record_injected(items, "post-tool")
+    return out
+
+
+def _stop(mesh: Mesh, peer: Peer, payload: Mapping[str, Any], emit: Emit) -> dict[str, Any] | None:
+    """Decide what the end of a turn does with waiting messages.
+
+    Information waits for the next prompt or tool call. Actionable messages continue the turn
+    once, with the instruction to restate the final report. A turn that a Stop hook already
+    continued is not continued again; its actionable messages start a new turn instead.
+    """
+    with mesh.ledger.locked():
+        # The idle status and the claim are one step under the lock, so a sender sees either
+        # a busy peer whose inbox this hook still reads, or an idle peer.
+        peer.status, peer.last_seen = "idle", mesh.clock()
+        mesh.registry.put(peer)
+        items = mesh.take_waiting(peer)
+        actionable = [i for i in items if i.actionable]
+        if not actionable:
+            mesh.inbox.release(items)
+            return None
+        if not payload.get("stop_hook_active"):
+            frames = [i.rendered for i in items]
+            out = {
+                "decision": "block",
+                "reason": text.injected_text(frames) + "\n\n" + text.STOP_NOTE,
+            }
+            emit(out)
+            mesh.record_injected(items, "stop")
+            return out
+        mesh.inbox.release([i for i in items if not i.actionable])
+    mesh.wake(peer, actionable)
+    return None
 
 
 def _context(event: str, body: str) -> dict[str, Any]:
@@ -69,7 +128,15 @@ def handle(
     *,
     env: Mapping[str, str],
     host_pid: int | None = None,
+    inbox: bool = False,
+    emit: Emit = lambda out: None,
 ) -> dict[str, Any] | None:
+    """Run one hook event and return its output; `emit` writes the output to the runtime.
+
+    The hook calls `emit` itself for output that carries peer messages, under the ledger lock
+    and before it records the messages as injected. `inbox` is True when the post-tool hook of
+    this runtime is installed, so senders can leave messages for it.
+    """
     # The payload names the session that fired the hook; an env value can be inherited from a
     # parent session, so it is only a fallback.
     session_id = str(payload.get("session_id") or "")
@@ -81,7 +148,10 @@ def handle(
     if event == "session-end":
         mesh.registry.remove(peer_id)
         _seen_file(peer_id).unlink(missing_ok=True)
+        mesh.expire_inbox(peer_id)
         return None
+    if event == "post-tool":
+        return _post_tool(mesh, peer_id, emit)
     cwd = str(payload.get("cwd") or os.getcwd())
     peer = mesh.registry.get(peer_id)
     if peer is None or not is_alive(peer):
@@ -98,16 +168,29 @@ def handle(
     transcript = str(payload.get("transcript_path") or "")
     if runtime == "codex" and transcript and Path(transcript).exists():
         peer.transcript = transcript
+    if event in ("session-start", "prompt"):
+        others = [c for c in peer.capabilities if c != "inbox"]
+        peer.capabilities = [*others, "inbox"] if inbox else others
+    if event == "stop":
+        return _stop(mesh, peer, payload, emit)
     peer.status = "busy" if event == "prompt" else "idle"
     peer.last_seen = mesh.clock()
     mesh.registry.put(peer)
-    if event == "stop":
-        return None
     peers = mesh.list_peers(peer, "repo")
     if event == "session-start":
         _changed(peer.id, peers)
-        _remove_stale_state(mesh.registry)
-        return _context(event, text.session_start_text(peer, peers))
-    if _changed(peer.id, peers):
-        return _context(event, text.change_text(peer, peers))
-    return None
+        _remove_stale_state(mesh)
+        out = _context(event, text.session_start_text(peer, peers))
+        emit(out)
+        return out
+    parts = [text.change_text(peer, peers)] if _changed(peer.id, peers) else []
+    with mesh.ledger.locked():
+        items = mesh.take_waiting(peer)
+        if items:
+            parts.append(text.injected_text([i.rendered for i in items]))
+        if not parts:
+            return None
+        out = _context(event, "\n\n".join(parts))
+        emit(out)
+        mesh.record_injected(items, "prompt")
+    return out

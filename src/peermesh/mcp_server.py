@@ -42,10 +42,19 @@ def peers_send(
 
 
 @mcp.tool(description=text.TOOL_REPLY)
-def peers_reply(msg_id: str, body: str) -> dict[str, Any]:
+def peers_reply(msg_id: str, body: str, done: bool = False) -> dict[str, Any]:
     mesh, me = _context()
     try:
-        return mesh.reply(me, msg_id, body).to_json()
+        return mesh.reply(me, msg_id, body, done=done).to_json()
+    except PeerError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+@mcp.tool(description=text.TOOL_TRACK)
+def peers_track(msg_id: str) -> dict[str, Any]:
+    mesh, _ = _context()
+    try:
+        return mesh.track(msg_id)
     except PeerError as exc:
         raise ValueError(str(exc)) from exc
 
