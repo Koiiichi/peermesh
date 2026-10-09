@@ -110,7 +110,7 @@ def test_rotation_archives_everything_and_keeps_open_and_recent(
         assert stat.S_IMODE(archive.stat().st_mode) == 0o600
     active = {e["id"] for e in led.entries()}
     assert {f"m{i}" for i in range(1, 30)} | {"open"} <= archived | active
-    assert {"m1", "open", "m2"} <= archived
+    assert "m1" in archived and not archived & {"open", "m2"}
     assert "open" in active and "m2" in active and "m1" not in active
     found = led.find("m1")
     assert found is not None and found["outcome"] == "delivered"
@@ -133,3 +133,34 @@ def test_count_recent_new_threads_only() -> None:
         led.append(_entry(2, sent_at=691.0) | {"hop": 3})
     assert led.count_recent("a", "b", 600.0, now=700.0) == 2
     assert led.count_recent("a", "b", 600.0, now=700.0, new_threads_only=True) == 1
+
+
+def test_retained_entries_alone_do_not_repeat_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ledger, "ROTATE_BYTES", 2000)
+    led = Ledger()
+    now = time.time()
+    with led.locked():
+        led.append(_entry(0, sent_at=now - 90_000) | {"pad": "x" * 100})
+        for i in range(1, 40):
+            led.append(_entry(i, sent_at=now - 5) | {"pad": "x" * 100})
+        archives = sorted(led.archive_dir.glob("ledger-*.jsonl.gz"))
+        for i in range(40, 50):
+            led.append(_entry(i, sent_at=now - 5) | {"pad": "x" * 10})
+    assert sorted(led.archive_dir.glob("ledger-*.jsonl.gz")) == archives
+    found = led.find("m0")
+    assert found is not None and found["outcome"] == "delivered"
+    assert len(led.latest()) == 49
+
+
+def test_torn_lines_move_to_the_archive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ledger, "ROTATE_BYTES", 500)
+    led = Ledger()
+    with led.locked():
+        led.append(_entry(1, sent_at=0.0))
+    with led.path.open("a") as fh:
+        fh.write("{torn\n")
+    with led.locked():
+        led.append(_entry(2, sent_at=0.0) | {"pad": "x" * 600})
+    [archive] = led.archive_dir.glob("ledger-*.jsonl.gz")
+    with gzip.open(archive, "rt") as fh:
+        assert "{torn" in fh.read()

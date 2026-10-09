@@ -4,9 +4,9 @@ A send holds `locked()` for its checks and a "sending" entry, delivers without t
 appends its outcome under the lock. Later entries for a message carry only the fields that
 change; `latest()` and `find()` merge them into one record for each message.
 
-When the active file passes ROTATE_BYTES, its full text moves to a compressed archive and the
-active file keeps only the messages that are open or recent. KEEP_ARCHIVES bounds the
-archives; the oldest is removed first.
+When the active file grows by ROTATE_BYTES past its size after the last rotation, the entries
+of messages that are final and old move to a compressed archive. The active file keeps the
+messages that are open or recent. KEEP_ARCHIVES bounds the archives; the oldest is removed first.
 """
 
 from __future__ import annotations
@@ -36,6 +36,9 @@ class Ledger:
         self.path = base / "ledger.jsonl"
         self.archive_dir = base / "ledger-archive"
         self._lock = base / "ledger.lock"
+        # The active size after the last rotation. Rotation waits for ROTATE_BYTES of new
+        # entries past it, so retained entries alone never cause another rotation.
+        self._kept_size = base / "ledger.kept-size"
 
     @contextmanager
     def locked(self) -> Iterator[None]:
@@ -76,8 +79,14 @@ class Ledger:
         fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         with os.fdopen(fd, "a") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        if self.path.stat().st_size > ROTATE_BYTES:
+        if self.path.stat().st_size > ROTATE_BYTES + self._last_kept_size():
             self._rotate(time.time())
+
+    def _last_kept_size(self) -> int:
+        try:
+            return int(self._kept_size.read_text())
+        except (OSError, ValueError):
+            return 0
 
     def latest(self) -> list[dict[str, Any]]:
         """One merged record for each message id, in the order of first appearance."""
@@ -105,6 +114,15 @@ class Ledger:
             and not (new_threads_only and int(e.get("hop", 0)) > 0)
         )
 
+    def count_in_thread(self, from_id: str, thread: str) -> int:
+        return sum(
+            1
+            for e in self.latest()
+            if e.get("from") == from_id
+            and e.get("thread") == thread
+            and e.get("outcome") in COUNTED_OUTCOMES
+        )
+
     def _rotate(self, now: float) -> None:
         lines = self.path.read_text().splitlines()
         merged: dict[str, dict[str, Any]] = {}
@@ -116,22 +134,30 @@ class Ledger:
             if e.get("outcome") in OPEN_OUTCOMES
             or now - float(e.get("sent_at", 0.0)) < KEEP_RECENT_S
         }
-        paths.ensure_private_dir(self.archive_dir)
-        # A nanosecond name sorts by age, and O_EXCL makes sure that no archive is overwritten.
-        archive = self.archive_dir / f"ledger-{time.time_ns():020d}.jsonl.gz"
-        # The archive is complete before the active file shrinks, so a crash between the two
-        # steps leaves entries in both places, never in neither.
-        fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as raw, gzip.open(raw, "wt") as fh:
-            fh.write("".join(line + "\n" for line in lines))
-        kept = [line for line, e in _parsed_pairs(lines) if str(e.get("id")) in keep]
-        tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            fh.write("".join(line + "\n" for line in kept))
-        os.replace(tmp, self.path)
-        for old in sorted(self.archive_dir.glob("ledger-*.jsonl.gz"))[:-KEEP_ARCHIVES]:
-            old.unlink(missing_ok=True)
+        kept: list[str] = []
+        moved: list[str] = []
+        for line in lines:
+            # A torn line has no id to keep; it moves to the archive as written.
+            item = _parse([line])
+            (kept if item and str(item[0].get("id")) in keep else moved).append(line)
+        text = "".join(line + "\n" for line in kept)
+        if moved:
+            paths.ensure_private_dir(self.archive_dir)
+            # A nanosecond name sorts by age, and O_EXCL makes sure no archive is overwritten.
+            archive = self.archive_dir / f"ledger-{time.time_ns():020d}.jsonl.gz"
+            # The archive is complete before the active file shrinks, so a crash between the
+            # two steps leaves entries in both places, never in neither.
+            fd = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as raw, gzip.open(raw, "wt") as fh:
+                fh.write("".join(line + "\n" for line in moved))
+            tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as fh:
+                fh.write(text)
+            os.replace(tmp, self.path)
+            for old in sorted(self.archive_dir.glob("ledger-*.jsonl.gz"))[:-KEEP_ARCHIVES]:
+                old.unlink(missing_ok=True)
+        self._kept_size.write_text(str(len(text.encode())))
 
 
 def _parsed_pairs(lines: Iterable[str]) -> Iterator[tuple[str, dict[str, Any]]]:

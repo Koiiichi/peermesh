@@ -410,3 +410,14 @@ def test_outcome_entry_does_not_repeat_the_body(world: World) -> None:
     assert "body" not in lines[1]
     found = world.mesh.ledger.find(str(res.msg_id))
     assert found is not None and found["body"] == "the body text"
+
+
+def test_repeated_replies_to_one_message_are_capped(world: World) -> None:
+    [first] = world.mesh.send(world.peers["ca"], "codex-a", "Please review cart.py", kind="request")
+    statuses = [
+        world.mesh.reply(world.peers["xa"], str(first.msg_id), f"finding {i}").status
+        for i in range(12)
+    ]
+    assert statuses == ["delivered"] * 8 + ["refused"] * 4
+    [refused] = [e for e in world.mesh.ledger.latest() if e["outcome"] == "refused"][:1]
+    assert "messages in this thread" in refused["note"]
