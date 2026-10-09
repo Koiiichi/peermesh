@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -173,3 +174,21 @@ def test_session_start_without_inbox_socket_still_gives_rules() -> None:
     assert out is not None
     text_out = out["hookSpecificOutput"]["additionalContext"]
     assert "not registered yet" in text_out and "peers_send" in text_out
+
+
+def test_hook_cli_prints_the_rules_for_an_unregistered_session() -> None:
+    # A session file for this process with no socket path is the state at SessionStart.
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{os.getpid()}.json").write_text(json.dumps({"sessionId": "X"}))
+    result = subprocess.run(
+        [sys.executable, "-m", "peermesh.cli", "hook", "session-start", "--runtime", "claude"],
+        input='{"session_id": "X"}',
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert (
+        "not registered yet" in json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    )

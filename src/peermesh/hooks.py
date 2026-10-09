@@ -161,7 +161,9 @@ def handle(
             # Claude Code can run SessionStart before it writes the inbox socket path. The
             # next prompt registers the session; the rules apply from the start.
             if event == "session-start":
-                return _context(event, text.unregistered_text(runtime))
+                out = _context(event, text.unregistered_text(runtime))
+                emit(out)
+                return out
             raise
     elif event in ("session-start", "prompt"):
         _refresh(peer, cwd)
