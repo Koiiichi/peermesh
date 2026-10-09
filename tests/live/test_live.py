@@ -7,13 +7,17 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
+from peermesh import install
 from peermesh.registry import Peer, Registry, proc_start
+from peermesh.service import Mesh
 
 pytestmark = [
     pytest.mark.live,
@@ -83,3 +87,73 @@ def test_codex_session_sends_to_claude_inbox(tmp_path: Path) -> None:
     frame = json.loads(got[0])
     assert "(codex, id codex:" in frame["message"]["content"]
     assert "live test: codex to claude" in frame["message"]["content"]
+
+
+def test_busy_codex_turn_gets_message_at_next_tool_call(tmp_path: Path) -> None:
+    """A message sent during a real Codex turn is injected by the post-tool hook of this checkout.
+
+    The Codex home is temporary, so only the hooks of this checkout run; auth.json is a symlink
+    to the real one, not a copy.
+    """
+    real_auth = Path.home() / ".codex" / "auth.json"
+    if shutil.which("codex") is None or not real_auth.exists():
+        pytest.skip("codex or its auth.json is missing")
+    codex_home = tmp_path / "codex-home"
+    codex_home.mkdir()
+    (codex_home / "auth.json").symlink_to(real_auth)
+    peers = str(Path(sys.executable).with_name("peers"))
+    hooks = install.merge_hooks({}, peers, "codex")
+    (codex_home / "hooks.json").write_text(json.dumps(hooks))
+    pid = os.getpid()
+    sender = Peer(
+        id="claude:live-sender",
+        name="claude-live-sender",
+        runtime="claude",
+        pid=pid,
+        proc_start=proc_start(pid) or "",
+        cwd=str(tmp_path),
+        git_root=None,
+        worktree=None,
+        branch=None,
+        repo_key=None,
+        status="busy",
+        last_seen=0.0,
+        endpoint="/tmp/peermesh-live-sender-none.sock",
+    )
+    Registry().put(sender)
+    results: list[str] = []
+
+    def send_when_busy() -> None:
+        for _ in range(1200):
+            busy = [p for p in Registry().live() if p.runtime == "codex" and p.status == "busy"]
+            if busy:
+                [res] = Mesh.default().send(sender, busy[0].id, "live test: post-tool delivery")
+                results.append(str(res.msg_id))
+                return
+            time.sleep(0.25)
+
+    thread = threading.Thread(target=send_when_busy, daemon=True)
+    thread.start()
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE_CODE_", "CODEX_"))}
+    env |= {"CODEX_HOME": str(codex_home)}
+    env.pop("CLAUDE_CONFIG_DIR", None)
+    prompt = (
+        "Run `sleep 8` as one shell command, then `echo done` as a second one. Then reply with "
+        "every peermesh msg id that you saw, and nothing else."
+    )
+    out = subprocess.run(
+        ["codex", "exec", "--dangerously-bypass-hook-trust", "--skip-git-repo-check"]
+        + ["-C", str(tmp_path), prompt],
+        check=False,
+        timeout=300,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+    )
+    thread.join(timeout=10)
+    assert results, "the Codex session never registered as busy"
+    tracked = Mesh.default().track(results[0])
+    assert [h["outcome"] for h in tracked["history"]] == ["pending", "injected"]
+    assert tracked["history"][1]["via"] == "post-tool"
+    assert results[0] in out.stdout
