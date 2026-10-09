@@ -36,7 +36,7 @@ TOOL_SEND = (
     "The result gives the outcome. 'pending': the message waits for the next tool call or "
     "prompt of the peer. 'delivered': the runtime of the peer accepted the message. "
     "'queued': Codex runs the message as the next turn of the peer. "
-    "'refused': the message was not sent; the note gives the reason. "
+    "'refused': the message was not sent. The note gives the reason. "
     "Use peers_track to see if a hook injected the message or if the peer replied."
 )
 

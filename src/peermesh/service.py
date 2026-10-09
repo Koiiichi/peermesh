@@ -32,7 +32,9 @@ STATES = {
     "sending": "sending: the delivery did not finish",
     "pending": "pending: waits in the inbox for the next tool call or prompt of the peer",
     "injected": "injected: a hook of the peer put it into the model context",
-    "delivered": "accepted: the runtime of the peer took it; it starts or joins a turn",
+    "delivered": (
+        "accepted: the runtime of the peer took it. It starts a turn or joins the current turn"
+    ),
     "queued": "queued: Codex runs it as the next turn of the peer",
     "refused": "refused: not sent",
     "undelivered": "undelivered: the peer session ended before a hook injected it",
