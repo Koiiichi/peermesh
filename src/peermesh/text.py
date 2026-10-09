@@ -64,8 +64,15 @@ TOOL_STATUS = (
     "its branch and worktree, and the number of messages queued for it."
 )
 
+ONE_CHANNEL = (
+    "Send each message to another session with peers_send or peers_reply. "
+    "Use SendMessage only for an agent that this session started."
+)
+
 MCP_INSTRUCTIONS = (
     "peermesh connects this session to other Claude Code and Codex sessions on this machine. "
+    + ONE_CHANNEL
+    + " "
     + WHEN
     + " "
     + RULES
@@ -75,7 +82,7 @@ CLAUDE_BLOCK = (
     "## Peer coordination (peermesh)\n\n"
     "Other Claude Code and Codex sessions can work on this machine at the same time. "
     "Use the tools peers_list, peers_send, peers_reply, peers_status and peers_track to "
-    "communicate with them.\n\n" + WHEN + "\n\n" + RULES + "\n"
+    "communicate with them. " + ONE_CHANNEL + "\n\n" + WHEN + "\n\n" + RULES + "\n"
 )
 
 CODEX_BLOCK = (
@@ -110,7 +117,10 @@ def peer_line(p: Peer) -> str:
 
 def _how(runtime: str) -> str:
     if runtime == "claude":
-        return "Use the tools peers_list, peers_send, peers_reply, peers_status and peers_track."
+        return (
+            "Use the tools peers_list, peers_send, peers_reply, peers_status and peers_track. "
+            + ONE_CHANNEL
+        )
     return (
         'Use the shell commands `peers list`, `peers send <name> --body "<text>"` '
         "and `peers reply`."

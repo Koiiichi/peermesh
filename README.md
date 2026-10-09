@@ -49,7 +49,7 @@ Nobody runs these by hand in normal use. The session-start hook tells each agent
 | `peers_status` | `peers status NAME` | Busy or idle, branch, queued and waiting messages |
 | `peers_track` | `peers track MSG` | Delivery state of one message you sent |
 
-Codex gets the command instead of MCP tools because Codex does not pass its thread id to MCP servers. `peers log` shows the recent ledger for people.
+Codex gets the command instead of MCP tools because Codex does not pass its thread id to MCP servers. Claude Code agents are told to use these tools, not Claude Code's own `SendMessage`, for other sessions, so every message gets the frame, the limits and a ledger entry. `peers log` shows the recent ledger for people.
 
 ## Delivery
 
@@ -74,7 +74,7 @@ The ledger `~/.peermesh/ledger.jsonl` keeps every message body. Past 1 MiB it mo
 
 - Every message carries the frame above, and every body line is quoted with `> `, so a body cannot imitate the frame.
 - Peer messages carry no user authority, and the instruction blocks say so. peermesh never reads or writes permission settings.
-- A thread stops at 8 hops, and one sender can add at most 8 messages to one thread. A `peers send` to a peer that messaged you in the last 15 minutes continues that thread, so an answer sent either way counts. A sender can start at most 6 threads with one peer per 10 minutes. Replies that only acknowledge are refused. A reply to a broadcast goes to its sender only.
+- A thread stops after 8 messages that each answer the previous one within 2 minutes; a slower answer, which follows real work, starts the count again. One sender can add at most 8 messages to one thread in 10 minutes. A `peers send` to a peer that messaged you in the last 15 minutes continues that thread, so an answer sent either way counts. A sender can start at most 6 threads with one peer per 10 minutes. Replies that only acknowledge are refused. A reply to a broadcast goes to its sender only.
 - Bodies are capped at 8 KB, to hold decisions, paths and commit hashes rather than transcripts.
 - `peers` and the MCP tools act only as the session they run under: the session's host process must be an ancestor of the caller. This stops an agent from sending as another session through peermesh. It does not stop a process running as your user from writing to a Claude inbox socket or calling `codex queue` directly.
 - Codex receives peer messages as ordinary user input; the frame and the AGENTS.md rule are the only provenance it has.

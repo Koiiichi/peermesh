@@ -119,7 +119,9 @@ def new_message(
         )
     if hop >= MAX_HOP:
         raise EnvelopeError(
-            f"loop limit: this thread has {MAX_HOP} hops. Stop the exchange and ask the user."
+            f"loop limit: {MAX_HOP} messages in this thread answered each other in quick "
+            "sequence. Stop the exchange and ask the user. "
+            "Do not send the message through a different channel."
         )
     mid = msg_id or uuid.uuid4().hex
     return Message(

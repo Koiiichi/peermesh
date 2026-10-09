@@ -194,12 +194,14 @@ def test_stop_continues_once_for_actionable_messages(world: World) -> None:
     [info] = world.mesh.send(world.peers["a"], "claude-b", "FYI: docs moved.")
     [req] = world.mesh.send(world.peers["a"], "claude-b", "Run the tests.", kind="request")
     out, emitted = _hook(world, "stop", "b")
-    assert emitted == [out] and out["decision"] == "block"
-    assert text.STOP_NOTE in out["reason"]
+    assert emitted == [out] and "decision" not in out
+    context = out["hookSpecificOutput"]
+    assert context["hookEventName"] == "Stop" and text.STOP_NOTE in context["additionalContext"]
     assert world.mesh.registry.get("claude:B").status == "busy"  # type: ignore[union-attr]
     [late] = world.mesh.send(world.peers["a"], "claude-b", "One more question.", kind="request")
     assert late.status == "pending"
-    assert f"msg={info.msg_id}" in out["reason"] and f"msg={req.msg_id}" in out["reason"]
+    assert f"msg={info.msg_id}" in context["additionalContext"]
+    assert f"msg={req.msg_id}" in context["additionalContext"]
     assert world.claude.calls == []
 
 
@@ -320,3 +322,10 @@ def test_stop_hook_outlasts_the_codex_delivery_timeout() -> None:
     config = install.merge_hooks({}, "/bin/peers", "codex")
     [stop] = [g for g in config["hooks"]["Stop"] if "# peermesh" in g["hooks"][0]["command"]]
     assert stop["hooks"][0]["timeout"] > 30
+
+
+def test_codex_stop_continues_the_turn_with_a_block_decision(world: World) -> None:
+    world.put("x", status="busy")
+    world.mesh.send(world.peers["a"], "codex-x", "Run the tests.", kind="request")
+    out, _ = _hook(world, "stop", "x")
+    assert out["decision"] == "block" and text.STOP_NOTE in out["reason"]
