@@ -316,9 +316,9 @@ def doctor(runner: Runner = subprocess.run) -> list[tuple[str, bool, str]]:
         )
     )
     for runtime in ("claude", "codex"):
-        checks.append(
-            (f"{runtime} post-tool hook", post_tool_installed(runtime), "run `peers install` again")
-        )
+        ok = post_tool_installed(runtime)
+        detail = "installed" if ok else "run `peers install` again"
+        checks.append((f"{runtime} post-tool hook", ok, detail))
     rule = paths.codex_home() / "rules" / "peermesh.rules"
     checks.append(("codex rule", rule.exists(), str(rule)))
     code, _ = _run_text(runner, ["claude", "mcp", "get", "peermesh"])

@@ -193,3 +193,12 @@ def test_uninstall_claude_ignores_malformed_codex_file() -> None:
     hooks.parent.mkdir(parents=True)
     hooks.write_text("{not json")
     install.uninstall({"claude"}, runner=Runner())
+
+
+def test_doctor_gives_the_install_hint_only_for_a_missing_post_tool_hook() -> None:
+    settings = paths.claude_dir() / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text(json.dumps(install.merge_hooks({}, "/bin/peers", "claude")))
+    details = {name: (ok, detail) for name, ok, detail in install.doctor(runner=Runner())}
+    assert details["claude post-tool hook"] == (True, "installed")
+    assert details["codex post-tool hook"] == (False, "run `peers install` again")
