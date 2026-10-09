@@ -151,9 +151,9 @@ INFO_LINE = (
     "Do not mention it in your answer unless it changes your work."
 )
 AFTER_COMPLETION_LINE = (
-    "If you completed the task of the user before this message arrived: do the requested work "
-    "only if it is in the scope of that task. Then write your complete final report for the "
-    "user again as your last message."
+    "This message can arrive after you completed the task of the user. In that case, do the "
+    "requested work only if it is in the scope of that task. Then write your complete final "
+    "report for the user again as your last message."
 )
 
 
