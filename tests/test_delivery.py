@@ -288,3 +288,35 @@ def test_refused_reply_does_not_count_as_acknowledged(world: World) -> None:
 class RefusingTransport:
     def deliver(self, target: Peer, rendered: str, msg: Message) -> Outcome:
         return Outcome("refused", "socket write failed")
+
+
+def test_interrupted_wake_never_replays_a_delivered_message(world: World) -> None:
+    world.put("b", status="busy")
+    ids = [
+        world.mesh.send(world.peers["a"], "claude-b", f"request {i}", kind="request")[0].msg_id
+        for i in range(2)
+    ]
+    calls: list[str] = []
+
+    class StopsOnSecond:
+        def deliver(self, target: Peer, rendered: str, msg: Message) -> Outcome:
+            if calls:
+                raise KeyboardInterrupt
+            calls.append(msg.id)
+            return Outcome("delivered")
+
+    world.mesh.transports = {"claude": StopsOnSecond(), "codex": world.codex}
+    with pytest.raises(KeyboardInterrupt):
+        _hook(world, "stop", "b", stop_hook_active=True)
+    assert calls == [ids[0]]
+    assert world.mesh.inbox.waiting("claude:B") == []
+    assert _outcomes(world, str(ids[0]))[-2:] == ["sending", "delivered"]
+    assert _outcomes(world, str(ids[1]))[-1] == "sending"
+    world.put("b", status="busy")
+    assert _hook(world, "post-tool", "b") == (None, [])
+
+
+def test_stop_hook_outlasts_the_codex_delivery_timeout() -> None:
+    config = install.merge_hooks({}, "/bin/peers", "codex")
+    [stop] = [g for g in config["hooks"]["Stop"] if "# peermesh" in g["hooks"][0]["command"]]
+    assert stop["hooks"][0]["timeout"] > 30

@@ -110,6 +110,7 @@ def _stop(mesh: Mesh, peer: Peer, payload: Mapping[str, Any], emit: Emit) -> dic
             mesh.record_injected(items, "stop")
             return out
         mesh.inbox.release([i for i in items if not i.actionable])
+        mesh.hand_to_native(actionable)
     if actionable:
         mesh.wake(peer, actionable)
     return None

@@ -20,6 +20,13 @@ WHEN = (
     "Do not send one message to every peer in the list. Select the peers that the change affects."
 )
 
+KIND_RULE = (
+    "Use the kind 'handoff' when you complete work that the peer waits for. "
+    "Use the kind 'info' only for a fact that the peer can read later. "
+    "An 'info' message to an idle peer waits for the next prompt of that peer. "
+    "A message of a different kind starts a turn of an idle peer."
+)
+
 TOOL_LIST = (
     "List the live coding-agent sessions (Claude Code and Codex) on this machine. "
     "The default scope is 'repo': sessions in the same repository as this session. "
@@ -31,7 +38,7 @@ TOOL_SEND = (
     "Send a short message to one or more peer sessions. " + WHEN + " "
     "'to' is a list of peer names or ids. More than one target makes a broadcast. "
     "A reply to a broadcast goes to the sender only. "
-    "'kind' is one of: info, request, handoff, review_request. "
+    "'kind' is one of: info, request, handoff, review_request. " + KIND_RULE + " "
     "'urgency' is 'normal' or 'now'. Use 'now' only for a request that blocks your work. "
     "The result gives the outcome. 'pending': the message waits for the next tool call or "
     "prompt of the peer. 'delivered': the runtime of the peer accepted the message. "
@@ -79,6 +86,8 @@ CODEX_BLOCK = (
     "`peers list --scope all` shows all peers.\n"
     '- `peers send <name> --body "<text>"` sends a message. '
     "Add `--kind request`, `--kind handoff` or `--kind review_request` when it applies. "
+    + KIND_RULE
+    + " "
     "Add `--urgent` only for a request that blocks your work.\n"
     '- `peers reply <msg> --body "<text>"` replies to a message that you received.\n'
     '- `peers reply <msg> --body "<text>" --done` also reports that you completed the '

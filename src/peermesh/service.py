@@ -24,6 +24,7 @@ RATE_WINDOW_S = 600.0
 # A send to a peer that messaged this session within this window continues that thread, so a
 # reply sent with peers_send counts toward the hop limit like a reply sent with peers_reply.
 CAUSAL_WINDOW_S = 900.0
+THREAD_LIMIT = 8
 # A reply counts as an acknowledgement only when it left the replying session.
 SENT_OUTCOMES = ("delivered", "queued", "pending", "injected")
 PENDING_NOTE = "The peer reads the message at its next tool call or prompt."
@@ -318,6 +319,18 @@ class Mesh:
             recent = self.ledger.count_recent(
                 me.id, target.id, RATE_WINDOW_S, now, new_threads_only=True
             )
+            # Hops measure depth, so many replies to one message stay at hop 1; this cap bounds
+            # the number of messages that one sender adds to one thread.
+            if msg.hop > 0 and self.ledger.count_in_thread(me.id, msg.thread) >= THREAD_LIMIT:
+                return self._refused(
+                    me,
+                    target.id,
+                    target.name,
+                    kind,
+                    f"loop limit: you sent {THREAD_LIMIT} messages in this thread. "
+                    "Stop the exchange and ask the user.",
+                    locked=True,
+                )
             if msg.hop == 0 and recent >= RATE_LIMIT:
                 return self._refused(
                     me,
@@ -383,14 +396,25 @@ class Mesh:
             )
         self.inbox.done(items)
 
-    def wake(self, peer: Peer, items: list[Waiting]) -> None:
-        """Deliver claimed items through the native path, which starts a new turn of peer.
+    def hand_to_native(self, items: list[Waiting]) -> None:
+        """Move claimed items from the inbox to the native path. The caller holds the lock.
 
-        Call this without the ledger lock: the delivery records its own outcome.
+        Each item is recorded as "sending" and leaves the inbox before any delivery starts, so
+        a hook that stops during `wake` leaves an unfinished send, never a message to replay.
+        """
+        for item in items:
+            self.ledger.append(
+                {"id": item.id, "outcome": "sending", "note": "native wake", "at": self.clock()}
+            )
+        self.inbox.done(items)
+
+    def wake(self, peer: Peer, items: list[Waiting]) -> None:
+        """Deliver items that `hand_to_native` took, which starts a new turn of peer.
+
+        Call this without the ledger lock: each delivery records its own outcome.
         """
         for item in items:
             self._deliver_native(peer, Message.from_json(item.record), after_completion=True)
-        self.inbox.done(items)
 
     def expire_inbox(self, peer_id: str) -> None:
         """Mark the waiting messages of an ended session as undelivered, and remove its inbox."""

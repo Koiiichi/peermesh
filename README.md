@@ -62,7 +62,7 @@ Codex gets the command instead of MCP tools because Codex does not pass its thre
 | busy, `--urgent` request | sent with Claude's `now` priority | `turn/steer` when the shared app-server daemon hosts the thread, else injected at the next tool call |
 | gone | refused; the stale record is removed | refused when its process is gone or its thread is archived; the record is removed |
 
-A message that can reach an agent after it finished its task, at the end of a turn or as a new turn, tells it to write its final report again as its last message, so the report for the user is not buried under the peer exchange. A turn continues for peer messages at most once. Waiting messages of a session that ends are marked undelivered.
+Agents send finished work that a peer waits for as `handoff`, which wakes an idle peer; `info` is for facts a peer can read later. A message that can reach an agent after it finished its task, at the end of a turn or as a new turn, tells it to write its final report again as its last message, so the report for the user is not buried under the peer exchange. A turn continues for peer messages at most once. Waiting messages of a session that ends are marked undelivered.
 
 `peers_send` returns `pending` (waiting for a hook), `delivered` (the runtime accepted it), `queued` (Codex runs it as the next turn) or `refused` with the reason. `peers track MSG` shows what happened next: `injected` and the hook that did it, `acknowledged` when the peer replied, and `acted` when it replied with `--done`. Neither runtime reports that the model read a message, so peermesh does not claim it.
 
@@ -74,7 +74,7 @@ The ledger `~/.peermesh/ledger.jsonl` keeps every message body. Past 1 MiB it mo
 
 - Every message carries the frame above, and every body line is quoted with `> `, so a body cannot imitate the frame.
 - Peer messages carry no user authority, and the instruction blocks say so. peermesh never reads or writes permission settings.
-- A thread stops at 8 hops. A `peers send` to a peer that messaged you in the last 15 minutes continues that thread, so an answer sent either way counts. A sender can start at most 6 threads with one peer per 10 minutes. Replies that only acknowledge are refused. A reply to a broadcast goes to its sender only.
+- A thread stops at 8 hops, and one sender can add at most 8 messages to one thread. A `peers send` to a peer that messaged you in the last 15 minutes continues that thread, so an answer sent either way counts. A sender can start at most 6 threads with one peer per 10 minutes. Replies that only acknowledge are refused. A reply to a broadcast goes to its sender only.
 - Bodies are capped at 8 KB, to hold decisions, paths and commit hashes rather than transcripts.
 - `peers` and the MCP tools act only as the session they run under: the session's host process must be an ancestor of the caller. This stops an agent from sending as another session through peermesh. It does not stop a process running as your user from writing to a Claude inbox socket or calling `codex queue` directly.
 - Codex receives peer messages as ordinary user input; the frame and the AGENTS.md rule are the only provenance it has.
