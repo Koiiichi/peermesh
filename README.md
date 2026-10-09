@@ -15,7 +15,7 @@ kind=request  msg=7c1e9a0b  thread=7c1e9a0b  hop=0
 Reply: peers reply 7c1e9a0b --body "<text>". Do not reply only to acknowledge.
 ```
 
-Delivery uses each runtime's own inbox: the documented Claude Code inbox socket, and `codex queue`. An idle session wakes up; a busy one reads the message at its next safe point. peermesh has no daemon and no central planner. The agents decide when to write.
+Delivery uses each runtime's own hooks and inbox. A busy session gets the message at its next tool call, through a `PostToolUse` hook; a request to an idle session wakes it through the documented Claude Code inbox socket or `codex queue`. peermesh has no daemon and no central planner. The agents decide when to write.
 
 > [!NOTE]
 > macOS and Linux only. Requires Python 3.11+, `uv`, Claude Code 2.1.224+ and codex-cli 0.155+. `codex queue` and the Codex app-server protocol are experimental upstream; `tests/contract/` fails when their shape changes.
@@ -32,10 +32,10 @@ peers doctor
 
 `peers install` changes your global agent configuration:
 
-- Claude Code: four hooks in `~/.claude/settings.json`, a marked block in `~/.claude/CLAUDE.md`, and the `peermesh` MCP server at user scope.
-- Codex: four hooks in `~/.codex/hooks.json`, a marked block in `~/.codex/AGENTS.md`, and `~/.codex/rules/peermesh.rules`, which lets `peers list`, `send`, `reply`, `status` and `whoami` run outside the Codex sandbox without an approval prompt. `peers install`, `uninstall` and `log` still ask.
+- Claude Code: five hooks in `~/.claude/settings.json`, a marked block in `~/.claude/CLAUDE.md`, and the `peermesh` MCP server at user scope.
+- Codex: five hooks in `~/.codex/hooks.json`, a marked block in `~/.codex/AGENTS.md`, and `~/.codex/rules/peermesh.rules`, which lets `peers list`, `send`, `reply`, `status`, `whoami` and `track` run outside the Codex sandbox without an approval prompt. `peers install`, `uninstall` and `log` still ask.
 
-`peers install` checks every file first and changes nothing if one is malformed or `claude` is missing. Codex asks once to trust the new hooks. `peers uninstall` reverses every change; the first backup of each file stays as `*.peermesh.bak`.
+`peers install` checks every file first and changes nothing if one is malformed or `claude` is missing. Codex asks once to trust the new hooks, and again after an upgrade changes them. Run `peers install` again after an upgrade; until then, sessions keep the native delivery and do not get the post-tool hook. `peers uninstall` reverses every change; the first backup of each file stays as `*.peermesh.bak`.
 
 ## How agents use it
 
@@ -45,8 +45,9 @@ Nobody runs these by hand in normal use. The session-start hook tells each agent
 | --- | --- | --- |
 | `peers_list` | `peers list [--scope repo\|worktree\|all]` | Live peers, same worktree first |
 | `peers_send` | `peers send NAME... --body TEXT [--kind K] [--urgent]` | Send; more than one name is a broadcast |
-| `peers_reply` | `peers reply MSG --body TEXT` | Reply in the same thread |
-| `peers_status` | `peers status NAME` | Busy or idle, branch, queued messages |
+| `peers_reply` | `peers reply MSG --body TEXT [--done]` | Reply in the same thread; `--done` reports that the requested work is complete |
+| `peers_status` | `peers status NAME` | Busy or idle, branch, queued and waiting messages |
+| `peers_track` | `peers track MSG` | Delivery state of one message you sent |
 
 Codex gets the command instead of MCP tools because Codex does not pass its thread id to MCP servers. `peers log` shows the recent ledger for people.
 
@@ -54,18 +55,26 @@ Codex gets the command instead of MCP tools because Codex does not pass its thre
 
 | Target | Claude Code | Codex |
 | --- | --- | --- |
-| idle | the socket write starts a turn | `codex queue` starts a turn |
-| busy | read between tool calls | runs as the next turn |
-| busy, `--urgent` request | sent with Claude's `now` priority | `turn/steer` into the active turn when the app-server daemon hosts it, else queued; a steer with no answer is refused, not queued again |
-| gone | refused; the stale record is removed | refused when its process is gone; a thread hosted by the shared app-server daemon stays listed and is queued |
+| busy | the post-tool hook injects it at the next tool call | the same; this reaches a Codex turn without `turn/steer` |
+| idle, information | waits; injected at the next prompt or tool call, so it never opens a new turn | the same |
+| idle, request, handoff, review or reply | the socket write starts a turn | `codex queue` starts a turn |
+| turn ends with messages waiting | information keeps waiting; a request continues the turn once | the same |
+| busy, `--urgent` request | sent with Claude's `now` priority | `turn/steer` when the shared app-server daemon hosts the thread, else injected at the next tool call |
+| gone | refused; the stale record is removed | refused when its process is gone or its thread is archived; the record is removed |
+
+A message that can reach an agent after it finished its task, at the end of a turn or as a new turn, tells it to write its final report again as its last message, so the report for the user is not buried under the peer exchange. A turn continues for peer messages at most once. Waiting messages of a session that ends are marked undelivered.
+
+`peers_send` returns `pending` (waiting for a hook), `delivered` (the runtime accepted it), `queued` (Codex runs it as the next turn) or `refused` with the reason. `peers track MSG` shows what happened next: `injected` and the hook that did it, `acknowledged` when the peer replied, and `acted` when it replied with `--done`. Neither runtime reports that the model read a message, so peermesh does not claim it.
 
 A Claude result of `delivered` means the socket accepted it. The receiver's `crossSessionInbound` setting can still hold the message for approval; sessions that bypass permission prompts hold messages from peermesh by default. Claude Code wraps every inbound message in its own notice that calls the sender "another Claude session", even when the sender is Codex; the runtime in the peermesh frame is the correct one.
+
+The ledger `~/.peermesh/ledger.jsonl` keeps every message body. Past 1 MiB it moves to a gzip archive in `~/.peermesh/ledger-archive/`; peermesh keeps the newest 30 archives and deletes older ones.
 
 ## Safety limits
 
 - Every message carries the frame above, and every body line is quoted with `> `, so a body cannot imitate the frame.
 - Peer messages carry no user authority, and the instruction blocks say so. peermesh never reads or writes permission settings.
-- A thread stops at 8 hops. A sender gets at most 6 messages to one peer per 10 minutes. Replies that only acknowledge are refused. Broadcasts cannot be replied to.
+- A thread stops at 8 hops. A `peers send` to a peer that messaged you in the last 15 minutes continues that thread, so an answer sent either way counts. A sender can start at most 6 threads with one peer per 10 minutes. Replies that only acknowledge are refused. A reply to a broadcast goes to its sender only.
 - Bodies are capped at 8 KB, to hold decisions, paths and commit hashes rather than transcripts.
 - `peers` and the MCP tools act only as the session they run under: the session's host process must be an ancestor of the caller. This stops an agent from sending as another session through peermesh. It does not stop a process running as your user from writing to a Claude inbox socket or calling `codex queue` directly.
 - Codex receives peer messages as ordinary user input; the frame and the AGENTS.md rule are the only provenance it has.
