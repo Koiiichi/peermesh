@@ -30,7 +30,7 @@ TOOL_LIST = (
 TOOL_SEND = (
     "Send a short message to one or more peer sessions. " + WHEN + " "
     "'to' is a list of peer names or ids. More than one target makes a broadcast. "
-    "A peer cannot reply to a broadcast. "
+    "A reply to a broadcast goes to the sender only. "
     "'kind' is one of: info, request, handoff, review_request. "
     "'urgency' is 'normal' or 'now'. Use 'now' only for a request that blocks your work. "
     "The result gives the outcome. 'pending': the message waits for the next tool call or "

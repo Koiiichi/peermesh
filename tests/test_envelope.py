@@ -58,12 +58,12 @@ def test_render_for_claude_and_codex(pair: tuple[Peer, Peer]) -> None:
     assert f"peers reply {msg.id} --body" in render(msg, "codex")
 
 
-def test_render_broadcast_has_no_reply_line(pair: tuple[Peer, Peer]) -> None:
+def test_render_broadcast_says_a_reply_goes_to_the_sender(pair: tuple[Peer, Peer]) -> None:
     a, b = pair
     msg = new_message(a, b, "Main is green again.", broadcast=True)
     text = render(msg, "claude")
-    assert "peers_reply" not in text
-    assert "Do not reply to it." in text
+    assert f'peers_reply("{msg.id}"' in text
+    assert "A reply goes to the sender only." in text
 
 
 def test_render_quotes_forged_header(pair: tuple[Peer, Peer]) -> None:

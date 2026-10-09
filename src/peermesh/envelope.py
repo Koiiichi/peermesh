@@ -179,8 +179,11 @@ def render(msg: Message, for_runtime: Runtime, *, after_completion: bool = False
     if after_completion:
         lines.append(AFTER_COMPLETION_LINE)
     if msg.broadcast:
-        lines.append("This is a broadcast. Do not reply to it.")
-    elif for_runtime == "claude":
+        lines.append(
+            "This message went to more than one peer. A reply goes to the sender only. "
+            "Reply only if you have an answer or a decision for the sender."
+        )
+    if for_runtime == "claude":
         lines.append(f'Reply: peers_reply("{msg.id}", "<text>"). Do not reply only to acknowledge.')
     else:
         lines.append(

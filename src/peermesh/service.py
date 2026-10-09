@@ -21,6 +21,9 @@ from peermesh.transports.codex import CodexTransport
 
 RATE_LIMIT = 6
 RATE_WINDOW_S = 600.0
+# A send to a peer that messaged this session within this window continues that thread, so a
+# reply sent with peers_send counts toward the hop limit like a reply sent with peers_reply.
+CAUSAL_WINDOW_S = 900.0
 # A reply counts as an acknowledgement only when it left the replying session.
 SENT_OUTCOMES = ("delivered", "queued", "pending", "injected")
 PENDING_NOTE = "The peer reads the message at its next tool call or prompt."
@@ -142,15 +145,6 @@ class Mesh:
             raise PeerError("That message was not sent to this session. Use peers_send.")
         sender_name = str(original.get("from_name", ""))
         sender_id = str(original["from"])
-        if original.get("broadcast"):
-            return self._refused(
-                me,
-                sender_id,
-                sender_name,
-                "reply",
-                "The message is a broadcast. Do not reply to a broadcast. "
-                "Use peers_send if the sender must know something.",
-            )
         if is_ack_only(body):
             return self._refused(
                 me,
@@ -200,6 +194,19 @@ class Mesh:
             "queued_last_hour": queued,
             "pending_in_inbox": pending,
         }
+
+    def _causal_parent(self, me: Peer, target: Peer) -> dict[str, Any] | None:
+        """The newest message from target to me in CAUSAL_WINDOW_S, which a send answers."""
+        now = self.clock()
+        received = [
+            e
+            for e in self.ledger.latest()
+            if e.get("from") == target.id
+            and e.get("to") == me.id
+            and e.get("outcome") in SENT_OUTCOMES
+            and now - float(e.get("sent_at", 0.0)) < CAUSAL_WINDOW_S
+        ]
+        return max(received, key=lambda e: float(e.get("sent_at", 0.0)), default=None)
 
     def _refused(
         self,
@@ -272,6 +279,11 @@ class Mesh:
                 "The target is this session. Send the message to a different peer.",
             )
         self._enrich(target)
+        if in_reply_to is None:
+            parent = self._causal_parent(me, target)
+            if parent is not None:
+                thread = str(parent.get("thread", parent["id"]))
+                hop = int(parent.get("hop", 0)) + 1
         try:
             msg = new_message(
                 me,
@@ -300,14 +312,18 @@ class Mesh:
                     "This message id is in the ledger. The message was sent before. Do not resend.",
                 )
             now = self.clock()
-            if self.ledger.count_recent(me.id, target.id, RATE_WINDOW_S, now) >= RATE_LIMIT:
+            # The limit applies to new threads; the hop limit bounds each running thread.
+            recent = self.ledger.count_recent(
+                me.id, target.id, RATE_WINDOW_S, now, new_threads_only=True
+            )
+            if msg.hop == 0 and recent >= RATE_LIMIT:
                 return self._refused(
                     me,
                     target.id,
                     target.name,
                     kind,
-                    f"rate limit: {RATE_LIMIT} messages to this peer in 10 minutes. "
-                    "Wait, or ask the user.",
+                    f"rate limit: {RATE_LIMIT} new threads to this peer in 10 minutes. "
+                    "Reply in an open thread, wait, or ask the user.",
                     locked=True,
                 )
             # The status can change between resolve() and the lock; a Stop hook changes it
