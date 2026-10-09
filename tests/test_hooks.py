@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 from peermesh import hooks, paths
 from peermesh.ledger import Ledger
@@ -108,7 +109,7 @@ def test_hook_cli_never_fails() -> None:
 
 def test_hook_errors_are_logged() -> None:
     result = subprocess.run(
-        [sys.executable, "-m", "peermesh.cli", "hook", "session-start", "--runtime", "claude"],
+        [sys.executable, "-m", "peermesh.cli", "hook", "session-start", "--runtime", "codex"],
         input='{"session_id": "X"}',
         capture_output=True,
         text=True,
@@ -116,3 +117,59 @@ def test_hook_errors_are_logged() -> None:
     )
     assert result.returncode == 0
     assert (paths.home() / "hook-errors.log").exists()
+
+
+def _git_repo(path: Path) -> Path:
+    path.mkdir()
+    git = ["git", "-C", str(path), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q", "-b", "main"], check=True)
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    return path
+
+
+def test_prompt_refreshes_branch_and_location(tmp_path: Path) -> None:
+    mesh = _mesh()
+    first, second = _git_repo(tmp_path / "one"), _git_repo(tmp_path / "two")
+    payload = {"session_id": "T5", "cwd": str(first)}
+    hooks.handle(mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid())
+    subprocess.run(["git", "-C", str(first), "checkout", "-q", "-b", "feature"], check=True)
+    hooks.handle(mesh, "prompt", "codex", payload, env={}, host_pid=os.getpid())
+    peer = mesh.registry.get("codex:T5")
+    assert peer is not None and peer.branch == "feature"
+    payload["cwd"] = str(second)
+    hooks.handle(mesh, "prompt", "codex", payload, env={}, host_pid=os.getpid())
+    peer = mesh.registry.get("codex:T5")
+    assert peer is not None and peer.branch == "main"
+    assert peer.worktree == str(second.resolve()) and peer.cwd == str(second)
+
+
+def test_codex_hook_records_rollout(tmp_path: Path) -> None:
+    mesh = _mesh()
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text("")
+    payload = {"session_id": "T6", "cwd": os.getcwd(), "transcript_path": str(rollout)}
+    hooks.handle(mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid())
+    peer = mesh.registry.get("codex:T6")
+    assert peer is not None and peer.transcript == str(rollout)
+    rollout.unlink()
+    assert mesh.registry.live() == []
+
+
+def test_session_start_removes_seen_files_of_ended_sessions() -> None:
+    mesh = _mesh()
+    stale = paths.home() / "state" / "codex_gone.seen"
+    paths.ensure_private_dir(stale.parent)
+    stale.write_text("[]")
+    payload = {"session_id": "T7", "cwd": os.getcwd()}
+    hooks.handle(mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid())
+    assert not stale.exists()
+    assert (paths.home() / "state" / "codex_T7.seen").exists()
+
+
+def test_session_start_without_inbox_socket_still_gives_rules() -> None:
+    out = hooks.handle(
+        _mesh(), "session-start", "claude", {"session_id": "C9"}, env={}, host_pid=os.getpid()
+    )
+    assert out is not None
+    text_out = out["hookSpecificOutput"]["additionalContext"]
+    assert "not registered yet" in text_out and "peers_send" in text_out

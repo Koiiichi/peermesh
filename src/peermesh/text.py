@@ -81,8 +81,8 @@ def peer_line(p: Peer) -> str:
     )
 
 
-def _how(me: Peer) -> str:
-    if me.runtime == "claude":
+def _how(runtime: str) -> str:
+    if runtime == "claude":
         return "Use the tools peers_list, peers_send, peers_reply and peers_status."
     return (
         'Use the shell commands `peers list`, `peers send <name> --body "<text>"` '
@@ -103,7 +103,12 @@ def session_start_text(me: Peer, peers: list[Peer]) -> str:
             "No other live peer is in this repository now. The list changes. "
             f"{where} shows the current list."
         )
-    return "\n".join([head, body, _how(me), WHEN, RULES])
+    return "\n".join([head, body, _how(me.runtime), WHEN, RULES])
+
+
+def unregistered_text(runtime: str) -> str:
+    head = "peermesh: This session is not registered yet. It registers at the next prompt."
+    return "\n".join([head, _how(runtime), WHEN, RULES])
 
 
 def change_text(me: Peer, peers: list[Peer]) -> str:

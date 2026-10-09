@@ -342,3 +342,31 @@ def test_reply_while_original_is_still_sending(world: World) -> None:
         )
     res = world.mesh.reply(world.peers["xa"], msg.id, "the answer is 42")
     assert res.status == "delivered" and world.claude.calls[0][2].hop == 1
+
+
+def test_refusals_are_recorded_without_body(world: World) -> None:
+    for i in range(6):
+        world.mesh.send(world.peers["ca"], "codex-a", f"update {i}")
+    world.mesh.send(world.peers["ca"], "codex-a", "update 6")
+    world.mesh.send(world.peers["ca"], "codex-z", "to nobody")
+    refused = [e for e in world.mesh.ledger.latest() if e["outcome"] == "refused"]
+    assert [e["to_name"] for e in refused] == ["codex-a", "codex-z"]
+    assert "rate limit" in refused[0]["note"] and "body" not in refused[0]
+    assert all(e["id"].startswith("refused-") for e in refused)
+
+
+def test_ack_only_refusal_is_recorded(world: World) -> None:
+    [first] = world.mesh.send(world.peers["ca"], "codex-a", "FYI schema v2 is live")
+    assert first.msg_id is not None
+    world.mesh.reply(world.peers["xa"], first.msg_id, "ok")
+    [refused] = [e for e in world.mesh.ledger.latest() if e["outcome"] == "refused"]
+    assert refused["from"] == "codex:A" and refused["to"] == "claude:A"
+
+
+def test_outcome_entry_does_not_repeat_the_body(world: World) -> None:
+    [res] = world.mesh.send(world.peers["ca"], "codex-a", "the body text")
+    lines = world.mesh.ledger.entries()
+    assert [e["outcome"] for e in lines] == ["sending", "delivered"]
+    assert "body" not in lines[1]
+    found = world.mesh.ledger.find(str(res.msg_id))
+    assert found is not None and found["body"] == "the body text"
