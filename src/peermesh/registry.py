@@ -163,16 +163,31 @@ def scoped(peers: list[Peer], me: Peer, scope: Scope) -> list[Peer]:
 
 def claude_native_status(pid: int) -> Status | None:
     """Read Claude Code's own session status. The file format is internal; failure is normal."""
+    state = claude_native_state(pid)
+    return state[0] if state else None
+
+
+def claude_native_state(pid: int) -> tuple[Status, float] | None:
+    """Claude Code's own session status and the epoch second it changed.
+
+    The time is infinite when the file does not give it, so the native status wins.
+    """
     try:
         data = json.loads((paths.claude_dir() / "sessions" / f"{pid}.json").read_text())
     except (OSError, ValueError):
         return None
-    raw = data.get("status") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("status")
+    status: Status
     if raw == "busy":
-        return "busy"
-    if raw in ("idle", "waiting"):
-        return "idle"
-    return None
+        status = "busy"
+    elif raw in ("idle", "waiting"):
+        status = "idle"
+    else:
+        return None
+    changed = data.get("statusUpdatedAt")
+    return status, changed / 1000 if isinstance(changed, int | float) else float("inf")
 
 
 class Registry:

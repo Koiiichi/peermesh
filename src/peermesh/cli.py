@@ -47,9 +47,15 @@ def _hook(args: argparse.Namespace) -> int:
         payload = json.loads(raw) if raw.strip() else {}
         if not isinstance(payload, dict):
             payload = {}
-        out = hooks.handle(_mesh(), args.event, args.runtime, payload, env=os.environ)
-        if out is not None:
-            print(json.dumps(out))
+        hooks.handle(
+            _mesh(),
+            args.event,
+            args.runtime,
+            payload,
+            env=os.environ,
+            inbox=args.inbox,
+            emit=lambda out: print(json.dumps(out), flush=True),
+        )
     except Exception:  # a hook must never break the host session
         try:
             paths.ensure_private_dir(paths.home())
@@ -76,14 +82,20 @@ def _parser() -> argparse.ArgumentParser:
     rep = sub.add_parser("reply")
     rep.add_argument("msg_id")
     rep.add_argument("--body", required=True, help="text, or - for stdin")
+    rep.add_argument("--done", action="store_true", help="the requested work is complete")
     st = sub.add_parser("status")
     st.add_argument("target")
     sub.add_parser("whoami")
+    tr = sub.add_parser("track")
+    tr.add_argument("msg_id")
     lg = sub.add_parser("log")
     lg.add_argument("--limit", type=int, default=20)
     hk = sub.add_parser("hook")
-    hk.add_argument("event", choices=["session-start", "prompt", "stop", "session-end"])
+    hk.add_argument(
+        "event", choices=["session-start", "prompt", "post-tool", "stop", "session-end"]
+    )
     hk.add_argument("--runtime", choices=["claude", "codex"], required=True)
+    hk.add_argument("--inbox", action="store_true", help="the post-tool hook is installed")
     sub.add_parser("doctor")
     ins = sub.add_parser("install")
     ins.add_argument("--dry-run", action="store_true")
@@ -119,6 +131,13 @@ def main(argv: list[str] | None = None) -> int:
             data = mesh.status(args.target)
             _print(args, data, [f"{k}: {v}" for k, v in data.items()])
             return 0 if data["alive"] else 1
+        if args.cmd == "track":
+            data = mesh.track(args.msg_id)
+            lines = [f"{data['id']} to {data['to']} [{data['kind']}]", f"state: {data['state']}"]
+            lines += [f"  {h['outcome']} {h.get('via') or ''}".rstrip() for h in data["history"]]
+            lines += [f"  reply {r['id']}{' done' if r['done'] else ''}" for r in data["replies"]]
+            _print(args, data, lines)
+            return 0
         me = mesh.whoami()
         if args.cmd == "whoami":
             _print(args, me.to_json(), [f"{me.name}  ({me.id})"])
@@ -140,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
             urgency = "now" if args.urgent else "normal"
             return _results(args, mesh.send(me, args.targets, _body(args.body), args.kind, urgency))
         if args.cmd == "reply":
-            return _results(args, [mesh.reply(me, args.msg_id, _body(args.body))])
+            return _results(args, [mesh.reply(me, args.msg_id, _body(args.body), done=args.done)])
     except PeerError as exc:
         print(str(exc), file=sys.stderr)
         return 2

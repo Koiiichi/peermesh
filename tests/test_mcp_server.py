@@ -29,7 +29,7 @@ def ctx(make_peer: Callable[..., Peer], monkeypatch: pytest.MonkeyPatch) -> Mesh
 
 def test_tools_registered_with_descriptions() -> None:
     tools = {t.name: t for t in asyncio.run(mcp_server.mcp.list_tools())}
-    assert set(tools) == {"peers_list", "peers_send", "peers_reply", "peers_status"}
+    assert set(tools) == {"peers_list", "peers_send", "peers_reply", "peers_status", "peers_track"}
     assert tools["peers_send"].description == text.TOOL_SEND
 
 
