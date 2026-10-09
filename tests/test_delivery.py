@@ -196,6 +196,9 @@ def test_stop_continues_once_for_actionable_messages(world: World) -> None:
     out, emitted = _hook(world, "stop", "b")
     assert emitted == [out] and out["decision"] == "block"
     assert text.STOP_NOTE in out["reason"]
+    assert world.mesh.registry.get("claude:B").status == "busy"  # type: ignore[union-attr]
+    [late] = world.mesh.send(world.peers["a"], "claude-b", "One more question.", kind="request")
+    assert late.status == "pending"
     assert f"msg={info.msg_id}" in out["reason"] and f"msg={req.msg_id}" in out["reason"]
     assert world.claude.calls == []
 
