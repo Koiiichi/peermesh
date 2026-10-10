@@ -28,6 +28,10 @@ CAUSAL_WINDOW_S = 900.0
 # in seconds; an answer that took longer followed work, so the count starts again.
 LOOP_GAP_S = 120.0
 THREAD_LIMIT = 8
+# Message ids are uuid4 hex. A shorter reference must have MIN_PREFIX characters, so a typo of
+# one or two characters cannot match a message by chance.
+FULL_ID = 32
+MIN_PREFIX = 6
 # A reply counts as an acknowledgement only when it left the replying session.
 SENT_OUTCOMES = ("delivered", "queued", "pending", "injected")
 # Agents routed refused messages through Claude Code's own session messaging, which has no limits.
@@ -147,6 +151,7 @@ class Mesh:
 
     def reply(self, me: Peer, msg_id: str, body: str, *, done: bool = False) -> SendResult:
         """Reply in the thread of msg_id. `done` reports that the requested work is complete."""
+        msg_id = self._full_id(msg_id, to=me.id)
         original = self.ledger.find(msg_id)
         if original is None:
             raise PeerError(f"No message with id {msg_id!r} is in the ledger.")
@@ -208,6 +213,27 @@ class Mesh:
         """The hop of a message that answers parent: one more if it is quick, else zero."""
         quick = self.clock() - float(parent.get("sent_at", 0.0)) < LOOP_GAP_S
         return int(parent.get("hop", 0)) + 1 if quick else 0
+
+    def _full_id(self, ref: str, *, to: str | None = None) -> str:
+        """The message id that ref names. Frames show ids shortened to SHORT_ID characters.
+
+        A prefix resolves against the active ledger only. A prefix that matches no message
+        comes back unchanged, so the caller reports the id as not found.
+        """
+        if not MIN_PREFIX <= len(ref) < FULL_ID:
+            return ref
+        matches = {
+            str(e["id"])
+            for e in self.ledger.latest()
+            if "from" in e
+            and str(e.get("id", "")).startswith(ref)
+            and (to is None or e.get("to") == to)
+        }
+        if len(matches) > 1:
+            raise PeerError(
+                f"The id {ref!r} matches more than one message. Use more characters of the id."
+            )
+        return matches.pop() if matches else ref
 
     def _causal_parent(self, me: Peer, target: Peer) -> dict[str, Any] | None:
         """The newest message from target to me in CAUSAL_WINDOW_S, which a send answers."""
@@ -367,9 +393,7 @@ class Mesh:
                     }
                 )
                 if to_inbox:
-                    self.inbox.put(
-                        target.id, msg.to_json() | {"rendered": render(msg, target.runtime)}
-                    )
+                    self.inbox.put(target.id, msg.to_json())
             except OSError:
                 return SendResult(
                     None,
@@ -382,7 +406,9 @@ class Mesh:
         return self._deliver_native(target, msg, after_completion=_can_reopen(target, msg))
 
     def _deliver_native(self, target: Peer, msg: Message, *, after_completion: bool) -> SendResult:
-        rendered = render(msg, target.runtime, after_completion=after_completion)
+        rendered = render(
+            [msg], target.runtime, ending="after_completion" if after_completion else None
+        )
         outcome = self.transports[target.runtime].deliver(target, rendered, msg)
         if outcome.offline:
             self.registry.remove(target.id)
@@ -443,6 +469,7 @@ class Mesh:
 
     def track(self, msg_id: str) -> dict[str, Any]:
         """The delivery history of one message and the replies to it."""
+        msg_id = self._full_id(msg_id)
         record = self.ledger.find(msg_id)
         if record is None:
             raise PeerError(f"No message with id {msg_id!r} is in the ledger.")

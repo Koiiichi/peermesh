@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from collections.abc import Callable
 
 import pytest
@@ -45,7 +46,7 @@ def test_send_via_cli(setup: tuple[Mesh, Fake], capsys: pytest.CaptureFixture[st
     assert cli.main(args) == 0
     [res] = json.loads(capsys.readouterr().out)
     assert res["status"] == "delivered"
-    assert "(codex, id codex:ME)" in setup[1].calls[0]
+    assert "from codex-me (codex)" in setup[1].calls[0]
 
 
 def test_send_body_from_stdin(setup: tuple[Mesh, Fake], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,7 +73,7 @@ def test_log_shows_recent(setup: tuple[Mesh, Fake], capsys: pytest.CaptureFixtur
     cli.main(["send", "claude-p", "--body", "first message"])
     capsys.readouterr()
     assert cli.main(["log", "--limit", "5"]) == 0
-    assert "codex-me -> claude-p" in capsys.readouterr().out
+    assert "codex-me → claude-p" in capsys.readouterr().out
 
 
 def test_status_unknown_exit_code(
@@ -89,4 +90,34 @@ def test_log_shows_each_message_once(
     capsys.readouterr()
     cli.main(["log"])
     out = capsys.readouterr().out
-    assert out.count("only once") == 1 and "/delivered]" in out
+    assert out.count("only once") == 1 and "  delivered  " in out
+
+
+def test_styles_only_for_a_person_at_a_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    assert cli._style("refused", "red") == "\033[31mrefused\033[0m"
+    monkeypatch.setenv("CODEX_THREAD_ID", "T")
+    assert cli._style("refused", "red") == "refused"
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert cli._style("refused", "red") == "refused"
+
+
+def test_log_line_fits_the_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COLUMNS", "100")
+    entry = {
+        "id": "0123456789abcdef" * 2,
+        "ts": "2026-10-10T09:33:12+00:00",
+        "from_name": "codex-me",
+        "to_name": "claude-p",
+        "kind": "request",
+        "outcome": "injected",
+        "body": "Please review\ncart.py " + "and more " * 20,
+    }
+    monkeypatch.setenv("TZ", "America/Los_Angeles")
+    time.tzset()
+    line = cli._log_line(entry)
+    assert line.startswith("10-10 02:33  codex-me → claude-p  request  injected  msg 01234567  ")
+    assert len(line) == 100 and line.endswith("…") and "\n" not in line

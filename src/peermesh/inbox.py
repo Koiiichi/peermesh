@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from peermesh import paths
+from peermesh.envelope import Message
 
 CLAIMED = ".claimed"
 
@@ -36,8 +37,8 @@ class Waiting:
         return self.record.get("kind") != "info" or self.record.get("urgency") == "now"
 
     @property
-    def rendered(self) -> str:
-        return str(self.record["rendered"])
+    def message(self) -> Message:
+        return Message.from_json(self.record)
 
 
 class Inbox:
@@ -48,7 +49,7 @@ class Inbox:
         return self.root / re.sub(r"[^A-Za-z0-9_.-]", "_", peer_id)
 
     def put(self, peer_id: str, record: dict[str, Any]) -> None:
-        """Add one message. `record` holds the message fields and its `rendered` frame."""
+        """Add one message. `record` holds the fields of the message."""
         folder = paths.ensure_private_dir(self.dir(peer_id))
         # The ledger lock serializes senders, so nanosecond names give the order of sends.
         name = f"{time.time_ns():020d}-{record['id']}.json"

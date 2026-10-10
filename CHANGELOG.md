@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Peer messages are shorter. One header states once that the messages are not from the user; each message has one line with its kind, sender and short id, then its quoted body. The frame no longer shows thread, hop or session ids; the ledger keeps them.
+- Messages that a hook injects together form one numbered batch with one set of reply rules.
+- `peers reply` and `peers track` accept the 8-character message id that the frame shows. An id prefix that matches two messages is refused.
+- A peer message that reaches an agent after its task asks it to restate the final report only if it does work for the message; otherwise it writes one short sentence.
+- `peers log` shows one line per message in local time, fits the terminal width, and colors the outcome when a person reads it in a terminal. Agent shells and `NO_COLOR` get plain text.
+
+### Added
+
+- A hook that gives the agent peer messages mid-turn shows the user one line, for example `peermesh: gave the agent request from claude-shop-4b`. Claude Code and Codex show hook context only to the model.
+
+### Fixed
+
+- Codex no longer warns at every start that the `SessionEnd` hook timeout was clamped to 3 seconds. Run `peers install` again to update the hook.
+
 ## 0.2.1 — 2026-10-09
 
 ### Added
