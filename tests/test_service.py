@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import pytest
 
+from peermesh import paths
 from peermesh.envelope import Message
 from peermesh.errors import PeerError
 from peermesh.ledger import Ledger
@@ -266,6 +268,24 @@ def test_register_keeps_existing_name(world: World, make_peer: Callable[..., Pee
     assert world.mesh.register(again).name == "codex-a"
     fresh = make_peer(id="codex:NEW", name="", runtime="codex", endpoint="N", git_root="/r/demo")
     assert world.mesh.register(fresh).name.startswith("codex-demo-")
+
+
+def test_user_rename_names_the_sender_and_keeps_the_record(
+    world: World, make_peer: Callable[..., Peer]
+) -> None:
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{world.peers['ca'].pid}.json").write_text(
+        json.dumps({"name": "rotom-infra", "nameSource": "user"})
+    )
+    me = world.mesh.register(make_peer(id="claude:A", name="", repo_key="k", worktree="/w1"))
+    assert me.name == "rotom-infra"
+    world.mesh.send(me, "codex-a", "the rename is live")
+    _, rendered, msg = world.codex.calls[-1]
+    assert msg.from_name == "rotom-infra" and "agent rotom-infra (claude" in rendered
+    assert world.mesh.registry.resolve("claude-a") is not None
+    stored = world.mesh.registry._file("claude:A").read_text()
+    assert json.loads(stored)["name"] == "claude-a"
 
 
 def test_reservation_failure_refuses_without_delivery(

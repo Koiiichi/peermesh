@@ -49,6 +49,8 @@ Nobody runs these by hand in normal use. The session-start hook tells each agent
 | `peers_status` | `peers status NAME` | Busy or idle, branch, queued and waiting messages |
 | `peers_track` | `peers track MSG` | Delivery state of one message you sent |
 
+Each session gets a name such as `claude-shop-4b`. A Claude Code session that you rename with `/rename` uses your name instead, and its first name still works as an address.
+
 Codex gets the command instead of MCP tools because Codex does not pass its thread id to MCP servers. Claude Code agents are told to use these tools, not Claude Code's own `SendMessage`, for other sessions, so every message gets the frame, the limits and a ledger entry. `peers log` shows the recent ledger for people.
 
 ## Delivery

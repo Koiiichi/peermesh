@@ -15,6 +15,7 @@ from peermesh.registry import (
     Peer,
     Registry,
     claude_native_status,
+    claude_user_name,
     normalize_remote,
     repo_info,
     scoped,
@@ -130,6 +131,48 @@ def test_claude_native_status_mapping() -> None:
     assert claude_native_status(12) == "idle"
     assert claude_native_status(13) is None
     assert claude_native_status(14) is None
+
+
+def rename(pid: int, name: str, source: str = "user") -> None:
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / f"{pid}.json").write_text(json.dumps({"name": name, "nameSource": source}))
+
+
+def test_claude_user_name_reads_only_user_renames() -> None:
+    rename(21, "rotom-infra")
+    rename(22, "rotom-09", source="derived")
+    rename(23, " Task gen / beta ")
+    assert claude_user_name(21) == "rotom-infra"
+    assert claude_user_name(22) is None
+    assert claude_user_name(23) == "Task-gen-beta"
+    assert claude_user_name(24) is None
+
+
+def test_user_rename_replaces_name_and_keeps_given_name(make_peer: Callable[..., Peer]) -> None:
+    reg = Registry()
+    peer = make_peer()
+    reg.put(peer)
+    rename(peer.pid, "rotom-infra")
+    [live] = reg.live()
+    assert (live.name, live.auto_name) == ("rotom-infra", "claude-a-aa")
+    got = reg.get(peer.id)
+    assert got is not None and got.name == "rotom-infra"
+    for ref in ("rotom-infra", "claude-a-aa", peer.id):
+        found = reg.resolve(ref)
+        assert found is not None and found.id == peer.id
+    reg.put(got)
+    assert json.loads(reg._file(peer.id).read_text())["name"] == "claude-a-aa"
+
+
+def test_user_rename_in_use_gets_suffix(make_peer: Callable[..., Peer]) -> None:
+    reg = Registry()
+    reg.put(make_peer(id="claude:one", name="claude-a-01"))
+    reg.put(make_peer(id="claude:two", name="claude-a-02"))
+    rename(make_peer().pid, "rotom-infra")
+    names = {p.id: p.name for p in reg.live()}
+    suffix = hashlib.sha1(b"claude:two").hexdigest()[:4]
+    assert names == {"claude:one": "rotom-infra", "claude:two": f"rotom-infra-{suffix}"}
 
 
 def test_liveness_ignores_locale_and_timezone(

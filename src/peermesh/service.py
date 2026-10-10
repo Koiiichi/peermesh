@@ -83,9 +83,10 @@ class Mesh:
 
     def register(self, peer: Peer) -> Peer:
         existing = self.registry.get(peer.id)
-        peer.name = existing.name if existing and existing.name else self.registry.unique_name(peer)
+        given = (existing.auto_name or existing.name) if existing else None
+        peer.name = given or self.registry.unique_name(peer)
         self.registry.put(peer)
-        return peer
+        return self.registry.get(peer.id) or peer
 
     def whoami(
         self,
