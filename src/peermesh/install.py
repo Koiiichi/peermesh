@@ -75,7 +75,8 @@ def merge_hooks(config: dict[str, Any], exe: str, runtime: str) -> dict[str, Any
         flag = " --inbox" if name in ("session-start", "prompt") else ""
         command = f"{shlex.quote(exe)} hook {name} --runtime {runtime}{flag} {MARK}"
         # A Stop hook can wake its own session through `codex queue`, which has 30 seconds.
-        timeout = 45 if event == "Stop" else 10
+        # Codex caps SessionEnd at 3 seconds and warns at every start when a hook asks for more.
+        timeout = {"Stop": 45, "SessionEnd": 3}.get(event, 10)
         hooks.setdefault(event, []).append(
             {"hooks": [{"type": "command", "command": command, "timeout": timeout}]}
         )

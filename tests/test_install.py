@@ -202,3 +202,9 @@ def test_doctor_gives_the_install_hint_only_for_a_missing_post_tool_hook() -> No
     details = {name: (ok, detail) for name, ok, detail in install.doctor(runner=Runner())}
     assert details["claude post-tool hook"] == (True, "installed")
     assert details["codex post-tool hook"] == (False, "run `peers install` again")
+
+
+def test_session_end_timeout_fits_the_codex_cap() -> None:
+    config = install.merge_hooks({}, "/bin/peers", "codex")
+    [end] = config["hooks"]["SessionEnd"]
+    assert end["hooks"][0]["timeout"] == 3

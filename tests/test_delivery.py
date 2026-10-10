@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from peermesh import hooks, install, paths, text
-from peermesh.envelope import AFTER_COMPLETION_LINE, INFO_LINE, Message
+from peermesh import hooks, install, paths
+from peermesh.envelope import ENDINGS, INFO_NOTE, Message
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry
 from peermesh.service import Mesh
@@ -89,14 +89,14 @@ def test_idle_target_information_waits_and_request_wakes(world: World) -> None:
     [req] = world.mesh.send(world.peers["a"], "claude-b", "Please rebase.", kind="request")
     assert req.status == "delivered"
     _, rendered, _ = world.claude.calls[0]
-    assert AFTER_COMPLETION_LINE in rendered and INFO_LINE not in rendered
+    assert ENDINGS["after_completion"] in rendered and INFO_NOTE not in rendered
 
 
 def test_target_without_post_tool_hook_uses_native_path(world: World) -> None:
     world.put("b", capabilities=[], status="busy")
     [res] = world.mesh.send(world.peers["a"], "claude-b", "FYI: schema v2.")
     assert res.status == "delivered" and len(world.claude.calls) == 1
-    assert INFO_LINE in world.claude.calls[0][1]
+    assert INFO_NOTE in world.claude.calls[0][1]
 
 
 def test_urgent_request_routes(world: World) -> None:
@@ -122,8 +122,8 @@ def test_post_tool_injects_in_send_order_exactly_once(world: World) -> None:
     assert emitted == [out]
     context = out["hookSpecificOutput"]["additionalContext"]
     assert out["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
-    assert [context.index(f"msg={i}") for i in ids] == sorted(
-        context.index(f"msg={i}") for i in ids
+    assert [context.index(f"msg {i[:8]}") for i in ids] == sorted(
+        context.index(f"msg {i[:8]}") for i in ids
     )
     assert all(_outcomes(world, str(i)) == ["pending", "injected"] for i in ids)
     assert _hook(world, "post-tool", "x") == (None, [])
@@ -148,7 +148,10 @@ def test_failed_emit_leaves_messages_for_a_retry(world: World) -> None:
         )
     assert _outcomes(world, str(res.msg_id)) == ["pending"]
     out, _ = _hook(world, "post-tool", "x")
-    assert out is not None and f"msg={res.msg_id}" in out["hookSpecificOutput"]["additionalContext"]
+    assert (
+        out is not None
+        and f"msg {res.msg_id[:8]}" in out["hookSpecificOutput"]["additionalContext"]
+    )
 
 
 def _concurrent_hook(home: str, result: Any) -> None:
@@ -175,8 +178,8 @@ def test_parallel_post_tool_hooks_inject_each_message_once(world: World) -> None
     for p in procs:
         p.join(timeout=60)
     texts = [t for _ in procs for t in result.get(timeout=10)]
-    assert sum(t.count("msg=") for t in texts) == 5
-    assert all(sum(f"msg={i}" in t for t in texts) == 1 for i in ids)
+    assert sum(t.count(" · msg ") for t in texts) == 5
+    assert all(sum(f"msg {i[:8]}" in t for t in texts) == 1 for i in ids)
 
 
 def test_stop_keeps_information_for_the_next_prompt(world: World) -> None:
@@ -185,7 +188,7 @@ def test_stop_keeps_information_for_the_next_prompt(world: World) -> None:
     assert _hook(world, "stop", "b") == (None, [])
     assert world.mesh.registry.get("claude:B").status == "idle"  # type: ignore[union-attr]
     out, _ = _hook(world, "prompt", "b")
-    assert f"msg={res.msg_id}" in out["hookSpecificOutput"]["additionalContext"]
+    assert f"msg {res.msg_id[:8]}" in out["hookSpecificOutput"]["additionalContext"]
     assert _outcomes(world, str(res.msg_id))[-1] == "injected"
 
 
@@ -196,12 +199,12 @@ def test_stop_continues_once_for_actionable_messages(world: World) -> None:
     out, emitted = _hook(world, "stop", "b")
     assert emitted == [out] and "decision" not in out
     context = out["hookSpecificOutput"]
-    assert context["hookEventName"] == "Stop" and text.STOP_NOTE in context["additionalContext"]
+    assert context["hookEventName"] == "Stop" and ENDINGS["stop"] in context["additionalContext"]
     assert world.mesh.registry.get("claude:B").status == "busy"  # type: ignore[union-attr]
     [late] = world.mesh.send(world.peers["a"], "claude-b", "One more question.", kind="request")
     assert late.status == "pending"
-    assert f"msg={info.msg_id}" in context["additionalContext"]
-    assert f"msg={req.msg_id}" in context["additionalContext"]
+    assert f"msg {info.msg_id[:8]}" in context["additionalContext"]
+    assert f"msg {req.msg_id[:8]}" in context["additionalContext"]
     assert world.claude.calls == []
 
 
@@ -211,7 +214,7 @@ def test_stop_after_a_continuation_wakes_instead_of_blocking(world: World) -> No
     [req] = world.mesh.send(world.peers["a"], "claude-b", "Run the tests.", kind="request")
     assert _hook(world, "stop", "b", stop_hook_active=True) == (None, [])
     [(target, rendered, msg)] = world.claude.calls
-    assert target == "claude:B" and msg.id == req.msg_id and AFTER_COMPLETION_LINE in rendered
+    assert target == "claude:B" and msg.id == req.msg_id and ENDINGS["after_completion"] in rendered
     assert [w.id for w in world.mesh.inbox.waiting("claude:B")] == [info.msg_id]
 
 
@@ -328,4 +331,19 @@ def test_codex_stop_continues_the_turn_with_a_block_decision(world: World) -> No
     world.put("x", status="busy")
     world.mesh.send(world.peers["a"], "codex-x", "Run the tests.", kind="request")
     out, _ = _hook(world, "stop", "x")
-    assert out["decision"] == "block" and text.STOP_NOTE in out["reason"]
+    assert out["decision"] == "block" and ENDINGS["stop"] in out["reason"]
+
+
+def test_hooks_tell_the_user_which_messages_the_agent_got(world: World) -> None:
+    world.put("b", status="busy")
+    world.mesh.send(world.peers["a"], "claude-b", "Please rebase.", kind="request")
+    out, _ = _hook(world, "post-tool", "b")
+    assert out["systemMessage"] == "peermesh: gave the agent request from claude-a"
+    world.mesh.send(world.peers["a"], "claude-b", "Run the tests.", kind="review_request")
+    out, _ = _hook(world, "prompt", "b")
+    assert out["systemMessage"] == "peermesh: gave the agent review request from claude-a"
+    # Both runtimes show the Stop body to the user, so a notice would repeat it.
+    world.put("b", status="busy")
+    world.mesh.send(world.peers["a"], "claude-b", "One more check.", kind="request")
+    out, _ = _hook(world, "stop", "b")
+    assert "systemMessage" not in out
