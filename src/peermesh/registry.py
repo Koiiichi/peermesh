@@ -38,9 +38,14 @@ class Peer:
     # The Codex rollout file of the thread. An app-server process hosts many threads, so the
     # process can outlive a thread; a missing rollout file means the thread is closed.
     transcript: str | None = None
+    # The name that peermesh gave the session, set when a user rename replaces `name`. The
+    # rename exists only in memory, so the record keeps the given name as a stable address.
+    auto_name: str | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["name"] = data.pop("auto_name") or self.name
+        return data
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Peer:
@@ -167,16 +172,22 @@ def claude_native_status(pid: int) -> Status | None:
     return state[0] if state else None
 
 
+def _claude_session(pid: int) -> dict[str, Any] | None:
+    """Claude Code's own session file. The format is internal; failure is normal."""
+    try:
+        data = json.loads((paths.claude_dir() / "sessions" / f"{pid}.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def claude_native_state(pid: int) -> tuple[Status, float] | None:
     """Claude Code's own session status and the epoch second it changed.
 
     The time is infinite when the file does not give it, so the native status wins.
     """
-    try:
-        data = json.loads((paths.claude_dir() / "sessions" / f"{pid}.json").read_text())
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict):
+    data = _claude_session(pid)
+    if data is None:
         return None
     raw = data.get("status")
     status: Status
@@ -188,6 +199,17 @@ def claude_native_state(pid: int) -> tuple[Status, float] | None:
         return None
     changed = data.get("statusUpdatedAt")
     return status, changed / 1000 if isinstance(changed, int | float) else float("inf")
+
+
+def claude_user_name(pid: int) -> str | None:
+    """The name that the user gave the Claude session with `/rename`, made safe to type, or None.
+
+    A name that Claude Code derived from the directory has nameSource "derived" and is ignored.
+    """
+    data = _claude_session(pid)
+    if data is None or data.get("nameSource") != "user" or not isinstance(data.get("name"), str):
+        return None
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", data["name"]).strip("-")[:40] or None
 
 
 class Registry:
@@ -208,9 +230,13 @@ class Registry:
 
     def get(self, peer_id: str) -> Peer | None:
         try:
-            return Peer.from_json(json.loads(self._file(peer_id).read_text()))
+            peer = Peer.from_json(json.loads(self._file(peer_id).read_text()))
         except (OSError, ValueError, TypeError):
             return None
+        if peer.runtime == "claude":
+            # A user rename is unique only among the live peers, so take it from the live list.
+            return next((p for p in self.live() if p.id == peer_id), peer)
+        return peer
 
     def remove(self, peer_id: str) -> None:
         self._file(peer_id).unlink(missing_ok=True)
@@ -232,11 +258,12 @@ class Registry:
                 path.unlink(missing_ok=True)
                 continue
             peers.append(peer)
+        _apply_user_names(peers)
         return peers
 
     def resolve(self, target: str) -> Peer | None:
         for peer in self.live():
-            if target in (peer.id, peer.name):
+            if target in (peer.id, peer.name, peer.auto_name):
                 return peer
         return None
 
@@ -248,3 +275,22 @@ class Registry:
             if name not in taken:
                 return name
         raise RuntimeError("A full sha1 name collides. This cannot occur.")
+
+
+def _apply_user_names(peers: list[Peer]) -> None:
+    """Replace the name of each renamed Claude session with the name that the user gave it.
+
+    A rename that another peer already uses gets a suffix from the session id. Sessions are
+    taken in id order, so every caller gives the same name to the same session.
+    """
+    taken = {p.name for p in peers}
+    for peer in sorted(peers, key=lambda p: p.id):
+        wanted = claude_user_name(peer.pid) if peer.runtime == "claude" else None
+        if wanted is None or wanted == peer.name:
+            continue
+        if wanted in taken:
+            wanted = f"{wanted}-{hashlib.sha1(peer.id.encode()).hexdigest()[:4]}"
+            if wanted in taken:
+                continue
+        taken.add(wanted)
+        peer.auto_name, peer.name = peer.name, wanted

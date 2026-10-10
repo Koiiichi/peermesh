@@ -2,6 +2,10 @@
 
 ## 0.2.1 — 2026-10-09
 
+### Added
+
+- A Claude Code session renamed with `/rename` uses that name in peermesh: in `peers list`, in the frame of its messages, and as an address. The name that peermesh gave it still works as an address. A name that another live peer uses gets a short suffix. Codex threads keep their peermesh names, because Codex does not record which thread titles a user set.
+
 ### Changed
 
 - The loop limit counts quick exchanges only. A hop counts when a message answers its parent within 2 minutes; a slower answer starts the count again. Long collaborations between two sessions no longer reach the limit, and fast loops still stop after 8 messages.
