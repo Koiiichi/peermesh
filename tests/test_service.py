@@ -84,7 +84,7 @@ def test_claude_to_codex_routes_to_codex_transport(world: World) -> None:
     )
     assert res.status == "delivered" and res.to == "codex-a"
     target, rendered, msg = world.codex.calls[0]
-    assert target == "codex:A" and "(claude, id claude:A)" in rendered
+    assert target == "codex:A" and "from claude-a (claude)" in rendered
     assert "peers reply" in rendered
 
 
@@ -177,6 +177,24 @@ def test_reply_routing_threads_and_hops(world: World) -> None:
     reply_msg = world.claude.calls[0][2]
     assert reply_msg.in_reply_to == first.msg_id and reply_msg.thread == first.msg_id
     assert reply_msg.hop == 1 and reply_msg.kind == "reply"
+
+
+def test_reply_and_track_accept_the_short_id_of_the_frame(world: World) -> None:
+    [first] = world.mesh.send(world.peers["ca"], "codex-a", "Please review cart.py", kind="request")
+    assert first.msg_id is not None
+    res = world.mesh.reply(world.peers["xa"], first.msg_id[:8], "One bug: rounding in line 12.")
+    assert res.status == "delivered"
+    assert world.claude.calls[0][2].in_reply_to == first.msg_id
+    assert world.mesh.track(first.msg_id[:8])["id"] == first.msg_id
+    with pytest.raises(PeerError, match="No message"):
+        world.mesh.reply(world.peers["xa"], first.msg_id[:4], "Too short to resolve.")
+
+
+def test_short_id_that_matches_two_messages_is_refused(world: World) -> None:
+    for msg_id in ("abcdef01" + "0" * 24, "abcdef01" + "1" * 24):
+        world.mesh.send(world.peers["ca"], "codex-a", f"Question {msg_id[-1]}?", msg_id=msg_id)
+    with pytest.raises(PeerError, match="more than one message"):
+        world.mesh.reply(world.peers["xa"], "abcdef01", "The answer is 4.")
 
 
 def test_reply_to_message_for_someone_else(world: World) -> None:
@@ -282,7 +300,7 @@ def test_user_rename_names_the_sender_and_keeps_the_record(
     assert me.name == "rotom-infra"
     world.mesh.send(me, "codex-a", "the rename is live")
     _, rendered, msg = world.codex.calls[-1]
-    assert msg.from_name == "rotom-infra" and "agent rotom-infra (claude" in rendered
+    assert msg.from_name == "rotom-infra" and "from rotom-infra (claude)" in rendered
     assert world.mesh.registry.resolve("claude-a") is not None
     stored = world.mesh.registry._file("claude:A").read_text()
     assert json.loads(stored)["name"] == "claude-a"

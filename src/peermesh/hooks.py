@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from peermesh import paths, text
+from peermesh.envelope import Ending, render
 from peermesh.errors import NoInboxError
 from peermesh.identity import detect
+from peermesh.inbox import Waiting
 from peermesh.registry import Peer, Runtime, current_branch, is_alive, repo_info
 from peermesh.service import Mesh
 
@@ -77,7 +79,7 @@ def _post_tool(mesh: Mesh, peer_id: str, emit: Emit) -> dict[str, Any] | None:
             # A native wake starts a turn without a prompt hook; a tool call proves the turn.
             peer.status, peer.last_seen = "busy", mesh.clock()
             mesh.registry.put(peer)
-        out = _context("post-tool", text.injected_text([i.rendered for i in items]))
+        out = _context("post-tool", _render(peer, items)) | {"systemMessage": _notice(items)}
         # Emit before the record, so a crash leaves the messages claimed for a retry and
         # never marks a message injected that the runtime did not get.
         emit(out)
@@ -85,12 +87,23 @@ def _post_tool(mesh: Mesh, peer_id: str, emit: Emit) -> dict[str, Any] | None:
     return out
 
 
+def _render(peer: Peer, items: list[Waiting], ending: Ending | None = None) -> str:
+    return render([i.message for i in items], peer.runtime, ending=ending)
+
+
+def _notice(items: list[Waiting]) -> str:
+    """The line that the user sees. The model context holds the messages themselves."""
+    parts = [f"{i.message.kind.replace('_', ' ')} from {i.message.from_name}" for i in items]
+    return "peermesh: gave the agent " + ", ".join(parts)
+
+
 def _continue_turn(runtime: Runtime, body: str) -> dict[str, Any]:
     """Stop-hook output that keeps the turn going with body as context for the model.
 
     Claude Code shows the reason of a "block" decision to the user as a hook error, and takes
     additionalContext as feedback that continues the turn. Codex has no additionalContext for
-    Stop; a "block" decision is its way to continue a turn.
+    Stop; a "block" decision is its way to continue a turn. Both runtimes show the body to the
+    user, so this output carries no separate notice.
     """
     if runtime == "claude":
         return {"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": body}}
@@ -113,9 +126,7 @@ def _stop(mesh: Mesh, peer: Peer, payload: Mapping[str, Any], emit: Emit) -> dic
         peer.status, peer.last_seen = ("busy" if block else "idle"), mesh.clock()
         mesh.registry.put(peer)
         if block:
-            frames = [i.rendered for i in items]
-            body = text.injected_text(frames) + "\n\n" + text.STOP_NOTE
-            out = _continue_turn(peer.runtime, body)
+            out = _continue_turn(peer.runtime, _render(peer, items, "stop"))
             emit(out)
             mesh.record_injected(items, "stop")
             return out
@@ -199,10 +210,12 @@ def handle(
     with mesh.ledger.locked():
         items = mesh.take_waiting(peer)
         if items:
-            parts.append(text.injected_text([i.rendered for i in items]))
+            parts.append(_render(peer, items))
         if not parts:
             return None
         out = _context(event, "\n\n".join(parts))
+        if items:
+            out["systemMessage"] = _notice(items)
         emit(out)
         mesh.record_injected(items, "prompt")
     return out
