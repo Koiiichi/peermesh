@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from peermesh import paths, text
-from peermesh.envelope import Ending, render
+from peermesh.envelope import Ending, accepts_short_ids, render
 from peermesh.errors import NoInboxError
 from peermesh.identity import detect
 from peermesh.inbox import Waiting
@@ -88,7 +88,12 @@ def _post_tool(mesh: Mesh, peer_id: str, emit: Emit) -> dict[str, Any] | None:
 
 
 def _render(peer: Peer, items: list[Waiting], ending: Ending | None = None) -> str:
-    return render([i.message for i in items], peer.runtime, ending=ending)
+    return render(
+        [i.message for i in items],
+        peer.runtime,
+        short_ids=accepts_short_ids(peer),
+        ending=ending,
+    )
 
 
 def _notice(items: list[Waiting]) -> str:

@@ -348,3 +348,16 @@ def test_hooks_tell_the_user_which_messages_the_agent_got(world: World) -> None:
     world.mesh.send(world.peers["a"], "claude-b", "One more check.", kind="request")
     out, _ = _hook(world, "stop", "b")
     assert "systemMessage" not in out
+
+
+def test_claude_receiver_gets_short_ids_only_after_its_server_supports_them(world: World) -> None:
+    [first] = world.mesh.send(world.peers["a"], "claude-b", "Please rebase.", kind="request")
+    assert f'peers_reply("{first.msg_id}", "<text>")' in world.claude.calls[0][1]
+    world.put("b", capabilities=["inbox", "short_ids"])
+    [second] = world.mesh.send(world.peers["a"], "claude-b", "Please rebase again.", kind="request")
+    assert f'peers_reply("{str(second.msg_id)[:8]}", "<text>")' in world.claude.calls[1][1]
+    world.put("b", status="busy")
+    [third] = world.mesh.send(world.peers["a"], "claude-b", "And once more.", kind="request")
+    out, _ = _hook(world, "post-tool", "b")
+    context = out["hookSpecificOutput"]["additionalContext"]
+    assert f'peers_reply("{str(third.msg_id)[:8]}", "<text>")' in context

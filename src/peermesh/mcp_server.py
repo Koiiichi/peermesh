@@ -7,6 +7,7 @@ from typing import Any, cast
 from mcp.server.mcpserver import MCPServer
 
 from peermesh import text
+from peermesh.envelope import SHORT_IDS
 from peermesh.errors import PeerError
 from peermesh.registry import Peer, Scope
 from peermesh.service import Mesh
@@ -17,9 +18,15 @@ mcp = MCPServer("peermesh", instructions=text.MCP_INSTRUCTIONS)
 def _context() -> tuple[Mesh, Peer]:
     mesh = Mesh.default()
     try:
-        return mesh, mesh.whoami()
+        me = mesh.whoami()
     except PeerError as exc:
         raise ValueError(str(exc)) from exc
+    # This process stays for the whole session, so it states what its version can do. A hook
+    # can write the record without the capability; the next tool call sets it again.
+    if SHORT_IDS not in me.capabilities:
+        me.capabilities = [*me.capabilities, SHORT_IDS]
+        mesh.registry.put(me)
+    return mesh, me
 
 
 @mcp.tool(description=text.TOOL_LIST)

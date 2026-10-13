@@ -43,3 +43,16 @@ def test_list_send_reply_status(ctx: Mesh) -> None:
 def test_bad_scope_is_a_clear_error(ctx: Mesh) -> None:
     with pytest.raises(ValueError, match="scope"):
         mcp_server.peers_list("galaxy")
+
+
+def test_the_server_states_that_it_resolves_short_ids(
+    make_peer: Callable[..., Peer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mesh = Mesh(Registry(), Ledger(), {"claude": Fake(), "codex": Fake()})
+    me = make_peer(id="claude:ME", name="claude-me")
+    mesh.registry.put(me)
+    monkeypatch.setattr(Mesh, "default", classmethod(lambda cls: mesh))
+    monkeypatch.setattr(Mesh, "whoami", lambda self: mesh.registry.get("claude:ME"))
+    mcp_server._context()
+    stored = mesh.registry.get("claude:ME")
+    assert stored is not None and stored.capabilities == ["short_ids"]
