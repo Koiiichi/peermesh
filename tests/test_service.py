@@ -205,6 +205,19 @@ def test_short_id_of_an_archived_message_still_resolves(world: World) -> None:
     assert world.mesh.track(first.msg_id[:8])["id"] == first.msg_id
 
 
+def test_short_id_shared_by_an_archived_and_an_active_message_is_refused(world: World) -> None:
+    led = world.mesh.ledger
+    world.mesh.send(world.peers["ca"], "codex-a", "Old question?", msg_id="abcdef01" + "0" * 24)
+    paths.ensure_private_dir(led.archive_dir)
+    with gzip.open(led.archive_dir / "ledger-00000000000000000001.jsonl.gz", "wt") as fh:
+        fh.write(led.path.read_text())
+    led.path.write_text("")
+    world.mesh.send(world.peers["cb"], "codex-a", "New question?", msg_id="abcdef01" + "1" * 24)
+    with pytest.raises(PeerError, match="more than one message"):
+        world.mesh.reply(world.peers["xa"], "abcdef01", "The answer is 4.")
+    assert world.claude.calls == []
+
+
 def test_short_id_that_matches_two_messages_is_refused(world: World) -> None:
     for msg_id in ("abcdef01" + "0" * 24, "abcdef01" + "1" * 24):
         world.mesh.send(world.peers["ca"], "codex-a", f"Question {msg_id[-1]}?", msg_id=msg_id)
