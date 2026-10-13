@@ -217,17 +217,13 @@ class Mesh:
     def _full_id(self, ref: str, *, to: str | None = None) -> str:
         """The message id that ref names. Frames show ids shortened to SHORT_ID characters.
 
-        A prefix resolves against the active ledger only. A prefix that matches no message
-        comes back unchanged, so the caller reports the id as not found.
+        A prefix that matches no message comes back unchanged, so the caller reports the id as
+        not found.
         """
         if not MIN_PREFIX <= len(ref) < FULL_ID:
             return ref
         matches = {
-            str(e["id"])
-            for e in self.ledger.latest()
-            if "from" in e
-            and str(e.get("id", "")).startswith(ref)
-            and (to is None or e.get("to") == to)
+            str(e["id"]) for e in self.ledger.with_prefix(ref) if to is None or e.get("to") == to
         }
         if len(matches) > 1:
             raise PeerError(

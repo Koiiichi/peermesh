@@ -73,6 +73,37 @@ class Ledger:
                 return found
         return None
 
+    def with_prefix(self, prefix: str) -> list[dict[str, Any]]:
+        """The merged message records whose id starts with prefix.
+
+        The active file answers first. The archives are read only when it holds no match: a
+        short id is almost always the id of a recent message, and a read of every archive on
+        each reply costs more than the lookup is worth.
+        """
+
+        def matches(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+            by_id: dict[str, dict[str, Any]] = {}
+            for entry in entries:
+                if str(entry.get("id", "")).startswith(prefix):
+                    by_id.setdefault(str(entry["id"]), {}).update(entry)
+            return [e for e in by_id.values() if "from" in e]
+
+        found = matches(self.entries())
+        if found:
+            return found
+        return matches(self._archived())
+
+    def _archived(self) -> list[dict[str, Any]]:
+        """The entries of all archives, oldest first. An unreadable archive is skipped."""
+        entries: list[dict[str, Any]] = []
+        for archive in sorted(self.archive_dir.glob("ledger-*.jsonl.gz")):
+            try:
+                with gzip.open(archive, "rt") as fh:
+                    entries += _parse(fh)
+            except (OSError, EOFError):
+                continue
+        return entries
+
     def append(self, entry: dict[str, Any]) -> None:
         """Append one entry. The caller holds `locked()`, because a rotation can follow."""
         paths.ensure_private_dir(self.path.parent)

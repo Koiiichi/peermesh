@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -188,6 +189,20 @@ def test_reply_and_track_accept_the_short_id_of_the_frame(world: World) -> None:
     assert world.mesh.track(first.msg_id[:8])["id"] == first.msg_id
     with pytest.raises(PeerError, match="No message"):
         world.mesh.reply(world.peers["xa"], first.msg_id[:4], "Too short to resolve.")
+
+
+def test_short_id_of_an_archived_message_still_resolves(world: World) -> None:
+    [first] = world.mesh.send(world.peers["ca"], "codex-a", "Please review cart.py", kind="request")
+    assert first.msg_id is not None
+    led = world.mesh.ledger
+    paths.ensure_private_dir(led.archive_dir)
+    with gzip.open(led.archive_dir / "ledger-00000000000000000001.jsonl.gz", "wt") as fh:
+        fh.write(led.path.read_text())
+    led.path.write_text("")
+    res = world.mesh.reply(world.peers["xa"], first.msg_id[:8], "Done after two hours.", done=True)
+    assert res.status == "delivered"
+    assert world.claude.calls[-1][2].in_reply_to == first.msg_id
+    assert world.mesh.track(first.msg_id[:8])["id"] == first.msg_id
 
 
 def test_short_id_that_matches_two_messages_is_refused(world: World) -> None:
