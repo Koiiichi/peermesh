@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-13
+
+Peer messages are shorter, a hook tells you when it gives the agent a message, and three commands let you watch the sessions.
+
+### Upgrade
+
+1. Pull and reinstall: `git pull && uv tool install --editable . --force`. The reinstall adds the new dependency `rich`.
+2. Run `peers install` again. It updates the `SessionEnd` hook timeout.
+3. Restart long-running Claude Code sessions when convenient. Until then they keep working and get full message ids, because their MCP server still runs the older code.
 
 ### Changed
 
