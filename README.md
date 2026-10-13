@@ -138,4 +138,4 @@ PEERMESH_LIVE=1 uv run pytest -m live   # a real Codex session; spends model tur
 
 ## Status and license
 
-Early. Version 0.3.0 is tested on macOS with Claude Code 2.1.296 and codex-cli 0.162.1; [CHANGELOG.md](CHANGELOG.md) lists the changes in each version. The delivery approach builds on ideas from [Postbag](https://github.com/parasxos/postbag) and [AgentBridge](https://github.com/raysonmeng/agent-bridge). Licensed under [Apache-2.0](LICENSE).
+Early. Version 0.3.1 is tested on macOS with Claude Code 2.1.296 and codex-cli 0.162.1; [CHANGELOG.md](CHANGELOG.md) lists the changes in each version. The delivery approach builds on ideas from [Postbag](https://github.com/parasxos/postbag) and [AgentBridge](https://github.com/raysonmeng/agent-bridge). Licensed under [Apache-2.0](LICENSE).
