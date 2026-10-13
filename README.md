@@ -96,7 +96,21 @@ The state is the last thing that happened to a message: `pending`, `injected`, `
 
 `peers thread MSG` prints one conversation in order, with full bodies. `MSG` is the id of any message in it, as `peers watch` and `peers log` show it.
 
-`peers statusline` prints a status line segment for a Claude Code session, such as `in 1 waiting · out 2 pending, 1 delivered, 3 answered`: the messages that wait for the session, and the messages it sent in the last hour by what happened to them (`pending`, `delivered`, `answered`, `failed`). `delivered` means that the runtime of the peer has the message; no runtime reports that it was read. A session with neither shows `no peer messages`. Use it as the `statusLine` command in `~/.claude/settings.json`, or as a custom command in a status line tool such as ccstatusline.
+`peers statusline` prints a status line segment for a Claude Code session, such as `in 1 waiting · out 2 pending, 1 delivered, 3 answered`: the messages that wait for the session, and the messages it sent in the last hour by what happened to them (`pending`, `delivered`, `answered`, `failed`). `delivered` means that the runtime of the peer has the message; no runtime reports that it was read. A session with neither shows `no peer messages`. `peers install` does not set it up, because a status line is a personal choice. Add it in one of two ways.
+
+Without a status line tool, make it the status line command in `~/.claude/settings.json`:
+
+```json
+{ "statusLine": { "type": "command", "command": "peers statusline" } }
+```
+
+With [ccstatusline](https://github.com/sirmalloc/ccstatusline), which is a separate tool that peermesh does not install, add a custom command widget to a line in `~/.config/ccstatusline/settings.json`:
+
+```json
+{ "id": "peermesh", "type": "custom-command", "commandPath": "peers statusline" }
+```
+
+Use the full path of `peers` (`which peers`) if the status line does not find the command.
 
 ## Safety limits
 
