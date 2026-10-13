@@ -83,7 +83,7 @@ def snapshot(mesh: Mesh, width: int, height: int) -> Group:
 
     The view shows all sessions and the newest messages that fit below them.
     """
-    peers = mesh.registry.live()
+    peers = mesh.all_peers()
     waiting = {p.id: len(mesh.inbox.waiting(p.id)) for p in peers}
     # Two titles, two header rows and the gap take five lines; an empty session table takes one.
     room = height - 5 - max(1, len(peers))

@@ -200,3 +200,28 @@ def test_ledger_thread_orders_by_send_time_across_files(mesh: Mesh) -> None:
         fh.write(json.dumps(newer) + "\n")
     led.path.write_text(json.dumps(older) + "\n")
     assert [r["id"] for r in led.thread("m1")] == ["m1", "m2"]
+
+
+def test_snapshot_shows_the_newer_status_of_claude_code(mesh: Mesh) -> None:
+    a = mesh.registry.get("claude:A")
+    assert a is not None and a.status == "idle"
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{a.pid}.json").write_text(json.dumps({"status": "busy"}))
+    rows = [
+        line
+        for line in _text(watch.snapshot(mesh, 120, 20), 120).splitlines()
+        if "claude-a" in line
+    ]
+    assert "busy" in rows[0]
+
+
+def test_watch_stays_live_without_colors(mesh: Mesh, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr(
+        watch, "watch", lambda mesh, console, *, interval, once: seen.update(once=once)
+    )
+    assert cli.main(["watch"]) == 0
+    assert seen == {"once": False} and not cli._styled()

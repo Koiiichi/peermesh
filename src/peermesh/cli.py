@@ -44,18 +44,20 @@ _OUTCOME_COLOR = {
 }
 
 
-def _styled() -> bool:
-    """True when a person reads the output in a terminal that shows ANSI styles.
+def _person_at_terminal() -> bool:
+    """True when a person, not an agent, reads the output in a terminal.
 
     Codex can run commands in a pty, so a terminal alone does not prove a person reads it; an
     agent shell carries the session variables of its runtime.
     """
     agent = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID")
+    return sys.stdout.isatty() and not agent
+
+
+def _styled() -> bool:
+    """True when a person reads the output in a terminal that shows ANSI styles."""
     return (
-        sys.stdout.isatty()
-        and not agent
-        and "NO_COLOR" not in os.environ
-        and os.environ.get("TERM") != "dumb"
+        _person_at_terminal() and "NO_COLOR" not in os.environ and os.environ.get("TERM") != "dumb"
     )
 
 
@@ -199,9 +201,11 @@ def main(argv: list[str] | None = None) -> int:
 
             from peermesh import watch
 
-            # An agent shell gets plain text: Codex can run a command in a pty.
+            # An agent shell gets one plain frame. A person without colors still gets the
+            # live view.
             console = Console(no_color=not _styled(), highlight=False)
-            watch.watch(mesh, console, interval=args.interval, once=args.once or not _styled())
+            once = args.once or not _person_at_terminal()
+            watch.watch(mesh, console, interval=args.interval, once=once)
             return 0
         if args.cmd == "thread":
             record = mesh.ledger.find(mesh.full_id(args.msg_id))
