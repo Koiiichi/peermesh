@@ -17,7 +17,7 @@ from peermesh import paths
 from peermesh.envelope import new_message
 from peermesh.registry import Peer, proc_start
 from peermesh.transports.claude import CLAUDE_HOLD_NOTE, ClaudeSocketTransport
-from peermesh.transports.codex import AppServerSteerer, CodexTransport
+from peermesh.transports.codex import AppServerSteerer, CodexTransport, _WsRpc
 
 STUB = r"""#!/usr/bin/env python3
 import json, os, sys
@@ -398,6 +398,29 @@ def test_pings_do_not_extend_the_wait_for_a_steer_answer(
     assert time.monotonic() - started < 2.0
     assert outcome.status == "refused" and "Do not resend" in outcome.note
     assert len(daemon.steers) == 1 and _log(stub_codex) == []
+
+
+class _SlowPongSocket:
+    """A socket whose pong writes are slow. The client reads nothing from it."""
+
+    def settimeout(self, _: float) -> None:
+        pass
+
+    def sendall(self, _: bytes) -> None:
+        time.sleep(0.02)
+
+    def recv(self, _: int) -> bytes:
+        raise AssertionError("every frame is in the buffer")
+
+
+def test_buffered_pings_do_not_extend_the_wait_for_an_answer() -> None:
+    pings = bytes([0x89, 0]) * 200
+    answer = b'{"id": 1, "result": {}}'
+    rpc = _WsRpc(_SlowPongSocket(), 0.1, pings + bytes([0x81, len(answer)]) + answer)  # type: ignore[arg-type]
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        rpc.request("turn/steer", {})
+    assert time.monotonic() - started < 1.0
 
 
 def test_daemon_that_does_not_upgrade_uses_the_proxy(
