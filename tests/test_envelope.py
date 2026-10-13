@@ -7,9 +7,7 @@ import pytest
 from peermesh.envelope import (
     ENDINGS,
     INFO_NOTE,
-    SHORT_IDS,
     EnvelopeError,
-    accepts_short_ids,
     is_ack_only,
     new_message,
     render,
@@ -79,10 +77,6 @@ def test_render_gives_full_ids_to_a_receiver_that_cannot_resolve_short_ids(
     text = render([msg], "claude")
     assert f"· msg {msg.id}" in text and f'peers_reply("{msg.id}", "<text>")' in text
     assert f"[1] request from claude-x-aa (claude) · msg {msg.id}" in render([msg, msg], "claude")
-    assert not accepts_short_ids(a)
-    a.capabilities = [SHORT_IDS]
-    assert accepts_short_ids(a)
-    assert b.runtime == "codex" and accepts_short_ids(b)
 
 
 def test_render_batch_numbers_messages_and_states_the_rules_once(

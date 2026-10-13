@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from peermesh import paths, text
-from peermesh.envelope import Ending, accepts_short_ids, render
+from peermesh.envelope import Ending, render
 from peermesh.errors import NoInboxError
 from peermesh.identity import detect
 from peermesh.inbox import Waiting
 from peermesh.registry import Peer, Runtime, current_branch, is_alive, repo_info
-from peermesh.service import Mesh
+from peermesh.service import SHORT_IDS, Mesh, accepts_short_ids
 
 EVENTS = ("session-start", "prompt", "post-tool", "stop", "session-end")
 _HOOK_NAMES = {
@@ -27,8 +26,7 @@ Emit = Callable[[dict[str, Any]], None]
 
 
 def _seen_file(peer_id: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", peer_id)
-    return paths.home() / "state" / f"{safe}.seen"
+    return paths.state_file(peer_id, "seen")
 
 
 def _changed(peer_id: str, peers: list[Peer]) -> bool:
@@ -57,11 +55,11 @@ def _refresh(peer: Peer, cwd: str) -> None:
 
 
 def _remove_stale_state(mesh: Mesh) -> None:
-    """Clear the seen sets and inboxes of sessions that have no registry record."""
+    """Clear the state files and inboxes of sessions that have no registry record."""
     live = {p.stem for p in mesh.registry.dir.glob("*.json")}
-    for seen in (paths.home() / "state").glob("*.seen"):
-        if seen.stem not in live:
-            seen.unlink(missing_ok=True)
+    for state in (paths.home() / "state").glob("*.*"):
+        if state.stem not in live:
+            state.unlink(missing_ok=True)
     for name in mesh.inbox.peer_ids():
         if name not in live:
             mesh.expire_inbox(name)
@@ -174,6 +172,7 @@ def handle(
     if event == "session-end":
         mesh.registry.remove(peer_id)
         _seen_file(peer_id).unlink(missing_ok=True)
+        paths.state_file(peer_id, SHORT_IDS).unlink(missing_ok=True)
         mesh.expire_inbox(peer_id)
         return None
     if event == "post-tool":

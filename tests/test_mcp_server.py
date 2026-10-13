@@ -8,7 +8,7 @@ import pytest
 from peermesh import mcp_server, text
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry
-from peermesh.service import Mesh
+from peermesh.service import Mesh, accepts_short_ids
 from peermesh.transports import Outcome
 
 
@@ -53,6 +53,9 @@ def test_the_server_states_that_it_resolves_short_ids(
     mesh.registry.put(me)
     monkeypatch.setattr(Mesh, "default", classmethod(lambda cls: mesh))
     monkeypatch.setattr(Mesh, "whoami", lambda self: mesh.registry.get("claude:ME"))
+    before = mesh.registry._file("claude:ME").read_text()
+    assert not accepts_short_ids(me)
     mcp_server._context()
-    stored = mesh.registry.get("claude:ME")
-    assert stored is not None and stored.capabilities == ["short_ids"]
+    assert accepts_short_ids(me)
+    # The registry record is not written: a stale copy could replace a status from a hook.
+    assert mesh.registry._file("claude:ME").read_text() == before

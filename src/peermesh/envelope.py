@@ -166,22 +166,8 @@ ENDINGS = {
 }
 
 
-# A session with this capability runs a peermesh that resolves a short message id.
-SHORT_IDS = "short_ids"
-
-
 def short_id(msg_id: str) -> str:
     return msg_id[:SHORT_ID]
-
-
-def accepts_short_ids(receiver: Peer) -> bool:
-    """True when the receiver can reply with the short id of a message.
-
-    A Codex agent starts `peers` for each reply, so it runs the installed version. A Claude
-    Code session keeps one MCP server process from its start, which can be an older version
-    that knows only full ids. A server that resolves short ids sets the capability.
-    """
-    return receiver.runtime == "codex" or SHORT_IDS in receiver.capabilities
 
 
 def _item(msg: Message, short_ids: bool) -> str:
@@ -205,8 +191,8 @@ def render(
 ) -> str:
     """The text that the receiver reads for one or more messages, oldest first.
 
-    `short_ids` shows the first characters of each message id. Pass `accepts_short_ids` of
-    the receiver: a receiver that cannot resolve a short id needs the full id to reply.
+    `short_ids` shows the first characters of each message id. Pass True only for a receiver
+    that can resolve a short id; any other receiver needs the full id to reply.
 
     Every body line is quoted, so a line without "> " comes from peermesh. `ending` adds the
     instruction about the final report: "after_completion" for a message that can start a new
