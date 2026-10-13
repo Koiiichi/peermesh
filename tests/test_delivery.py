@@ -79,7 +79,8 @@ def test_busy_target_gets_pending_message_and_no_native_delivery(world: World) -
     world.put("x", status="busy")
     [res] = world.mesh.send(world.peers["a"], "codex-x", "Renamed total() to sum().")
     assert res.status == "pending" and world.codex.calls == []
-    assert [w.id for w in world.mesh.inbox.waiting("codex:X")] == [res.msg_id]
+    [item] = world.mesh.inbox.waiting("codex:X")
+    assert item.id == res.msg_id and "> Renamed total() to sum()." in item.record["rendered"]
     assert _outcomes(world, str(res.msg_id)) == ["pending"]
 
 
