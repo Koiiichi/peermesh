@@ -12,6 +12,9 @@
 
 ### Added
 
+- `peers watch`: a live view of all sessions and the newest messages with their state. It needs the new dependency `rich`.
+- `peers thread MSG`: one conversation in order with full bodies, archived messages included.
+- `peers statusline`: a status line segment for Claude Code with the peermesh name of the session, its live peers and its waiting messages.
 - A hook that gives the agent peer messages mid-turn shows the user one line, for example `peermesh: gave the agent request from claude-shop-4b`. Claude Code and Codex show hook context only to the model.
 
 ### Fixed

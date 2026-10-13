@@ -94,6 +94,13 @@ class Ledger:
         with self.locked():
             return [*self._archived(), *self.entries()]
 
+    def thread(self, thread_id: str) -> list[dict[str, Any]]:
+        """The merged records of every message in one thread, oldest first, archives included."""
+        by_id: dict[str, dict[str, Any]] = {}
+        for entry in self._all_entries():
+            by_id.setdefault(str(entry.get("id")), {}).update(entry)
+        return [e for e in by_id.values() if e.get("thread", e.get("id")) == thread_id]
+
     def _archived(self) -> list[dict[str, Any]]:
         """The entries of all archives, oldest first. An unreadable archive is skipped."""
         entries: list[dict[str, Any]] = []
