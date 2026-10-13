@@ -99,7 +99,10 @@ class Ledger:
         by_id: dict[str, dict[str, Any]] = {}
         for entry in self._all_entries():
             by_id.setdefault(str(entry.get("id")), {}).update(entry)
-        return [e for e in by_id.values() if e.get("thread", e.get("id")) == thread_id]
+        found = [e for e in by_id.values() if e.get("thread", e.get("id")) == thread_id]
+        # Rotation keeps an open message in the active file while newer, final ones move to
+        # an archive, so the order of the files is not the order of the sends.
+        return sorted(found, key=lambda e: float(e.get("sent_at", 0.0)))
 
     def _archived(self) -> list[dict[str, Any]]:
         """The entries of all archives, oldest first. An unreadable archive is skipped."""
