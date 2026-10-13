@@ -80,10 +80,19 @@ class Ledger:
         also when one of them is archived, or it can act on the wrong one.
         """
         by_id: dict[str, dict[str, Any]] = {}
-        for entry in [*self._archived(), *self.entries()]:
+        for entry in self._all_entries():
             if str(entry.get("id", "")).startswith(prefix):
                 by_id.setdefault(str(entry["id"]), {}).update(entry)
         return [e for e in by_id.values() if "from" in e]
+
+    def _all_entries(self) -> list[dict[str, Any]]:
+        """The entries of the archives and then of the active file, as one consistent read.
+
+        The lock keeps a rotation from moving entries between the two reads, which would
+        hide them from both. The caller must not hold `locked()`: the lock is not reentrant.
+        """
+        with self.locked():
+            return [*self._archived(), *self.entries()]
 
     def _archived(self) -> list[dict[str, Any]]:
         """The entries of all archives, oldest first. An unreadable archive is skipped."""

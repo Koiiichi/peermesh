@@ -166,12 +166,26 @@ ENDINGS = {
 }
 
 
+# A session with this capability runs a peermesh that resolves a short message id.
+SHORT_IDS = "short_ids"
+
+
 def short_id(msg_id: str) -> str:
     return msg_id[:SHORT_ID]
 
 
-def _item(msg: Message) -> str:
-    notes = [f"msg {short_id(msg.id)}"]
+def accepts_short_ids(receiver: Peer) -> bool:
+    """True when the receiver can reply with the short id of a message.
+
+    A Codex agent starts `peers` for each reply, so it runs the installed version. A Claude
+    Code session keeps one MCP server process from its start, which can be an older version
+    that knows only full ids. A server that resolves short ids sets the capability.
+    """
+    return receiver.runtime == "codex" or SHORT_IDS in receiver.capabilities
+
+
+def _item(msg: Message, short_ids: bool) -> str:
+    notes = [f"msg {short_id(msg.id) if short_ids else msg.id}"]
     if msg.done:
         notes.append("the sender reports that the requested work is complete")
     if msg.kind == "info":
@@ -182,8 +196,17 @@ def _item(msg: Message) -> str:
     return f"{label} from {msg.from_name} ({msg.from_runtime}) · " + " · ".join(notes)
 
 
-def render(msgs: list[Message], for_runtime: Runtime, *, ending: Ending | None = None) -> str:
+def render(
+    msgs: list[Message],
+    for_runtime: Runtime,
+    *,
+    short_ids: bool = False,
+    ending: Ending | None = None,
+) -> str:
     """The text that the receiver reads for one or more messages, oldest first.
+
+    `short_ids` shows the first characters of each message id. Pass `accepts_short_ids` of
+    the receiver: a receiver that cannot resolve a short id needs the full id to reply.
 
     Every body line is quoted, so a line without "> " comes from peermesh. `ending` adds the
     instruction about the final report: "after_completion" for a message that can start a new
@@ -201,8 +224,10 @@ def render(msgs: list[Message], for_runtime: Runtime, *, ending: Ending | None =
         ]
     for number, msg in enumerate(msgs, 1):
         prefix = f"[{number}] " if len(msgs) > 1 else ""
-        lines += ["", prefix + _item(msg), _quote(msg.body)]
-    ref = short_id(msgs[0].id) if len(msgs) == 1 else "<msg>"
+        lines += ["", prefix + _item(msg, short_ids), _quote(msg.body)]
+    ref = "<msg>"
+    if len(msgs) == 1:
+        ref = short_id(msgs[0].id) if short_ids else msgs[0].id
     if for_runtime == "claude":
         how = f'Reply with peers_reply("{ref}", "<text>"). Add done=true for completed work.'
     else:

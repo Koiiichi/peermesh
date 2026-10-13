@@ -10,7 +10,14 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from peermesh import identity
-from peermesh.envelope import EnvelopeError, Message, is_ack_only, new_message, render
+from peermesh.envelope import (
+    EnvelopeError,
+    Message,
+    accepts_short_ids,
+    is_ack_only,
+    new_message,
+    render,
+)
 from peermesh.errors import PeerError
 from peermesh.inbox import Inbox, Waiting
 from peermesh.ledger import Ledger
@@ -408,7 +415,10 @@ class Mesh:
 
     def _deliver_native(self, target: Peer, msg: Message, *, after_completion: bool) -> SendResult:
         rendered = render(
-            [msg], target.runtime, ending="after_completion" if after_completion else None
+            [msg],
+            target.runtime,
+            short_ids=accepts_short_ids(target),
+            ending="after_completion" if after_completion else None,
         )
         outcome = self.transports[target.runtime].deliver(target, rendered, msg)
         if outcome.offline:
