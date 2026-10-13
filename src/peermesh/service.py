@@ -127,6 +127,10 @@ class Mesh:
                 peer.status = native[0]
         return peer
 
+    def all_peers(self) -> list[Peer]:
+        """Every live peer, with the status that Claude Code reports when it is newer."""
+        return [self._enrich(p) for p in self.registry.live()]
+
     def list_peers(self, me: Peer, scope: Scope = "repo") -> list[Peer]:
         return [self._enrich(p) for p in scoped(self.registry.live(), me, scope)]
 
