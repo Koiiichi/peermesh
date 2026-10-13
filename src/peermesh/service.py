@@ -389,7 +389,12 @@ class Mesh:
                     }
                 )
                 if to_inbox:
-                    self.inbox.put(target.id, msg.to_json())
+                    # A hook renders the waiting messages itself. peermesh 0.2.1 and older
+                    # read `rendered`, so the record keeps it for a session whose hooks run
+                    # an older version after a rollback.
+                    self.inbox.put(
+                        target.id, msg.to_json() | {"rendered": render([msg], target.runtime)}
+                    )
             except OSError:
                 return SendResult(
                     None,
