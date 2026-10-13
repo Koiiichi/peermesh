@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `--urgent` steers a busy Codex session on codex-cli 0.162 again. That version serves the daemon control socket as WebSocket, and the newline-delimited JSON that peermesh sent through `codex app-server proxy` was dropped. Each urgent message waited 10 seconds and then ran as the next turn. peermesh now speaks WebSocket to the socket and keeps the proxy for older versions.
+
 ## 0.3.1 — 2026-10-13
 
 ### Changed
