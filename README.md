@@ -74,6 +74,30 @@ A Claude result of `delivered` means the socket accepted it. The receiver's `cro
 
 The ledger `~/.peermesh/ledger.jsonl` keeps every message body. Past 1 MiB it moves to a gzip archive in `~/.peermesh/ledger-archive/`; peermesh keeps the newest 30 archives and deletes older ones.
 
+## Watch the sessions
+
+These three commands are for you, not for the agents. They read the registry and the ledger and change nothing.
+
+`peers watch` shows every live session and the newest messages, and updates once a second until you press ctrl+c:
+
+```text
+Sessions
+name                runtime  status  waiting  branch   directory
+claude-shop-4b      claude   busy             main     shop
+codex-shop-9f       codex    idle    1        review   shop-wt
+
+Messages
+time   from            to              state      text
+19:36  claude-shop-4b  codex-shop-9f   done       Please review cart.py
+19:38  codex-shop-9f   claude-shop-4b  delivered  One bug: rounding in line 12.
+```
+
+The state is the last thing that happened to a message: `pending`, `injected`, `delivered`, `queued`, `refused` or `undelivered`, then `answered` when the peer replied and `done` when it replied with `--done`. A terminal of 100 columns or more also shows the kind and the id of each message.
+
+`peers thread MSG` prints one conversation in order, with full bodies. `MSG` is the id of any message in it, as `peers watch` and `peers log` show it.
+
+`peers statusline` prints a status line segment for a Claude Code session, such as `claude-shop-4b · 2 peers · 1 waiting`: the peermesh name of the session, the live peers in its repository, and the messages that wait for it. Use it as the `statusLine` command in `~/.claude/settings.json`, or as a custom command in a status line tool such as ccstatusline.
+
 ## Safety limits
 
 - Every message carries the frame above, and every body line is quoted with `> `, so a body cannot imitate the frame.

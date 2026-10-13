@@ -159,7 +159,7 @@ class Mesh:
 
     def reply(self, me: Peer, msg_id: str, body: str, *, done: bool = False) -> SendResult:
         """Reply in the thread of msg_id. `done` reports that the requested work is complete."""
-        msg_id = self._full_id(msg_id, to=me.id)
+        msg_id = self.full_id(msg_id, to=me.id)
         original = self.ledger.find(msg_id)
         if original is None:
             raise PeerError(f"No message with id {msg_id!r} is in the ledger.")
@@ -222,7 +222,7 @@ class Mesh:
         quick = self.clock() - float(parent.get("sent_at", 0.0)) < LOOP_GAP_S
         return int(parent.get("hop", 0)) + 1 if quick else 0
 
-    def _full_id(self, ref: str, *, to: str | None = None) -> str:
+    def full_id(self, ref: str, *, to: str | None = None) -> str:
         """The message id that ref names. Frames show ids shortened to SHORT_ID characters.
 
         A prefix that matches no message comes back unchanged, so the caller reports the id as
@@ -481,7 +481,7 @@ class Mesh:
 
     def track(self, msg_id: str) -> dict[str, Any]:
         """The delivery history of one message and the replies to it."""
-        msg_id = self._full_id(msg_id)
+        msg_id = self.full_id(msg_id)
         record = self.ledger.find(msg_id)
         if record is None:
             raise PeerError(f"No message with id {msg_id!r} is in the ledger.")

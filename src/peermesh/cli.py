@@ -9,10 +9,9 @@ import shutil
 import sys
 import time
 import traceback
-from datetime import datetime
 from typing import Any
 
-from peermesh import paths
+from peermesh import paths, views
 from peermesh.envelope import short_id
 from peermesh.errors import PeerError
 from peermesh.service import Mesh, SendResult
@@ -77,26 +76,17 @@ def _results(args: argparse.Namespace, results: list[SendResult]) -> int:
     return 1 if any(r.status == "refused" for r in results) else 0
 
 
-def _printable(text: str) -> str:
-    """Text from a peer, safe to print: control characters show as escapes such as \\x1b.
-
-    A message body can hold terminal control sequences, which can clear the screen or set the
-    clipboard of the person who reads it.
-    """
-    return "".join(ch if ch.isprintable() else ch.encode("unicode_escape").decode() for ch in text)
-
-
 def _log_line(entry: dict[str, Any]) -> str:
     """One ledger entry on one terminal line: time, sender, target, kind, outcome, id, body."""
-    try:
-        when = datetime.fromisoformat(str(entry.get("ts"))).astimezone().strftime("%m-%d %H:%M")
-    except ValueError:
-        when = "--"
+    when = views.clock_time(entry)
     outcome = str(entry.get("outcome", ""))
-    sender, target = _printable(str(entry.get("from_name"))), _printable(str(entry.get("to_name")))
+    sender, target = (
+        views.printable(str(entry.get("from_name"))),
+        views.printable(str(entry.get("to_name"))),
+    )
     names = f"{when}  {sender} → {target}  {entry.get('kind')}  "
     tail = f"  msg {short_id(str(entry.get('id', '')))}  "
-    body = _printable(" ".join(str(entry.get("body") or entry.get("note") or "").split()))
+    body = views.one_line(entry)
     width = shutil.get_terminal_size().columns
     room = width - len(names + outcome + tail)
     if room < 2:
@@ -105,6 +95,15 @@ def _log_line(entry: dict[str, Any]) -> str:
     if len(body) > room:
         body = body[: room - 1] + "…"
     return names + _style(outcome, _OUTCOME_COLOR.get(outcome, "dim")) + tail + body
+
+
+def _statusline() -> int:
+    try:
+        payload = json.loads(sys.stdin.read() or "{}")
+        print(views.statusline(_mesh(), payload if isinstance(payload, dict) else {}))
+    except Exception:  # a status line must never show a traceback in the session
+        pass
+    return 0
 
 
 def _hook(args: argparse.Namespace) -> int:
@@ -158,6 +157,12 @@ def _parser() -> argparse.ArgumentParser:
     tr.add_argument("msg_id")
     lg = sub.add_parser("log")
     lg.add_argument("--limit", type=int, default=20)
+    th = sub.add_parser("thread", help="show one conversation in order")
+    th.add_argument("msg_id", help="the id of any message in the thread")
+    wa = sub.add_parser("watch", help="live view of sessions and messages")
+    wa.add_argument("--interval", type=float, default=1.0, help="seconds between updates")
+    wa.add_argument("--once", action="store_true", help="print the view one time")
+    sub.add_parser("statusline", help="status line segment for Claude Code")
     hk = sub.add_parser("hook")
     hk.add_argument(
         "event", choices=["session-start", "prompt", "post-tool", "stop", "session-end"]
@@ -177,6 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.cmd == "hook":
         return _hook(args)
+    if args.cmd == "statusline":
+        return _statusline()
     if args.cmd in ("doctor", "install", "uninstall"):
         from peermesh import install
 
@@ -186,6 +193,23 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "log":
             entries = mesh.ledger.latest()[-args.limit :]
             _print(args, entries, [_log_line(e) for e in entries])
+            return 0
+        if args.cmd == "watch":
+            from rich.console import Console
+
+            from peermesh import watch
+
+            # An agent shell gets plain text: Codex can run a command in a pty.
+            console = Console(no_color=not _styled(), highlight=False)
+            watch.watch(mesh, console, interval=args.interval, once=args.once or not _styled())
+            return 0
+        if args.cmd == "thread":
+            record = mesh.ledger.find(mesh.full_id(args.msg_id))
+            if record is None:
+                raise PeerError(f"No message with id {args.msg_id!r} is in the ledger.")
+            records = mesh.ledger.thread(str(record.get("thread", record["id"])))
+            width = shutil.get_terminal_size().columns
+            _print(args, records, views.thread_lines(records, width, _style))
             return 0
         if args.cmd == "status":
             data = mesh.status(args.target)
