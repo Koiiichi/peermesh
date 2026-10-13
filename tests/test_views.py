@@ -189,3 +189,14 @@ def test_views_show_control_sequences_as_text(mesh: Mesh) -> None:
     assert "copy \\x1b]52;c;ZXZpbA==\\x07 now" in shown and "fix\\x1b[2J" in shown
     lines = views.thread_lines(mesh.ledger.thread(str(sent.msg_id)), 100, lambda t, c: t)
     assert "  copy \\x1b]52;c;ZXZpbA==\\x07 now" in lines and "  clear \\x1b[2J" in lines
+
+
+def test_ledger_thread_orders_by_send_time_across_files(mesh: Mesh) -> None:
+    led = mesh.ledger
+    older = {"id": "m1", "from": "a", "thread": "m1", "sent_at": 1.0, "outcome": "pending"}
+    newer = {"id": "m2", "from": "b", "thread": "m1", "sent_at": 2.0, "outcome": "delivered"}
+    paths.ensure_private_dir(led.archive_dir)
+    with gzip.open(led.archive_dir / "ledger-00000000000000000001.jsonl.gz", "wt") as fh:
+        fh.write(json.dumps(newer) + "\n")
+    led.path.write_text(json.dumps(older) + "\n")
+    assert [r["id"] for r in led.thread("m1")] == ["m1", "m2"]
