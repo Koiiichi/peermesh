@@ -121,3 +121,19 @@ def test_log_line_fits_the_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     line = cli._log_line(entry)
     assert line.startswith("10-10 02:33  codex-me → claude-p  request  injected  msg 01234567  ")
     assert len(line) == 100 and line.endswith("…") and "\n" not in line
+
+
+def test_log_line_shows_control_sequences_as_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COLUMNS", "200")
+    entry = {
+        "id": "0" * 32,
+        "ts": "2026-10-10T09:33:12+00:00",
+        "from_name": "codex-me",
+        "to_name": "claude-p",
+        "kind": "info",
+        "outcome": "delivered",
+        "body": "copy \x1b]52;c;ZXZpbA==\x07 then clear \x1b[2J done",
+    }
+    line = cli._log_line(entry)
+    assert "\x1b" not in line and "\x07" not in line
+    assert "copy \\x1b]52;c;ZXZpbA==\\x07 then clear \\x1b[2J done" in line

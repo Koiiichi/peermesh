@@ -77,6 +77,15 @@ def _results(args: argparse.Namespace, results: list[SendResult]) -> int:
     return 1 if any(r.status == "refused" for r in results) else 0
 
 
+def _printable(text: str) -> str:
+    """Text from a peer, safe to print: control characters show as escapes such as \\x1b.
+
+    A message body can hold terminal control sequences, which can clear the screen or set the
+    clipboard of the person who reads it.
+    """
+    return "".join(ch if ch.isprintable() else ch.encode("unicode_escape").decode() for ch in text)
+
+
 def _log_line(entry: dict[str, Any]) -> str:
     """One ledger entry on one terminal line: time, sender, target, kind, outcome, id, body."""
     try:
@@ -84,9 +93,10 @@ def _log_line(entry: dict[str, Any]) -> str:
     except ValueError:
         when = "--"
     outcome = str(entry.get("outcome", ""))
-    names = f"{when}  {entry.get('from_name')} → {entry.get('to_name')}  {entry.get('kind')}  "
+    sender, target = _printable(str(entry.get("from_name"))), _printable(str(entry.get("to_name")))
+    names = f"{when}  {sender} → {target}  {entry.get('kind')}  "
     tail = f"  msg {short_id(str(entry.get('id', '')))}  "
-    body = " ".join(str(entry.get("body") or entry.get("note") or "").split())
+    body = _printable(" ".join(str(entry.get("body") or entry.get("note") or "").split()))
     room = max(20, shutil.get_terminal_size().columns - len(names + outcome + tail))
     if len(body) > room:
         body = body[: room - 1] + "…"
