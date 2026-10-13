@@ -202,7 +202,8 @@ class _WsRpc:
         try:
             self._send(0x1, json.dumps({"id": rid, "method": method, "params": params}).encode())
         except OSError as exc:
-            # The request did not leave this process, so the server did not receive it.
+            # sendall raises only when the kernel did not take every byte, so the server has
+            # at most a part of one frame. It cannot read a part of a frame as a request.
             raise RpcError(f"{method} was not sent: {exc}") from exc
         # One deadline covers every frame, so pings and other messages cannot extend the wait.
         deadline = time.monotonic() + self._timeout
