@@ -96,7 +96,7 @@ The state is the last thing that happened to a message: `pending`, `injected`, `
 
 `peers thread MSG` prints one conversation in order, with full bodies. `MSG` is the id of any message in it, as `peers watch` and `peers log` show it.
 
-`peers statusline` prints a status line segment for a Claude Code session, such as `claude-shop-4b · 2 peers · 1 waiting`: the peermesh name of the session, the live peers in its repository, and the messages that wait for it. Use it as the `statusLine` command in `~/.claude/settings.json`, or as a custom command in a status line tool such as ccstatusline.
+`peers statusline` prints a status line segment for a Claude Code session, such as `in 1 waiting · out 2 pending, 1 delivered, 3 answered`: the messages that wait for the session, and the messages it sent in the last hour by what happened to them (`pending`, `delivered`, `answered`, `failed`). `delivered` means that the runtime of the peer has the message; no runtime reports that it was read. A session with neither shows `no peer messages`. Use it as the `statusLine` command in `~/.claude/settings.json`, or as a custom command in a status line tool such as ccstatusline.
 
 ## Safety limits
 
