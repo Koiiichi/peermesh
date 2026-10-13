@@ -153,12 +153,16 @@ class _WsRpc:
         masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
         self._sock.sendall(bytes([0x80 | opcode]) + length + mask + masked)
 
+    def _arm(self, deadline: float) -> None:
+        """Limit the next socket call to the time that remains before the deadline."""
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        self._sock.settimeout(remaining)
+
     def _read(self, size: int, deadline: float) -> bytes:
         while len(self._buf) < size:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError
-            self._sock.settimeout(remaining)
+            self._arm(deadline)
             chunk = self._sock.recv(65536)
             if not chunk:
                 raise EOFError
@@ -170,6 +174,8 @@ class _WsRpc:
         """The next complete message. Answers a ping, and joins the frames of one message."""
         parts = b""
         while True:
+            # Frames that are in the buffer already need no read, and a pong is a write.
+            self._arm(deadline)
             first, second = self._read(2, deadline)
             size = second & 0x7F
             if size == 126:
