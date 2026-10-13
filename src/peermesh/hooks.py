@@ -177,6 +177,10 @@ def handle(
         return None
     if event == "post-tool":
         return _post_tool(mesh, peer_id, emit)
+    if runtime == "codex" and "transcript_path" in payload and not payload["transcript_path"]:
+        # Codex gives a null path for an ephemeral thread, such as a one-time review. It has
+        # no rollout file, so `codex queue` cannot reach it and nothing shows when it closes.
+        return None
     cwd = str(payload.get("cwd") or os.getcwd())
     peer = mesh.registry.get(peer_id)
     if peer is None or not is_alive(peer):

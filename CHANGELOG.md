@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Ephemeral Codex threads, such as the one-time review threads of the Codex plugin for Claude Code, are not registered as peers. They have no rollout file, so they cannot be woken, and they stayed in the peer list until their host process ended.
 - `peers statusline` shows message status, not the session name and the peer count: the messages that wait for the session, and the messages it sent in the last hour as `pending`, `delivered`, `answered` or `failed`.
 
 ## 0.3.0 — 2026-10-13
