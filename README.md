@@ -61,7 +61,7 @@ Codex gets the command instead of MCP tools because Codex does not pass its thre
 | idle, information | waits; injected at the next prompt or tool call, so it never opens a new turn | the same |
 | idle, request, handoff, review or reply | the socket write starts a turn | `codex queue` starts a turn |
 | turn ends with messages waiting | information keeps waiting; a request continues the turn once | the same |
-| busy, `--urgent` request | sent with Claude's `now` priority | `turn/steer` when the shared app-server daemon hosts the thread, else injected at the next tool call |
+| busy, `--urgent` request | sent with Claude's `now` priority | `turn/steer` when the shared app-server daemon hosts the thread, else injected at the next tool call. codex-cli 0.162 hosts terminal sessions on the daemon; the Codex app and the IDE extensions run a private app-server |
 | gone | refused; the stale record is removed | refused when its process is gone or its thread is archived; the record is removed |
 
 Agents send finished work that a peer waits for as `handoff`, which wakes an idle peer; `info` is for facts a peer can read later. A message that can reach an agent after it finished its task, at the end of a turn or as a new turn, tells it to write its final report again as its last message if it does work for them, so the report for the user is not buried under the peer exchange. If the messages need no work, the agent writes one short sentence instead. A turn continues for peer messages at most once. Waiting messages of a session that ends are marked undelivered.

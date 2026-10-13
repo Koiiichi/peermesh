@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import queue
 import shutil
+import socket
+import struct
 import subprocess
 import threading
 import time
@@ -86,6 +89,133 @@ class _Rpc:
             return result if isinstance(result, dict) else {}
 
 
+class _WsRpc:
+    """JSON-RPC over a WebSocket on the daemon socket, one message in each text frame.
+
+    Codex 0.162 serves the control socket this way. The client side of RFC 6455 that the
+    daemon needs is small, so it is written here and peermesh takes no WebSocket dependency.
+    """
+
+    HANDSHAKE_S = 2.0
+
+    def __init__(self, sock: socket.socket, timeout: float, buffered: bytes) -> None:
+        self._sock = sock
+        self._timeout = timeout
+        self._buf = buffered
+        self._next = 0
+
+    @classmethod
+    def connect(cls, path: Path, timeout: float) -> _WsRpc | None:
+        """Open the socket and upgrade it. None means that it does not serve WebSocket."""
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(cls.HANDSHAKE_S)
+        key = base64.b64encode(os.urandom(16)).decode()
+        try:
+            # The daemon socket is a symlink into a short directory. The resolved path stays
+            # under the length limit of a Unix socket address when CODEX_HOME is deep.
+            sock.connect(os.path.realpath(path))
+            sock.sendall(
+                (
+                    "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n"
+                    f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
+                    "Sec-WebSocket-Version: 13\r\n\r\n"
+                ).encode()
+            )
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise OSError("closed during the handshake")
+                data += chunk
+        except OSError:
+            sock.close()
+            return None
+        head, _, rest = data.partition(b"\r\n\r\n")
+        if b" 101 " not in head.split(b"\r\n", 1)[0] + b" ":
+            sock.close()
+            return None
+        sock.settimeout(timeout)
+        return cls(sock, timeout, rest)
+
+    def close(self) -> None:
+        self._sock.close()
+
+    def _send(self, opcode: int, payload: bytes) -> None:
+        size = len(payload)
+        if size < 126:
+            length = bytes([0x80 | size])
+        elif size < 1 << 16:
+            length = bytes([0x80 | 126]) + struct.pack(">H", size)
+        else:
+            length = bytes([0x80 | 127]) + struct.pack(">Q", size)
+        # A client must mask every frame (RFC 6455, section 5.3).
+        mask = os.urandom(4)
+        masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
+        self._sock.sendall(bytes([0x80 | opcode]) + length + mask + masked)
+
+    def _read(self, size: int) -> bytes:
+        while len(self._buf) < size:
+            chunk = self._sock.recv(65536)
+            if not chunk:
+                raise EOFError
+            self._buf += chunk
+        out, self._buf = self._buf[:size], self._buf[size:]
+        return out
+
+    def _recv(self) -> Any:
+        """The next complete message. Answers a ping, and joins the frames of one message."""
+        parts = b""
+        while True:
+            first, second = self._read(2)
+            size = second & 0x7F
+            if size == 126:
+                size = struct.unpack(">H", self._read(2))[0]
+            elif size == 127:
+                size = struct.unpack(">Q", self._read(8))[0]
+            payload = self._read(size)
+            opcode = first & 0x0F
+            if opcode == 0x9:
+                self._send(0xA, payload)
+            elif opcode == 0x8:
+                raise EOFError
+            elif opcode in (0x0, 0x1, 0x2):
+                parts += payload
+                if first & 0x80:
+                    return json.loads(parts)
+
+    def notify(self, method: str, params: dict[str, Any]) -> None:
+        self._send(0x1, json.dumps({"method": method, "params": params}).encode())
+
+    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self._next += 1
+        rid = self._next
+        try:
+            self._send(0x1, json.dumps({"id": rid, "method": method, "params": params}).encode())
+        except OSError as exc:
+            # The request did not leave this process, so the server did not receive it.
+            raise RpcError(f"{method} was not sent: {exc}") from exc
+        deadline = time.monotonic() + self._timeout
+        while time.monotonic() < deadline:
+            try:
+                msg = self._recv()
+            except (OSError, EOFError, ValueError):
+                # The request was sent. No answer does not show that the server dropped it.
+                raise TimeoutError(method) from None
+            if not isinstance(msg, dict) or msg.get("id") != rid:
+                continue
+            if "error" in msg:
+                raise RpcError(str(msg["error"]))
+            result = msg.get("result")
+            return result if isinstance(result, dict) else {}
+        raise TimeoutError(method)
+
+
+class _Channel(Protocol):
+    def notify(self, method: str, params: dict[str, Any]) -> None: ...
+
+    def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]: ...
+
+
 SteerResult = Literal["steered", "not_steered", "unknown"]
 
 
@@ -107,6 +237,13 @@ class AppServerSteerer:
     def steer(self, thread_id: str, text: str) -> SteerResult:
         if not daemon_socket().exists():
             return "not_steered"
+        ws = _WsRpc.connect(daemon_socket(), self.timeout)
+        if ws is not None:
+            try:
+                return self._steer(ws, thread_id, text)
+            finally:
+                ws.close()
+        # Codex 0.155 serves newline-delimited JSON, which `app-server proxy` relays.
         proc = subprocess.Popen(
             [self.exe, "app-server", "proxy"],
             stdin=subprocess.PIPE,
@@ -123,7 +260,7 @@ class AppServerSteerer:
             except subprocess.TimeoutExpired:
                 proc.kill()
 
-    def _steer(self, rpc: _Rpc, thread_id: str, text: str) -> SteerResult:
+    def _steer(self, rpc: _Channel, thread_id: str, text: str) -> SteerResult:
         try:
             rpc.request("initialize", {"clientInfo": {"name": "peermesh", "version": __version__}})
             rpc.notify("initialized", {})
