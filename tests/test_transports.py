@@ -7,6 +7,7 @@ import stat
 import struct
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -264,9 +265,16 @@ def test_codex_queue_closed_thread_is_offline(
 class FakeDaemon:
     """A WebSocket app-server on a Unix socket, enough of RFC 6455 for one client."""
 
-    def __init__(self, codex_home: Path, *, turn_status: str = "inProgress", hang: bool = False):
+    def __init__(
+        self,
+        codex_home: Path,
+        *,
+        turn_status: str = "inProgress",
+        hang: bool = False,
+        ping_forever: bool = False,
+    ):
         self.steers: list[dict[str, object]] = []
-        self.turn_status, self.hang = turn_status, hang
+        self.turn_status, self.hang, self.ping_forever = turn_status, hang, ping_forever
         # A Unix socket address has a short length limit, and pytest paths are long.
         self.dir = tempfile.mkdtemp(dir="/tmp", prefix="pm-ws-")
         self.server = socket.socket(socket.AF_UNIX)
@@ -320,6 +328,9 @@ class FakeDaemon:
                     }
                 elif msg["method"] == "turn/steer":
                     self.steers.append(msg["params"])
+                    while self.ping_forever:
+                        conn.sendall(self._frame(0x9, b"ping"))
+                        time.sleep(0.01)
                     if self.hang:
                         continue
                     result = {"turnId": "turn-9"}
@@ -371,6 +382,20 @@ def test_unanswered_websocket_steer_is_not_queued_again(
     msg = new_message(a, b, "stop", kind="request", urgency="now")
     transport = CodexTransport(steerer_factory=lambda exe: AppServerSteerer(exe, timeout=1.0))
     outcome = transport.deliver(b, "R", msg)
+    assert outcome.status == "refused" and "Do not resend" in outcome.note
+    assert len(daemon.steers) == 1 and _log(stub_codex) == []
+
+
+def test_pings_do_not_extend_the_wait_for_a_steer_answer(
+    make_peer: Callable[..., Peer], stub_codex: Path
+) -> None:
+    daemon = FakeDaemon(paths.codex_home(), ping_forever=True)
+    a, b = _pair(make_peer, status="busy")
+    msg = new_message(a, b, "stop", kind="request", urgency="now")
+    transport = CodexTransport(steerer_factory=lambda exe: AppServerSteerer(exe, timeout=0.3))
+    started = time.monotonic()
+    outcome = transport.deliver(b, "R", msg)
+    assert time.monotonic() - started < 2.0
     assert outcome.status == "refused" and "Do not resend" in outcome.note
     assert len(daemon.steers) == 1 and _log(stub_codex) == []
 
