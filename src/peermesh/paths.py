@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 
@@ -16,6 +17,12 @@ def claude_dir() -> Path:
 
 def codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+
+def state_file(peer_id: str, kind: str) -> Path:
+    """The file that holds one kind of state for one session, outside its registry record."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", peer_id)
+    return home() / "state" / f"{safe}.{kind}"
 
 
 def ensure_private_dir(path: Path) -> Path:

@@ -97,7 +97,11 @@ def _log_line(entry: dict[str, Any]) -> str:
     names = f"{when}  {sender} → {target}  {entry.get('kind')}  "
     tail = f"  msg {short_id(str(entry.get('id', '')))}  "
     body = _printable(" ".join(str(entry.get("body") or entry.get("note") or "").split()))
-    room = max(20, shutil.get_terminal_size().columns - len(names + outcome + tail))
+    width = shutil.get_terminal_size().columns
+    room = width - len(names + outcome + tail)
+    if room < 2:
+        # The fixed fields fill the line. Cut the plain line, so it never wraps.
+        return (names + outcome + tail).rstrip()[: width - 1] + "…"
     if len(body) > room:
         body = body[: room - 1] + "…"
     return names + _style(outcome, _OUTCOME_COLOR.get(outcome, "dim")) + tail + body

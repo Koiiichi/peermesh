@@ -9,11 +9,10 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from peermesh import identity
+from peermesh import identity, paths
 from peermesh.envelope import (
     EnvelopeError,
     Message,
-    accepts_short_ids,
     is_ack_only,
     new_message,
     render,
@@ -43,6 +42,8 @@ MIN_PREFIX = 6
 SENT_OUTCOMES = ("delivered", "queued", "pending", "injected")
 # Agents routed refused messages through Claude Code's own session messaging, which has no limits.
 NO_DETOUR = "Do not send the message through a different channel."
+# The kind of state file that a session writes when its peermesh resolves a short message id.
+SHORT_IDS = "short-ids"
 PENDING_NOTE = "The peer reads the message at its next tool call or prompt."
 # How a ledger outcome reads for a person or an agent that tracks one message.
 STATES = {
@@ -512,6 +513,28 @@ class Mesh:
                 for r in replies
             ],
         }
+
+
+def accepts_short_ids(receiver: Peer) -> bool:
+    """True when the receiver can reply with the short id of a message.
+
+    A Codex agent starts `peers` for each reply, so it runs the installed version. A Claude
+    Code session keeps one MCP server process from its start, which can be an older version
+    that knows only full ids. A server that resolves short ids writes the state file.
+    """
+    return receiver.runtime == "codex" or paths.state_file(receiver.id, SHORT_IDS).exists()
+
+
+def announce_short_ids(peer: Peer) -> None:
+    """Record that the process of peer resolves short ids.
+
+    The fact has its own file: a write of the registry record from a long-lived process can
+    replace a status that a hook wrote a moment before.
+    """
+    marker = paths.state_file(peer.id, SHORT_IDS)
+    if not marker.exists():
+        paths.ensure_private_dir(marker.parent)
+        marker.touch(mode=0o600)
 
 
 def _wants_inbox(target: Peer, msg: Message) -> bool:

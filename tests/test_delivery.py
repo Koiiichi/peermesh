@@ -13,7 +13,7 @@ from peermesh import hooks, install, paths
 from peermesh.envelope import ENDINGS, INFO_NOTE, Message
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry
-from peermesh.service import Mesh
+from peermesh.service import Mesh, accepts_short_ids, announce_short_ids
 from peermesh.transports import Outcome
 
 
@@ -353,7 +353,7 @@ def test_hooks_tell_the_user_which_messages_the_agent_got(world: World) -> None:
 def test_claude_receiver_gets_short_ids_only_after_its_server_supports_them(world: World) -> None:
     [first] = world.mesh.send(world.peers["a"], "claude-b", "Please rebase.", kind="request")
     assert f'peers_reply("{first.msg_id}", "<text>")' in world.claude.calls[0][1]
-    world.put("b", capabilities=["inbox", "short_ids"])
+    announce_short_ids(world.peers["b"])
     [second] = world.mesh.send(world.peers["a"], "claude-b", "Please rebase again.", kind="request")
     assert f'peers_reply("{str(second.msg_id)[:8]}", "<text>")' in world.claude.calls[1][1]
     world.put("b", status="busy")
@@ -361,3 +361,6 @@ def test_claude_receiver_gets_short_ids_only_after_its_server_supports_them(worl
     out, _ = _hook(world, "post-tool", "b")
     context = out["hookSpecificOutput"]["additionalContext"]
     assert f'peers_reply("{str(third.msg_id)[:8]}", "<text>")' in context
+    assert accepts_short_ids(world.peers["x"]) and not accepts_short_ids(world.peers["a"])
+    _hook(world, "session-end", "b")
+    assert not accepts_short_ids(world.peers["b"])
