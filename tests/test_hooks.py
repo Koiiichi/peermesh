@@ -192,3 +192,27 @@ def test_hook_cli_prints_the_rules_for_an_unregistered_session() -> None:
     assert (
         "not registered yet" in json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
     )
+
+
+def test_ephemeral_codex_thread_is_not_registered() -> None:
+    mesh = _mesh()
+    for event in ("session-start", "prompt", "stop"):
+        payload = {"session_id": "REVIEW", "cwd": os.getcwd(), "transcript_path": None}
+        out = hooks.handle(mesh, event, "codex", payload, env={}, host_pid=os.getpid())
+        assert out is None
+    assert mesh.registry.get("codex:REVIEW") is None
+    # A payload without the key comes from a Codex that does not report the path.
+    hooks.handle(
+        mesh, "session-start", "codex", {"session_id": "OLD"}, env={}, host_pid=os.getpid()
+    )
+    assert mesh.registry.get("codex:OLD") is not None
+    # Claude Code has no ephemeral threads; a missing path there changes nothing.
+    hooks.handle(
+        mesh,
+        "session-start",
+        "claude",
+        {"session_id": "C", "transcript_path": None},
+        env={"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/none.sock"},
+        host_pid=os.getpid(),
+    )
+    assert mesh.registry.get("claude:C") is not None
