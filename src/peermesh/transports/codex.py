@@ -153,8 +153,12 @@ class _WsRpc:
         masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
         self._sock.sendall(bytes([0x80 | opcode]) + length + mask + masked)
 
-    def _read(self, size: int) -> bytes:
+    def _read(self, size: int, deadline: float) -> bytes:
         while len(self._buf) < size:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            self._sock.settimeout(remaining)
             chunk = self._sock.recv(65536)
             if not chunk:
                 raise EOFError
@@ -162,17 +166,17 @@ class _WsRpc:
         out, self._buf = self._buf[:size], self._buf[size:]
         return out
 
-    def _recv(self) -> Any:
+    def _recv(self, deadline: float) -> Any:
         """The next complete message. Answers a ping, and joins the frames of one message."""
         parts = b""
         while True:
-            first, second = self._read(2)
+            first, second = self._read(2, deadline)
             size = second & 0x7F
             if size == 126:
-                size = struct.unpack(">H", self._read(2))[0]
+                size = struct.unpack(">H", self._read(2, deadline))[0]
             elif size == 127:
-                size = struct.unpack(">Q", self._read(8))[0]
-            payload = self._read(size)
+                size = struct.unpack(">Q", self._read(8, deadline))[0]
+            payload = self._read(size, deadline)
             opcode = first & 0x0F
             if opcode == 0x9:
                 self._send(0xA, payload)
@@ -194,10 +198,11 @@ class _WsRpc:
         except OSError as exc:
             # The request did not leave this process, so the server did not receive it.
             raise RpcError(f"{method} was not sent: {exc}") from exc
+        # One deadline covers every frame, so pings and other messages cannot extend the wait.
         deadline = time.monotonic() + self._timeout
-        while time.monotonic() < deadline:
+        while True:
             try:
-                msg = self._recv()
+                msg = self._recv(deadline)
             except (OSError, EOFError, ValueError):
                 # The request was sent. No answer does not show that the server dropped it.
                 raise TimeoutError(method) from None
@@ -207,7 +212,6 @@ class _WsRpc:
                 raise RpcError(str(msg["error"]))
             result = msg.get("result")
             return result if isinstance(result, dict) else {}
-        raise TimeoutError(method)
 
 
 class _Channel(Protocol):
