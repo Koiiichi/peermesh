@@ -137,11 +137,34 @@ def test_thread_command_accepts_a_short_id(mesh: Mesh, capsys: pytest.CaptureFix
     assert cli.main(["thread", "0" * 32]) == 2
 
 
-def test_statusline_names_the_session_and_counts(mesh: Mesh) -> None:
-    assert views.statusline(mesh, {"session_id": "A"}) == "claude-a · 1 peer"
-    mesh.inbox.put("claude:A", {"id": "w" * 32, "kind": "info"})
-    assert views.statusline(mesh, {"session_id": "A"}) == "claude-a · 1 peer · 1 waiting"
+def test_statusline_counts_waiting_and_sent_messages_by_state(mesh: Mesh) -> None:
+    assert views.statusline(mesh, {"session_id": "A"}) == "no peer messages"
     assert views.statusline(mesh, {"session_id": "unknown"}) == ""
+    a, x = mesh.registry.get("claude:A"), mesh.registry.get("codex:X")
+    assert a is not None and x is not None
+    mesh.inbox.put("claude:A", {"id": "w" * 32, "kind": "info"})
+    assert views.statusline(mesh, {"session_id": "A"}) == "in 1 waiting"
+    request, _ = _exchange(mesh)
+    mesh.send(a, "codex-x", "Schema v2 is live.", kind="handoff")
+    x.status, x.capabilities = "busy", ["inbox"]
+    mesh.registry.put(x)
+    mesh.send(a, "codex-x", "Please rebase.", kind="request")
+    mesh.send(a, "nobody", "Is anyone there?")
+    assert views.statusline(mesh, {"session_id": "A"}) == (
+        "in 1 waiting · out 1 pending, 1 delivered, 1 answered, 1 failed"
+    )
+    # The reply that codex-x sent counts for codex-x, not for this session.
+    assert request in {r["id"] for r in views.message_rows(mesh.ledger.latest())}
+
+
+def test_statusline_drops_messages_older_than_the_window(mesh: Mesh) -> None:
+    a = mesh.registry.get("claude:A")
+    assert a is not None
+    mesh.send(a, "codex-x", "Schema v2 is live.", kind="handoff")
+    assert views.statusline(mesh, {"session_id": "A"}) == "out 1 delivered"
+    start = mesh.clock()
+    mesh.clock = lambda: start + views.STATUSLINE_WINDOW_S + 1
+    assert views.statusline(mesh, {"session_id": "A"}) == "no peer messages"
 
 
 def test_statusline_command_never_fails(
@@ -151,7 +174,7 @@ def test_statusline_command_never_fails(
     assert cli.main(["statusline"]) == 0 and capsys.readouterr().out == ""
     monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id": "A"}'))
     assert cli.main(["statusline"]) == 0
-    assert capsys.readouterr().out == "claude-a · 1 peer\n"
+    assert capsys.readouterr().out == "no peer messages\n"
 
 
 def test_watch_once_prints_plain_text_for_an_agent(

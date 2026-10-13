@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- `peers statusline` shows message status, not the session name and the peer count: the messages that wait for the session, and the messages it sent in the last hour as `pending`, `delivered`, `answered` or `failed`.
+
 ## 0.3.0 — 2026-10-13
 
 Peer messages are shorter, a hook tells you when it gives the agent a message, and three commands let you watch the sessions.

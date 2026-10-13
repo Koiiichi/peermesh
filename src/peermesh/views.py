@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import Any
 
 from peermesh.envelope import short_id
-from peermesh.registry import scoped
 from peermesh.service import SENT_OUTCOMES, Mesh
 
 STATE_STYLE = {
@@ -110,17 +109,44 @@ def thread_lines(
     return lines
 
 
+# The status line counts the messages that a session sent in this many seconds.
+STATUSLINE_WINDOW_S = 3600.0
+# Status line words for the states of `message_rows`, in the order shown.
+_SENT_WORDS = {
+    "pending": "pending",
+    "sending": "pending",
+    "injected": "delivered",
+    "delivered": "delivered",
+    "queued": "delivered",
+    "answered": "answered",
+    "done": "answered",
+    "refused": "failed",
+    "undelivered": "failed",
+}
+
+
 def statusline(mesh: Mesh, payload: Mapping[str, Any]) -> str:
     """The status line segment of one Claude Code session, or "" when it is not registered.
 
-    `payload` is the JSON that Claude Code gives a status line command on stdin.
+    `payload` is the JSON that Claude Code gives a status line command on stdin. The segment
+    counts the messages that wait for the session, and the messages that it sent in the last
+    hour by what happened to them: "in 1 waiting · out 2 pending, 1 answered". "delivered"
+    means that the runtime of the peer has the message; no runtime reports that it was read.
     """
     me = mesh.registry.get(f"claude:{payload.get('session_id')}")
     if me is None:
         return ""
-    peers = len(scoped(mesh.registry.live(), me, "repo"))
-    parts = [me.name, f"{peers} peer" + ("" if peers == 1 else "s")]
+    parts = []
     waiting = len(mesh.inbox.waiting(me.id))
     if waiting:
-        parts.append(f"{waiting} waiting")
-    return " · ".join(parts)
+        parts.append(f"in {waiting} waiting")
+    since = mesh.clock() - STATUSLINE_WINDOW_S
+    counts: dict[str, int] = {}
+    for row in message_rows(mesh.ledger.latest()):
+        word = _SENT_WORDS.get(str(row["state"]))
+        if word and row.get("from") == me.id and float(row.get("sent_at", 0.0)) >= since:
+            counts[word] = counts.get(word, 0) + 1
+    if counts:
+        order = dict.fromkeys(_SENT_WORDS.values())
+        parts.append("out " + ", ".join(f"{counts[w]} {w}" for w in order if w in counts))
+    return " · ".join(parts) or "no peer messages"
