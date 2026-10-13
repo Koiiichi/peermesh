@@ -74,24 +74,16 @@ class Ledger:
         return None
 
     def with_prefix(self, prefix: str) -> list[dict[str, Any]]:
-        """The merged message records whose id starts with prefix.
+        """The merged message records whose id starts with prefix, archives included.
 
-        The active file answers first. The archives are read only when it holds no match: a
-        short id is almost always the id of a recent message, and a read of every archive on
-        each reply costs more than the lookup is worth.
+        The archives are always read: a caller must see two messages that share a prefix
+        also when one of them is archived, or it can act on the wrong one.
         """
-
-        def matches(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-            by_id: dict[str, dict[str, Any]] = {}
-            for entry in entries:
-                if str(entry.get("id", "")).startswith(prefix):
-                    by_id.setdefault(str(entry["id"]), {}).update(entry)
-            return [e for e in by_id.values() if "from" in e]
-
-        found = matches(self.entries())
-        if found:
-            return found
-        return matches(self._archived())
+        by_id: dict[str, dict[str, Any]] = {}
+        for entry in [*self._archived(), *self.entries()]:
+            if str(entry.get("id", "")).startswith(prefix):
+                by_id.setdefault(str(entry["id"]), {}).update(entry)
+        return [e for e in by_id.values() if "from" in e]
 
     def _archived(self) -> list[dict[str, Any]]:
         """The entries of all archives, oldest first. An unreadable archive is skipped."""
