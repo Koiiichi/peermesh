@@ -345,7 +345,7 @@ def test_hooks_write_no_notice_in_the_session_that_has_the_mod(world: World) -> 
     # A session that a mod session started inherits the variable. It has no mod of its own.
     world.mesh.send(world.peers["a"], "claude-b", "One more.", kind="request")
     out, _ = _hook(world, "post-tool", "b", env={hooks.MOD_ENV: "A"})
-    assert out["systemMessage"] == "peermesh: gave the agent request from claude-a"
+    assert out["systemMessage"] == "peermesh: ← claude-a · request  One more."
     world.mesh.send(world.peers["a"], "claude-b", "Run the tests.", kind="request")
     out, _ = _hook(world, "prompt", "b", env={hooks.MOD_ENV: "B"})
     assert "systemMessage" not in out and "Run the tests." in str(out)
@@ -355,10 +355,10 @@ def test_hooks_tell_the_user_which_messages_the_agent_got(world: World) -> None:
     world.put("b", status="busy")
     world.mesh.send(world.peers["a"], "claude-b", "Please rebase.", kind="request")
     out, _ = _hook(world, "post-tool", "b")
-    assert out["systemMessage"] == "peermesh: gave the agent request from claude-a"
+    assert out["systemMessage"] == "peermesh: ← claude-a · request  Please rebase."
     world.mesh.send(world.peers["a"], "claude-b", "Run the tests.", kind="review_request")
     out, _ = _hook(world, "prompt", "b")
-    assert out["systemMessage"] == "peermesh: gave the agent review request from claude-a"
+    assert out["systemMessage"] == "peermesh: ← claude-a · review request  Run the tests."
     # Both runtimes show the Stop body to the user, so a notice would repeat it.
     world.put("b", status="busy")
     world.mesh.send(world.peers["a"], "claude-b", "One more check.", kind="request")
