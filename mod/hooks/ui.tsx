@@ -79,6 +79,8 @@ export type PaneData = {
   messages: readonly Message[]
   view: View
   notice: Notice
+  /** A send from the pane runs. The pane draws no text field until it ends. */
+  isSending: boolean
   columns: number
 }
 
@@ -104,6 +106,7 @@ export function paneTree(T: ElementTable, data: PaneData, on: PaneHandlers): Ren
 
   return (
     <Box flexDirection="column">
+      {data.isSending && <Text color="warning">sending…</Text>}
       {data.notice !== null && (
         <Text color={data.notice.isError ? 'error' : 'success'}>{data.notice.text}</Text>
       )}
@@ -249,7 +252,7 @@ function peerView(T: ElementTable, data: PaneData, peer: Peer, on: PaneHandlers)
         {shortDir(peer.dir)}
         {peer.branch !== null ? ` · ${peer.branch}` : ''}
       </Text>
-      {'Input' in T && peer.id !== data.me && (
+      {'Input' in T && !data.isSending && peer.id !== data.me && (
         <Box marginTop={1}>
           <T.Input
             key={`to:${peer.id}`}
@@ -307,7 +310,7 @@ function threadView(
           </Box>
         )
       })}
-      {'Input' in T && answered !== undefined && (
+      {'Input' in T && !data.isSending && answered !== undefined && (
         <Box marginTop={1}>
           <T.Input
             key={`reply:${answered.id}`}

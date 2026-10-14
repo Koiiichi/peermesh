@@ -90,7 +90,7 @@ The pane shows the 100 newest messages. `peers log` and `peers thread` show olde
 
 ## Send a message from the pane
 
-Open a session, type in the field and press Enter. The mod runs `peers send` with the kind `request`, so an idle peer starts a turn. In a thread, the field runs `peers reply` on the newest message that a peer sent to this session.
+Open a session, type in the field and press Enter. The field is gone while the send runs, and comes back with the result. The mod runs `peers send` with the kind `request`, so an idle peer starts a turn. In a thread, the field runs `peers reply` on the newest message that a peer sent to this session.
 
 The message goes out as your session, the same as a message that its agent sends. The agent of the peer reads it as a peer message, not as an instruction from you: it gives no user authority. To instruct the other agent, type in its own session.
 
@@ -104,7 +104,7 @@ These limits come from what Claude Code lets a mod draw.
 - **Messages in the middle of a turn.** They are one line, as shown above. A mod cannot add a row of its own with more lines.
 - **The command name.** `/peers` is a command of Claude Code, which lists the sessions that its own messaging can reach. The pane is `/mesh`.
 - **Keys.** A mod does not read keys. Tab moves the focus; the arrow keys scroll the pane.
-- **Other surfaces.** The trees use elements that the desktop app also has, and the tests draw them for each surface, but only the terminal was used with real sessions. The VS Code chat panel and `claude -p` run the mod and draw nothing. The Claude mobile app has no text field, so the pane is read-only there.
+- **Other surfaces.** The trees use elements that the desktop app also has, and the tests draw them for each surface, but only the terminal was used with real sessions. The VS Code chat panel and `claude -p` run the mod and draw nothing. Outside the terminal, the hooks keep their own notice line for a message in the middle of a turn. The Claude mobile app has no text field, so the pane is read-only there.
 - **Codex.** Codex has no mods. A Codex session shows the notices of the hooks, as before.
 
 The mod has no status line. `peers statusline` is the status line segment; the README shows how to add it.
