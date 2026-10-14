@@ -530,11 +530,11 @@ test('an event during a read makes one more read', async ($, on) => {
       presentation: { isFullscreen: true, columns: 120 },
     })
   const first = open()
-  // The first read is not complete. Its answer can be older than this second event.
-  await open()
-  expect(reads).toBe(1)
+  // The first read is not complete. Its answer can be older than this second event, so the
+  // second call waits for one more read.
+  const second = open()
   finish()
-  await first
+  await Promise.all([first, second])
   expect(reads).toBe(2)
 })
 

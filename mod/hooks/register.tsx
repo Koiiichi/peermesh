@@ -32,7 +32,7 @@ const sending = atom({ plugin: 'peermesh', key: 'isSending' } as const, false)
 // again, which costs one more read.
 let command: string | undefined
 let written: { me: string | null; peers: string; messages: string } = { me: null, peers: '', messages: '' }
-let isReading = false
+let reading: Promise<void> | undefined
 let isStale = false
 let isSending = false
 let hasWaiting = false
@@ -82,23 +82,27 @@ function text(value: unknown): string {
 /**
  * Read the sessions and the messages, and write each list to the state if it changed.
  * A call during a read does not start a second read. The read runs one more time after it
- * ends, because its answer can be older than the event that made the call.
+ * ends, because its answer can be older than the event that made the call. The promise
+ * resolves after a read that started after the call.
  */
-async function refresh($: EngineInterface): Promise<void> {
-  if (isReading) {
+function refresh($: EngineInterface): Promise<void> {
+  if (reading !== undefined) {
     isStale = true
 
-    return
+    return reading
   }
-  isReading = true
-  try {
-    do {
-      isStale = false
-      await readState($)
-    } while (isStale)
-  } finally {
-    isReading = false
-  }
+  reading = (async () => {
+    try {
+      do {
+        isStale = false
+        await readState($)
+      } while (isStale)
+    } finally {
+      reading = undefined
+    }
+  })()
+
+  return reading
 }
 
 async function readState($: EngineInterface): Promise<void> {
@@ -158,7 +162,7 @@ async function readState($: EngineInterface): Promise<void> {
 async function tick($: EngineInterface, count: number): Promise<void> {
   // A tick during a read asks for nothing more. A read that is slower than the timer would
   // otherwise run again without an end.
-  if (isReading) {
+  if (reading !== undefined) {
     return
   }
   const isDue = hasWaiting && count % WAITING_TICKS === 0
