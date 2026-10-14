@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A mod for Claude Code 2.1.287 or later, in `mod/`. It draws each peer message as a short row in the conversation, with the state that the ledger has now, and `/mesh` opens a pane of the sessions and the threads. From the pane you can read a thread and send a message to a peer as your session. The mod is optional and delivery does not use it. [docs/claude-code-mod.md](docs/claude-code-mod.md) shows how to install it and what it cannot draw.
+- `peers --json watch` prints the sessions, the 100 newest messages with their states, and the id of the session that asks. The mod reads this, and any other program that draws peermesh can.
+
+### Changed
+
+- In a Claude Code session that has the mod, the hooks do not write the line `peermesh: gave the agent ...`, because the mod draws the message. A session without the mod shows the line as before.
+
 ## 0.3.2 — 2026-10-13
 
 ### Fixed
