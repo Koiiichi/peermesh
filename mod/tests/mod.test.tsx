@@ -598,3 +598,45 @@ test('the hooks keep their notice where the mod draws nothing, and the timer wai
   await clock.advance(3000)
   expect(reads).toBe(3)
 })
+
+test('a send that ends after a /clear adds no row to the new conversation', async ($, on) => {
+  mock.env(on, { HOME: '/home/user' })
+  let id = 'session-1'
+  on('session.id', () => ({ value: id }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', (_$, e) => {
+    const isSend = e.argv.includes('send')
+    if (isSend) {
+      // The person clears the conversation while the send runs.
+      id = 'session-2'
+    }
+    const stdout = isSend ? JSON.stringify([SENT]) : SNAPSHOT
+
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const session = mock.session(on)
+  await $.command.run({
+    command: 'mesh',
+    args: 'codex-x',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  const ui = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'peermesh',
+    props: {
+      title: 'peermesh',
+      isFocused: true,
+      bodyColumns: 60,
+      placement: 'dock',
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  })
+  await ui.input({ key: `to:${PEER}`, text: 'Use main.' })
+  expect(session.appended().length).toBe(0)
+  expect(await ui.find({ type: 'Text', text: /delivered · codex-x · bbbbbbbb · Sent before this conversation changed/ })).toBeDefined()
+  await ui.unmount()
+})
