@@ -1,0 +1,14 @@
+{
+  "name": "peermesh",
+  "description": "The peermesh mod for Claude Code",
+  "owner": {
+    "name": "Koiiichi"
+  },
+  "plugins": [
+    {
+      "name": "peermesh",
+      "source": "./mod",
+      "description": "Shows peermesh messages and peers in Claude Code: compact message rows and a /mesh pane"
+    }
+  ]
+}
