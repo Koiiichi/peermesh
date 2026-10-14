@@ -265,3 +265,18 @@ def test_an_empty_hook_file_does_not_stop_the_plugin_hooks() -> None:
         )
         assert out is not None, content
         assert mesh.registry.get("codex:T1") is not None, content
+
+
+def test_a_plugin_hook_steps_aside_only_for_its_own_event() -> None:
+    legacy = install.merge_hooks({}, "/bin/peers", "codex")["hooks"]
+    hooks_file = paths.codex_home() / "hooks.json"
+    hooks_file.parent.mkdir(parents=True)
+    hooks_file.write_text(json.dumps({"hooks": {"SessionEnd": legacy["SessionEnd"]}}))
+    mesh = _mesh()
+    payload = {"session_id": "T1", "cwd": os.getcwd()}
+    out = hooks.handle(
+        mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid(), plugin=True
+    )
+    assert out is not None and mesh.registry.get("codex:T1") is not None
+    hooks.handle(mesh, "session-end", "codex", payload, env={}, host_pid=os.getpid(), plugin=True)
+    assert mesh.registry.get("codex:T1") is not None
