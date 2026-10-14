@@ -100,31 +100,32 @@ def _render(peer: Peer, items: list[Waiting], ending: Ending | None = None) -> s
     )
 
 
-# A notice shows this many characters of a message body.
-NOTICE_CHARS = 160
+# The notice line shows this many characters of the text of the first message.
+NOTICE_CHARS = 120
 
 
 def _notice(items: list[Waiting], peer_id: str, env: Mapping[str, str]) -> dict[str, str]:
-    """The hook output that shows the user one line for each message that the agent got.
+    """The hook output that shows the user one line about the messages that the agent got.
 
-    The line has the sender, the kind (or "done" on a reply that reports completed work) and
-    the start of the body: "peermesh: ← claude-a · request  Please rebase." The model context
-    holds the messages in full.
+    The line names the sender and the kind of the first message (or "done" on a reply that
+    reports completed work), the start of its text on one line, and how many more messages
+    came: "peermesh: ← claude-a · request  Please rebase. (+1 more)". The model context holds
+    each message in full.
     """
     # A child process inherits the variable, so only the session that it names has the mod.
-    if peer_id == f"claude:{env.get(MOD_ENV)}":
+    if peer_id == f"claude:{env.get(MOD_ENV)}" or not items:
         return {}
-    lines = []
-    for item in items:
-        msg = item.message
-        word = ("done" if msg.done else "") if msg.kind == "reply" else msg.kind.replace("_", " ")
-        body = printable(" ".join(msg.body.split()))
-        if len(body) > NOTICE_CHARS:
-            body = body[: NOTICE_CHARS - 1] + "…"
-        lines.append(
-            f"peermesh: ← {printable(msg.from_name)}{f' · {word}' if word else ''}  {body}"
-        )
-    return {"systemMessage": "\n".join(lines)}
+    first = items[0].message
+    word = ("done" if first.done else "") if first.kind == "reply" else first.kind.replace("_", " ")
+    # The text can hold newlines and terminal control sequences. The notice is one plain line.
+    text = printable(" ".join(first.body.split()))
+    if len(text) > NOTICE_CHARS:
+        text = text[: NOTICE_CHARS - 1] + "…"
+    sender = printable(" ".join(first.from_name.split()))
+    line = f"peermesh: ← {sender}{f' · {word}' if word else ''}  {text}"
+    if len(items) > 1:
+        line += f" (+{len(items) - 1} more)"
+    return {"systemMessage": line}
 
 
 def _continue_turn(runtime: Runtime, body: str) -> dict[str, Any]:
