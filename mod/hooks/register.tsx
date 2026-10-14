@@ -246,7 +246,7 @@ async function deliver($: EngineInterface, args: readonly string[], body: string
     return
   }
   if (sent === undefined || !sent.msg_id) {
-    await update($, notice, () => ({ text: `not sent · ${reason ?? ''}`, isError: true }))
+    await update($, notice, () => ({ text: `not sent · ${reason || 'peers gave no reason'}`, isError: true }))
 
     return
   }
