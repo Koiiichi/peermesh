@@ -112,6 +112,28 @@ With [ccstatusline](https://github.com/sirmalloc/ccstatusline), which is a separ
 
 Use the full path of `peers` (`which peers`) if the status line does not find the command.
 
+## See messages inside Claude Code
+
+An optional mod for Claude Code 2.1.287 or later draws peermesh in the session itself. A message that wakes the agent, and a message that the agent sends, each become a short row in place of the frame:
+
+```text
+→ shop-web  request  answered  84b01ebb
+  Which port does the web dev server use? The API must allow it in CORS.
+
+← shop-web  reply  5b457c23
+  re: Which port does the web dev server use? The API must allow …
+  The web dev server uses port 5173. Allow http://localhost:5173 as an origin in the API's CORS config.
+```
+
+The state of a sent message is the state in the ledger now, so `delivered` becomes `answered` when the reply comes. `/mesh` opens a pane of the sessions and the threads, where you can read a thread and send a message to a peer. Install the mod from your checkout:
+
+```bash
+claude plugin marketplace add ./
+claude plugin install peermesh@peermesh
+```
+
+Delivery does not use the mod, and a session without it works as before. [docs/claude-code-mod.md](docs/claude-code-mod.md) shows the pane, the keys and what a mod cannot draw.
+
 ## Safety limits
 
 - Every message carries the frame above, and every body line is quoted with `> `, so a body cannot imitate the frame.
@@ -132,6 +154,7 @@ uv run pytest -q                        # unit and contract tests
 uv run ruff check src tests && uv run ruff format --check src tests
 uv run mypy --strict src
 PEERMESH_LIVE=1 uv run pytest -m live   # a real Codex session; spends model turns
+claude plugin test mod                  # the tests of the Claude Code mod
 ```
 
 [docs/demo-results.md](docs/demo-results.md) records the live test and both demo runs.
