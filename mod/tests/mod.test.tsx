@@ -404,3 +404,38 @@ test('a second Enter while a send runs does not send again', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /delivered · codex-x/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('an event during a read makes one more read', async ($, on) => {
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'session-1' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  let reads = 0
+  let finish = () => {}
+  const running = new Promise<void>(resolve => {
+    finish = resolve
+  })
+  on('process.run', async () => {
+    reads += 1
+    if (reads === 1) {
+      await running
+    }
+
+    return {
+      value: { exitCode: 0, stdout: SNAPSHOT, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }
+  })
+  const open = () =>
+    $.command.run({
+      command: 'mesh',
+      args: '',
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: true, columns: 120 },
+    })
+  const first = open()
+  // The first read is not complete. Its answer can be older than this second event.
+  await open()
+  expect(reads).toBe(1)
+  finish()
+  await first
+  expect(reads).toBe(2)
+})
