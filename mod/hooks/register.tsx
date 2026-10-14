@@ -230,7 +230,7 @@ async function deliver($: EngineInterface, args: readonly string[], body: string
   // The agent of this session did not write the message. Without this row, it cannot
   // understand a reply to it.
   const quoted = body.split('\n').map(line => '> ' + line)
-  await $.session
+  const recorded = await $.session
     .append({
       message: {
         type: 'user',
@@ -249,6 +249,14 @@ async function deliver($: EngineInterface, args: readonly string[], body: string
       },
     })
     .catch(() => undefined)
+  // Claude Code or a different mod can refuse the row. The message is sent, so the notice
+  // must say that the agent does not know of it.
+  if (recorded === undefined || recorded.deny !== undefined) {
+    await update($, notice, () => ({
+      text: `${outcome} · The agent of this session has no record of this message. Tell it what you sent.`,
+      isError: true,
+    }))
+  }
   await refresh($)
 }
 

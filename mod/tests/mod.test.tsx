@@ -439,3 +439,38 @@ test('an event during a read makes one more read', async ($, on) => {
   await first
   expect(reads).toBe(2)
 })
+
+test('a sent message that the conversation refused is still reported as sent', async ($, on) => {
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'session-1' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', (_$, e) => {
+    const stdout = e.argv.includes('send') ? JSON.stringify([SENT]) : SNAPSHOT
+
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('session.append', { door: 'note' }, () => ({ deny: 'this run takes no rows' }))
+  await $.command.run({
+    command: 'mesh',
+    args: 'codex-x',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  const ui = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'peermesh',
+    props: {
+      title: 'peermesh',
+      isFocused: true,
+      bodyColumns: 60,
+      placement: 'dock',
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  })
+  await ui.input({ key: `to:${PEER}`, text: 'Use main.' })
+  expect(await ui.find({ type: 'Text', text: /delivered · codex-x · bbbbbbbb · .*has no record/ })).toBeDefined()
+  await ui.unmount()
+})
