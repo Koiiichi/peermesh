@@ -15,8 +15,8 @@ export type Row = {
   body: string
   /** A state of the ledger. Absent on an incoming row: its arrival says nothing more. */
   state?: string
-  /** The start of the message that this one answers. */
-  re?: string
+  /** The message that this one answers: who wrote it, and its start. */
+  answers?: { who: string; text: string }
   /** Why a send failed, or what the receiver did since. */
   note?: string
 }
@@ -89,9 +89,18 @@ function messageRow(
         <Text wrap="truncate-end">{head}</Text>
       )}
       <Box flexDirection="column" paddingLeft={2}>
-        {row.re !== undefined && (
-          <Text dimColor wrap="truncate-end">
-            re: {row.re}
+        {row.answers !== undefined && (
+          // A bar, a name and italic text mark a quote. They set it apart from the body
+          // of the row, which is the message itself.
+          <Text wrap="truncate-end">
+            <Text color="subtle">▎ </Text>
+            <Text dimColor bold>
+              {row.answers.who}
+            </Text>
+            <Text dimColor italic>
+              {'  '}
+              {row.answers.text}
+            </Text>
           </Text>
         )}
         {lines.map(line => (

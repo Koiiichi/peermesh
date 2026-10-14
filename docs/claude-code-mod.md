@@ -34,11 +34,11 @@ A message that wakes the session, and a message that the agent sends, each take 
   Which port does the web dev server use? The API must allow it in CORS.
 
 ← shop-web  reply  5b457c23
-  re: Which port does the web dev server use? The API must allow …
+  ▎ you  Which port does the web dev server use? The API must allow it in CORS.
   The web dev server uses port 5173. Allow http://localhost:5173 as an origin in the API's CORS config.
 ```
 
-`←` is a message that the agent of this session received. The row shows the sender, the kind and the id. `re:` is the start of the message that a reply answers. A row shows the first eight lines of a received message and the first three of a sent one, without their empty lines. A row with more text ends with the number of lines that it does not show, such as `… 8 more lines`. In fullscreen mode, such a row has the option `▸ expand` on its first line, in a color of its own. Click that line to open the row; the option is then `▾ collapse`, and a click folds the row.
+`←` is a message that the agent of this session received. The row shows the sender, the kind and the id. The line with the bar `▎` is a quote: the start of the message that a reply answers, with `you` or the name of the session that wrote it. A row shows the first eight lines of a received message and the first three of a sent one, without their empty lines. A row with more text ends with the number of lines that it does not show, such as `… 8 more lines`. In fullscreen mode, such a row has the option `▸ expand` on its first line, in a color of its own. Click that line to open the row; the option is then `▾ collapse`, and a click folds the row.
 
 `→` is a message that the agent sent. Its state is the state in the ledger now, so the row changes after it is drawn:
 

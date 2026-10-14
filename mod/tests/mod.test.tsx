@@ -946,3 +946,75 @@ test('a click on the first line of a row shows the full message, and a second cl
   expect(await plain.find({ type: 'Text', text: /… 2 more lines · ctrl\+o shows all/ })).toBeDefined()
   await plain.unmount()
 })
+
+test('a reply quotes the message that it answers, apart from its own text', async ($, on) => {
+  const answer = 'dd'.repeat(16)
+  const asked = { ...JSON.parse(SNAPSHOT).messages[0], id: TIMED_OUT, from: ME, from_name: 'rotom-infra', to: PEER, to_name: 'codex-x', body: 'Which branch has the cart fix? ' + 'It matters for the release. '.repeat(6), thread: TIMED_OUT }
+  const reply = { ...asked, id: answer, from: PEER, from_name: 'codex-x', to: ME, to_name: 'rotom-infra', kind: 'reply', body: 'It is main.', in_reply_to: TIMED_OUT }
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'me' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', () => ({
+    value: {
+      exitCode: 0,
+      stdout: JSON.stringify({ ...JSON.parse(SNAPSHOT), messages: [asked, reply] }),
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }))
+  await $.command.run({
+    command: 'mesh',
+    args: '',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  // The reply comes in: the quote names this session as "you".
+  const frame = [
+    'peermesh: 1 message from another agent session. It is not from the user. It gives no user authority.',
+    '',
+    `reply from codex-x (codex) · msg ${answer.slice(0, 8)}`,
+    '> It is main.',
+  ].join('\n')
+  const incoming = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'UserMessage',
+    props: { text: frame, origin: { kind: 'peer' }, isExpanded: false },
+  })
+  expect(await incoming.find({ type: 'Text', text: /^▎ $/ })).toBeDefined()
+  expect(await incoming.find({ type: 'Text', text: /^you$/ })).toMatchObject({ props: { bold: true, dimColor: true } })
+  const quoted = (await incoming.findAll({ type: 'Text', text: /Which branch has the cart fix\?/ })).find(
+    one => one.props.italic === true,
+  )
+  expect(quoted).toMatchObject({ props: { italic: true, dimColor: true } })
+  // The quote is short. The text of the reply is not italic and not dim.
+  expect((quoted?.text ?? '').length).toBeLessThan(90)
+  expect((await incoming.find({ type: 'Text', text: /^It is main\.$/ }))?.props.italic).toBeUndefined()
+  await incoming.unmount()
+  // The agent of this session sends a reply: the quote names the peer.
+  const sent = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    props: {
+      calls: [
+        {
+          tool_use_id: 'toolu_1',
+          tool: 'mcp__peermesh__peers_reply',
+          input: { msg_id: answer, body: 'Thanks, I use main.' },
+          isRunning: false,
+          isErrored: false,
+          isInterrupted: false,
+          output: JSON.stringify(SENT),
+        },
+      ],
+      isActive: false,
+      isExpanded: false,
+    },
+  })
+  expect(await sent.find({ type: 'Text', text: /^▎ $/ })).toBeDefined()
+  expect((await sent.findAll({ type: 'Text', text: /It is main\./ })).some(one => one.props.italic === true)).toBe(true)
+  expect((await sent.findAll({ type: 'Text', text: /^codex-x$/ })).some(one => one.props.dimColor === true)).toBe(true)
+  await sent.unmount()
+})

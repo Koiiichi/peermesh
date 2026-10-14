@@ -19,8 +19,8 @@ const REPLY = 'mcp__peermesh__peers_reply'
 // the pane is closed, it reads at each fifth tick, and only while a message that this session
 // sent waits for its peer: no event in this session tells that the peer took it.
 const TICK_MS = 3000
-// A row shows the start of the message that a reply answers. The row cuts it at its width.
-const RE_CHARS = 240
+// A row quotes the start of the message that a reply answers, in this many characters.
+const QUOTE_CHARS = 80
 const WAITING_TICKS = 5
 
 const me = atom({ plugin: 'peermesh', key: 'me' } as const, null)
@@ -335,6 +335,13 @@ async function fold(
     : { isOpen: false }
 }
 
+/** The quote of the message that a reply answers. "you" is this session. */
+function quote(parent: Message | undefined, mine: string | null): Row['answers'] {
+  return parent === undefined
+    ? undefined
+    : { who: parent.from === mine ? 'you' : parent.fromName, text: oneLine(parent.body, QUOTE_CHARS) }
+}
+
 function known(all: readonly Message[], id: unknown): Message | undefined {
   return typeof id === 'string' && id.length >= 6 ? all.find(m => m.id.startsWith(id)) : undefined
 }
@@ -350,6 +357,7 @@ function sentRows(
     output?: unknown
   },
   all: readonly Message[],
+  mine: string | null,
 ): Row[] {
   const input = (call.input ?? {}) as Record<string, unknown>
   const isReply = call.tool === REPLY
@@ -358,7 +366,7 @@ function sentRows(
     isIncoming: false,
     kind: isReply ? (input.done === true ? 'reply · done' : 'reply') : text(input.kind) || 'info',
     body: text(input.body),
-    re: parent !== undefined ? oneLine(parent.body, RE_CHARS) : undefined,
+    answers: quote(parent, mine),
   }
   const targets = Array.isArray(input.to) ? input.to.map(text).join(', ') : text(input.to)
   const name = parent?.fromName ?? (targets || '…')
@@ -500,6 +508,7 @@ export const register: Register = on => {
         return next(e)
       }
       const all = await read($, messages)
+      const mine = await read($, me)
       const rows = items.map((item): Row => {
         const record = known(all, item.id)
         const parent = record?.inReplyTo ? all.find(m => m.id === record.inReplyTo) : undefined
@@ -511,7 +520,7 @@ export const register: Register = on => {
           kind: item.isDone ? `${item.kind} · done` : item.kind,
           id: item.id,
           body: item.body,
-          re: parent !== undefined ? oneLine(parent.body, RE_CHARS) : undefined,
+          answers: quote(parent, mine),
           note: isAnswered ? 'this session replied' : undefined,
         }
       })
@@ -526,7 +535,8 @@ export const register: Register = on => {
       return next(e)
     }
     const all = await read($, messages)
-    const rows = sends.flatMap(call => sentRows(call, all))
+    const mine = await read($, me)
+    const rows = sends.flatMap(call => sentRows(call, all, mine))
 
     const T = $.ui.resolve(e)
     const folded = await fold($, e)
