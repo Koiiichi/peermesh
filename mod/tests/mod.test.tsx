@@ -927,8 +927,8 @@ test('the option in the first line of a row opens the full message, and folds it
   await cut.press({ key: 'row:0' })
   expect(await cut.find({ type: 'Text', text: /^z{401}$/ })).toBeDefined()
   await cut.unmount()
-  // On a narrow terminal the open row keeps the sender and the option. The option says that
-  // the row still does not show all of the message. The id and the state give way.
+  // On a narrow terminal the row keeps the state and the option, folded and open. The option
+  // says that the open row still does not show all of the message. The id gives way.
   const tall = Array.from({ length: 70 }, (_, i) => `line ${i}`).join('\n')
   const slim = await $.ui.mount({
     plugin: 'peermesh',
@@ -951,8 +951,9 @@ test('the option in the first line of a row opens the full message, and folds it
   expect(await slim.find({ type: 'Text', text: /^pending$/ })).toBeDefined()
   expect((await slim.find({ key: 'row:0' }))?.text).toBe('▸ 67 more lines')
   await slim.press({ key: 'row:0' })
-  expect((await slim.find({ key: 'row:0' }))?.text).toBe('▾ collapse · rest in ctrl+o')
+  expect((await slim.find({ key: 'row:0' }))?.text).toBe('▾ collapse · partial')
   expect(await slim.find({ type: 'Text', text: /^a-peer-with-a-long-name$/ })).toBeDefined()
+  expect(await slim.find({ type: 'Text', text: /^pending$/ })).toBeDefined()
   expect(await slim.find({ type: 'Text', text: /^bbbbbbbb$/ })).toBeUndefined()
   await slim.unmount()
   // A different block of rows keeps its own state, and a short message has no option.

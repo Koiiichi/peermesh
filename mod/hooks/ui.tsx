@@ -92,14 +92,15 @@ function messageRow(
   const count = closed.more === 0 ? 'more' : `${closed.more} more ${closed.more === 1 ? 'line' : 'lines'}`
   // An open row that still does not show all of its message says so in the option, which
   // never gives way: a row must not look complete when it is not.
-  const collapse = open.more > 0 || open.isCut ? '▾ collapse · rest in ctrl+o' : '▾ collapse'
+  const rest = columns >= NARROW ? 'rest in ctrl+o' : 'partial'
+  const collapse = open.more > 0 || open.isCut ? `▾ collapse · ${rest}` : '▾ collapse'
   const label = fold.toggle === undefined ? `${count} · ctrl+o` : fold.isOpen ? collapse : `▸ ${count}`
   // The right end of the first line, in the order shown. Each part is there only when it
-  // says something. `drop` is the order in which the parts give way to the sender: the name
-  // must stay, because it tells the rows of the peers apart. The option never gives way.
+  // says something. `drop` is the order in which the id and the time give way to the sender.
+  // The state and the option never give way: on a terminal with no room, the name is cut.
   const parts = [
     row.state !== undefined && {
-      drop: 4,
+      drop: 9,
       text: stateWord(row.state),
       draw: (
         <Text color={stateColor(row.state)} dimColor={stateColor(row.state) === undefined}>
@@ -129,7 +130,7 @@ function messageRow(
   const sender = 2 + row.name.length + (row.kind !== undefined ? 3 + row.kind.length : 0)
   const width = (list: typeof parts) => list.reduce((sum, part) => sum + part.text.length + 3, 0)
   let right = parts
-  for (const drop of [1, 3, 4]) {
+  for (const drop of [1, 3]) {
     if (Math.min(sender, SENDER_ROOM) + 2 + width(right) > columns) {
       right = right.filter(part => part.drop !== drop)
     }
