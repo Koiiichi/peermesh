@@ -25,23 +25,10 @@ export type Row = {
 const INCOMING_ROWS = 8
 const OUTGOING_ROWS = 3
 
-export function messageRows(
-  T: ElementTable,
-  rows: readonly Row[],
-  others: number,
-): RenderElement {
-  const { Box, Text } = T
+export function messageRows(T: ElementTable, rows: readonly Row[]): RenderElement {
+  const { Box } = T
 
-  return (
-    <Box flexDirection="column">
-      {rows.map(row => messageRow(T, row))}
-      {others > 0 && (
-        <Text dimColor>
-          + {others} other tool {others === 1 ? 'call' : 'calls'}
-        </Text>
-      )}
-    </Box>
-  )
+  return <Box flexDirection="column">{rows.map(row => messageRow(T, row))}</Box>
 }
 
 function messageRow(T: ElementTable, row: Row): RenderElement {

@@ -106,6 +106,40 @@ test('a sent message shows the state that the ledger has, not a guess', async ($
   await done.unmount()
 })
 
+test('a group with other tool calls keeps the line that Claude Code draws for it', async ($, on) => {
+  // The engine draws the group beneath the mod. This stands for its line.
+  on('ui.render', { component: 'ToolGroup' }, ($$, e) => {
+    const { Text } = $$.ui.resolve(e)
+    const failed = e.props.calls.filter(call => call.isErrored).length
+
+    return <Text>the engine line: {failed} failed</Text>
+  })
+  const state = { isRunning: false, isInterrupted: false }
+  const ui = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    props: {
+      calls: [
+        { ...state, tool_use_id: 'toolu_1', tool: 'Bash', input: { command: 'make' }, isErrored: true, output: 'Error' },
+        {
+          ...state,
+          tool_use_id: 'toolu_2',
+          tool: SEND,
+          input: { to: ['codex-x'], body: 'The build fails.', kind: 'info' },
+          isErrored: false,
+          output: JSON.stringify({ result: [SENT] }),
+        },
+      ],
+      isActive: false,
+      isExpanded: false,
+    },
+  })
+  expect(await ui.find({ type: 'Text', text: /The build fails\./ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /the engine line: 1 failed/ })).toBeDefined()
+  await ui.unmount()
+})
+
 test('the pane lists the sessions, opens one and sends a message as this session', async ($, on) => {
   const runs: { argv: readonly string[]; stdin?: string; session?: string }[] = []
   on('process.run', (_$, e) => {
