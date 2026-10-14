@@ -351,6 +351,23 @@ def test_hooks_write_no_notice_in_the_session_that_has_the_mod(world: World) -> 
     assert "systemMessage" not in out and "Run the tests." in str(out)
 
 
+def test_the_notice_is_one_bounded_line_and_the_agent_gets_each_message_in_full(
+    world: World,
+) -> None:
+    world.put("b", status="busy")
+    long = "First line.\n\n\x1b[2J" + "word " * 60 + "\nlast line"
+    world.mesh.send(world.peers["a"], "claude-b", long, kind="request")
+    world.mesh.send(world.peers["a"], "claude-b", "A second message.", kind="info")
+    out, _ = _hook(world, "post-tool", "b")
+    notice = out["systemMessage"]
+    assert "\n" not in notice and "\x1b" not in notice
+    assert notice.startswith("peermesh: ← claude-a · request  First line. \\x1b[2Jword")
+    assert notice.endswith("… (+1 more)") and len(notice) < 180
+    # The notice is for the user. The agent reads both messages, each one whole.
+    context = out["hookSpecificOutput"]["additionalContext"]
+    assert "> last line" in context and "> A second message." in context
+
+
 def test_hooks_tell_the_user_which_messages_the_agent_got(world: World) -> None:
     world.put("b", status="busy")
     world.mesh.send(world.peers["a"], "claude-b", "Please rebase.", kind="request")

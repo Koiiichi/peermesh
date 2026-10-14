@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The line that a hook shows you when it gives the agent a message mid-turn now has the sender, the kind and the start of the text: `peermesh: ← shop-db · info  The orders table gets a new column, shipped_at.` It was `peermesh: gave the agent info from shop-db`, with no text. The line stays one line of bounded length: a body with several lines is put on one line, control characters show as escapes, and a batch adds `(+1 more)`. The agent still gets each message in full. Codex CLI shows the line as `↳ Hook · …`, and Claude Code without the mod as `PostToolUse:Bash says: …`.
+
 ## 0.4.1 — 2026-10-14
 
 The message rows of the Claude Code mod read as a conversation.

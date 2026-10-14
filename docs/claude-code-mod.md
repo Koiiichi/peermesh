@@ -73,7 +73,7 @@ A message that a hook gives the agent in the middle of a turn is one line, becau
 ⏺ peermesh: ← shop-db · info  The orders table gets a new column, shipped_at, in the next migration.
 ```
 
-Without the mod, the same delivery shows as `PostToolUse:Bash says: peermesh: gave the agent info from shop-db`, without the text.
+Without the mod, the same delivery shows as the hook line of Claude Code: `PostToolUse:Bash says: peermesh: ← shop-db · info  The orders table gets …`.
 
 ## Open the pane
 
