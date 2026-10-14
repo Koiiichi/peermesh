@@ -206,6 +206,8 @@ async function deliver($: EngineInterface, args: readonly string[], body: string
 
     return
   }
+  // A /clear or a /resume during the send gives this process a different conversation.
+  const session = await $.session.id()
   // One attempt only. A send that ran too long, or that ended without its result, can be
   // delivered, and a second send would be a second message.
   const ran = await run($, command, ['--json', ...args, '--body', '-'], {
@@ -242,6 +244,17 @@ async function deliver($: EngineInterface, args: readonly string[], body: string
   const status = hasWarning && sent.note ? `${sent.status} · ${sent.note}` : `${sent.status}`
   const outcome = `${sent.status} · ${sent.to} · ${id}` + (hasWarning && sent.note ? ` · ${sent.note}` : '')
   await update($, notice, () => ({ text: outcome, isError: hasWarning }))
+  if ((await $.session.id()) !== session) {
+    // The message went out as the earlier conversation, and a reply goes to that one. A row
+    // here would tell the wrong agent that the message is its own.
+    await update($, notice, () => ({
+      text: `${outcome} · Sent before this conversation changed. A reply goes to the earlier one.`,
+      isError: true,
+    }))
+    void refresh($)
+
+    return
+  }
   // The agent of this session did not write the message. Without this row, it cannot
   // understand a reply to it.
   const quoted = body.split('\n').map(line => '> ' + line)
