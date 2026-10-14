@@ -21,24 +21,36 @@ export type Row = {
   note?: string
 }
 
-// A transcript row shows this many body lines of a message. ctrl+o shows the whole message.
+// A transcript row shows this many body lines of a message. A click on its last line shows
+// the message in full, up to OPEN_ROWS lines. ctrl+o shows the message as the agent read it.
 const INCOMING_ROWS = 8
 const OUTGOING_ROWS = 3
+const OPEN_ROWS = 60
 
-export function messageRows(T: ElementTable, rows: readonly Row[]): RenderElement {
+/** How a block of message rows shows a message that is longer than its room. */
+export type Fold = {
+  isOpen: boolean
+  /** Present where a click reaches the row. Absent, the row names ctrl+o. */
+  toggle?: () => void
+}
+
+export function messageRows(T: ElementTable, rows: readonly Row[], fold: Fold): RenderElement {
   const { Box } = T
 
   // The blank line above is the one that Claude Code puts above each block of its own.
   return (
     <Box flexDirection="column" marginTop={1}>
-      {rows.map(row => messageRow(T, row))}
+      {rows.map((row, index) => messageRow(T, row, index, fold))}
     </Box>
   )
 }
 
-function messageRow(T: ElementTable, row: Row): RenderElement {
-  const { Box, Text } = T
-  const { lines, more } = bodyLines(row.body, row.isIncoming ? INCOMING_ROWS : OUTGOING_ROWS, true)
+function messageRow(T: ElementTable, row: Row, index: number, fold: Fold): RenderElement {
+  const { Box, Button, Text } = T
+  const closed = bodyLines(row.body, row.isIncoming ? INCOMING_ROWS : OUTGOING_ROWS, true)
+  // An open row shows the message as it was written, with its empty lines.
+  const { lines, more } = fold.isOpen ? bodyLines(row.body, OPEN_ROWS) : closed
+  const toggle = fold.toggle
 
   return (
     <Box flexDirection="column">
@@ -63,11 +75,19 @@ function messageRow(T: ElementTable, row: Row): RenderElement {
         {lines.map(line => (
           <Text dimColor={!row.isIncoming}>{line || ' '}</Text>
         ))}
-        {more > 0 && (
-          <Text dimColor>
-            … more of this message · ctrl+o shows all
-          </Text>
+        {toggle !== undefined && !fold.isOpen && more > 0 && (
+          <Button key={`more:${index}`} plain dimColor label="… more · click to show the full message" onPress={toggle} />
         )}
+        {toggle !== undefined && fold.isOpen && closed.more > 0 && (
+          <Button
+            key={`more:${index}`}
+            plain
+            dimColor
+            label={more > 0 ? '… more · ctrl+o shows all · click to show less' : 'click to show less'}
+            onPress={toggle}
+          />
+        )}
+        {toggle === undefined && more > 0 && <Text dimColor>… more of this message · ctrl+o shows all</Text>}
         {row.note !== undefined && (
           <Text color={row.state !== undefined && stateColor(row.state) === 'error' ? 'error' : undefined} dimColor>
             {row.note}
