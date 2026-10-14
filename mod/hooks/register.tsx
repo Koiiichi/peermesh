@@ -110,6 +110,7 @@ async function refresh($: EngineInterface): Promise<void> {
       thread: text(m.thread) || text(m.id),
       inReplyTo: typeof m.in_reply_to === 'string' ? m.in_reply_to : null,
       state: text(m.state),
+      note: text(m.note),
     }))
     // A write draws each reader again, so a list that did not change is not written.
     const next = { me: data.me, peers: JSON.stringify(nextPeers), messages: JSON.stringify(nextMessages) }
@@ -185,10 +186,11 @@ async function send($: EngineInterface, args: readonly string[], body: string): 
     return
   }
   const id = sent.msg_id.slice(0, 8)
-  await update($, notice, () => ({
-    text: `${sent.status} · ${sent.to} · ${id}`,
-    isError: sent.status === 'refused',
-  }))
+  const isRefused = sent.status === 'refused'
+  // The note of a refused message says why. It can say that the message is in the queue of
+  // the peer and must not be sent again.
+  const outcome = `${sent.status} · ${sent.to} · ${id}` + (isRefused && sent.note ? ` · ${sent.note}` : '')
+  await update($, notice, () => ({ text: outcome, isError: isRefused }))
   // The agent of this session did not write the message. Without this row, it cannot
   // understand a reply to it.
   const quoted = body.split('\n').map(line => '> ' + line)
@@ -203,7 +205,7 @@ async function send($: EngineInterface, args: readonly string[], body: string): 
               'peermesh: The user sent a message from the peermesh pane of this session.',
               'The message has this session as its sender. A reply to it comes to this session.',
               '',
-              `to ${sent.to} · msg ${id} · ${sent.status}`,
+              `to ${sent.to} · msg ${id} · ${sent.status}` + (isRefused && sent.note ? ` · ${sent.note}` : ''),
               ...quoted,
             ].join('\n'),
           },

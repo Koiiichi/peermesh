@@ -7,6 +7,9 @@ const SEND = 'mcp__peermesh__peers_send'
 const ME = 'claude:me'
 const PEER = 'codex:x'
 const ASKED = 'aa'.repeat(16)
+const TIMED_OUT = 'cc'.repeat(16)
+// What the Codex transport says when `codex queue` runs too long.
+const QUEUE_NOTE = 'codex queue timed out. The message can be in the queue. Do not resend.'
 
 // What `peers --json watch` prints: this session, one peer, and one request from the peer.
 const SNAPSHOT = JSON.stringify({
@@ -28,6 +31,20 @@ const SNAPSHOT = JSON.stringify({
       thread: ASKED,
       in_reply_to: null,
       state: 'delivered',
+    },
+    {
+      id: TIMED_OUT,
+      from: ME,
+      from_name: 'rotom-infra',
+      to: PEER,
+      to_name: 'codex-x',
+      kind: 'request',
+      body: 'Run the tests.',
+      sent_at: 1791936100,
+      thread: TIMED_OUT,
+      in_reply_to: null,
+      state: 'refused',
+      note: QUEUE_NOTE,
     },
   ],
 })
@@ -224,5 +241,48 @@ test('a send that gives no answer is not sent again', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /gave no answer.*can be delivered/ })).toBeDefined()
   // No message id is known, so the agent gets no row that claims a send.
   expect(session.appended().length).toBe(0)
+  await ui.unmount()
+})
+
+test('a refused send keeps the warning of the transport', async ($, on) => {
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'session-1' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', (_$, e) => {
+    const refused = [{ msg_id: TIMED_OUT, to: 'codex-x', status: 'refused', note: QUEUE_NOTE }]
+    const stdout = e.argv.includes('send') ? JSON.stringify(refused) : SNAPSHOT
+
+    return {
+      value: { exitCode: e.argv.includes('send') ? 1 : 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }
+  })
+  const session = mock.session(on)
+  await $.command.run({
+    command: 'mesh',
+    args: 'codex-x',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  const pane = {
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'peermesh',
+    props: {
+      title: 'peermesh',
+      isFocused: true,
+      bodyColumns: 60,
+      placement: 'dock',
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  } as const
+  const ui = await $.ui.mount(pane)
+  await ui.input({ key: `to:${PEER}`, text: 'Run the tests.' })
+  expect(await ui.find({ type: 'Text', text: /refused · codex-x · cccccccc · .*Do not resend/ })).toBeDefined()
+  expect(JSON.stringify(session.appended().map(row => row.message.content))).toMatch(/Do not resend/)
+  // The thread shows the same warning later.
+  await ui.press({ key: `thread:${TIMED_OUT}` })
+  expect(await ui.find({ type: 'Text', text: /Do not resend/ })).toBeDefined()
   await ui.unmount()
 })

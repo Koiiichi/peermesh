@@ -315,6 +315,7 @@ function threadView(
                 <Text>{line || ' '}</Text>
               ))}
               {more > 0 && <Text dimColor>… {more} more lines · peers thread {m.id.slice(0, 8)}</Text>}
+              {stateWord(m.state) === 'failed' && m.note !== '' && <Text color="error">{m.note}</Text>}
             </Box>
           </Box>
         )
