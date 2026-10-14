@@ -56,7 +56,7 @@ export function stateColor(state: string): string | undefined {
   if (word === 'pending' || word === 'interrupted' || word === 'no result') {
     return 'warning'
   }
-  if (word === 'failed') {
+  if (word === 'failed' || word === 'error') {
     return 'error'
   }
 

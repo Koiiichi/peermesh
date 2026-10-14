@@ -119,6 +119,20 @@ test('a sent message shows the state that the ledger has, not a guess', async ($
   expect(await cut.find({ type: 'Text', text: /can be delivered/ })).toBeDefined()
   expect(await cut.find({ type: 'Text', text: /delivered  |pending|answered/ })).toBeUndefined()
   await cut.unmount()
+  // A tool error has no result either: the server can fail after it sent the message.
+  const errored = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    props: {
+      calls: [{ ...call('Error executing tool peers_send'), isErrored: true }],
+      isActive: false,
+      isExpanded: false,
+    },
+  })
+  expect(await errored.find({ type: 'Text', text: /Error executing tool peers_send.*can be delivered/ })).toBeDefined()
+  expect(await errored.find({ type: 'Text', text: /failed|refused/ })).toBeUndefined()
+  await errored.unmount()
 })
 
 test('a group with other tool calls keeps the line that Claude Code draws for it', async ($, on) => {
