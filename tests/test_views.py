@@ -186,6 +186,32 @@ def test_watch_once_prints_plain_text_for_an_agent(
     assert "claude-a" in out and "\033[" not in out
 
 
+def test_snapshot_has_the_sessions_and_the_messages_with_their_states(mesh: Mesh) -> None:
+    request, reply = _exchange(mesh)
+    a = mesh.registry.get("claude:A")
+    data = views.snapshot(mesh, a)
+    assert data["me"] == "claude:A"
+    assert [(p["name"], p["waiting"]) for p in data["peers"]] == [("claude-a", 0), ("codex-x", 0)]
+    assert [(m["id"], m["state"]) for m in data["messages"]] == [
+        (request, "done"),
+        (reply, "delivered"),
+    ]
+    outside = views.snapshot(mesh, None)
+    assert outside["me"] is None and len(outside["messages"]) == 2
+
+
+def test_watch_prints_the_snapshot_as_json(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _exchange(mesh)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    assert cli.main(["--json", "watch"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    # Outside a session there is no "me". The sessions and the messages are the same.
+    assert data["me"] is None and len(data["peers"]) == 2 and len(data["messages"]) == 2
+
+
 def test_frame_prints_markup_characters_as_written(mesh: Mesh) -> None:
     a = mesh.registry.get("claude:A")
     assert a is not None

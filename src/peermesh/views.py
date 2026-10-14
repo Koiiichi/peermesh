@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 
 from peermesh.envelope import short_id
+from peermesh.registry import Peer
 from peermesh.service import SENT_OUTCOMES, Mesh
 
 STATE_STYLE = {
@@ -150,3 +151,24 @@ def statusline(mesh: Mesh, payload: Mapping[str, Any]) -> str:
         order = dict.fromkeys(_SENT_WORDS.values())
         parts.append("out " + ", ".join(f"{counts[w]} {w}" for w in order if w in counts))
     return " · ".join(parts) or "no peer messages"
+
+
+# A snapshot holds this many of the newest messages.
+SNAPSHOT_MESSAGES = 100
+
+
+def snapshot(mesh: Mesh, me: Peer | None) -> dict[str, Any]:
+    """What a program that draws peermesh reads: the sessions and the newest messages.
+
+    `me` is the session that asks, or None outside a session. Each session record has
+    `waiting`, the number of messages in its inbox. Each message is a record of `message_rows`,
+    so it has `state`. The names are made printable; a body is as its sender wrote it.
+    """
+    return {
+        "me": me.id if me else None,
+        "peers": [
+            p.to_json() | {"name": printable(p.name), "waiting": len(mesh.inbox.waiting(p.id))}
+            for p in mesh.all_peers()
+        ],
+        "messages": message_rows(mesh.ledger.latest())[-SNAPSHOT_MESSAGES:],
+    }
