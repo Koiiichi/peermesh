@@ -4,30 +4,35 @@
 import type { ElementTable, RenderElement } from 'claude-code'
 
 import type { Message, Notice, Peer, View } from '../types'
-import { bodyLines, clock, oneLine, pad, shortDir, stateColor, stateWord, threads } from './text'
+import { accent, bodyLines, clock, oneLine, pad, shortDir, stateColor, stateWord, threads } from './text'
 
 /** One message as a transcript row draws it. */
 export type Row = {
   isIncoming: boolean
   name: string
-  kind: string
+  /** The kind of a message that is not a reply. A reply shows the message that it answers. */
+  kind?: string
   id?: string
   body: string
-  /** A state of the ledger. Absent on an incoming row: its arrival says nothing more. */
+  /** A state of the delivery that is not clear from the rows: it waits, it arrived, it failed. */
   state?: string
-  /** The message that this one answers: who wrote it, and its start. */
-  answers?: { who: string; text: string }
-  /** Why a send failed, or what the receiver did since. */
+  /** The local time of the message as hour:minute. */
+  time?: string
+  /** The start of the message that this one answers. */
+  quote?: string
+  /** Why a send failed. */
   note?: string
 }
 
-// A transcript row shows this many body lines of a message. A click on its first line opens
-// the row and folds it again. ctrl+o shows the message as the agent read it.
+// A transcript row shows this many body lines of a message. The option in its first line
+// opens the row and folds it again. ctrl+o shows the message as the agent read it.
 const INCOMING_ROWS = 8
 const OUTGOING_ROWS = 3
 // One block of rows shows this many body lines in all, so a broadcast to many peers and a
 // batch of many messages stay under the limit of Claude Code for the text of one tree.
 const BLOCK_ROWS = 60
+// Below this width the first line of a row has no time.
+const NARROW = 60
 
 /** How a block of message rows shows a message that is longer than its room. */
 export type Fold = {
@@ -36,87 +41,94 @@ export type Fold = {
   toggle?: () => void
 }
 
-export function messageRows(T: ElementTable, rows: readonly Row[], fold: Fold): RenderElement {
+/** A block of rows. `columns` is the width of the transcript. */
+export function messageRows(
+  T: ElementTable,
+  rows: readonly Row[],
+  fold: Fold,
+  columns: number,
+): RenderElement {
   const { Box } = T
+  const share = Math.max(1, Math.floor(BLOCK_ROWS / rows.length))
 
   // The blank line above is the one that Claude Code puts above each block of its own.
   return (
-    <Box flexDirection="column" marginTop={1}>
-      {rows.map((row, index) => messageRow(T, row, index, fold, Math.max(1, Math.floor(BLOCK_ROWS / rows.length))))}
+    <Box flexDirection="column" marginTop={1} width={columns}>
+      {rows.map((row, index) => messageRow(T, row, index, fold, share, columns))}
     </Box>
   )
 }
 
-/** One message. `share` is the number of body lines that its block has for each row. */
+/**
+ * One message: the message that it answers, then a line with its sender, then its text.
+ * `share` is the number of body lines that its block has for each row.
+ */
 function messageRow(
   T: ElementTable,
   row: Row,
   index: number,
   fold: Fold,
   share: number,
+  columns: number,
 ): RenderElement {
   const { Box, Button, Text } = T
   const room = Math.min(row.isIncoming ? INCOMING_ROWS : OUTGOING_ROWS, share)
-  const closed = bodyLines(row.body, room, true)
-  // An open row shows the message as it was written, with its empty lines.
+  const closed = bodyLines(row.body, room)
   const { lines, more } = fold.isOpen ? bodyLines(row.body, Math.max(room, share)) : closed
-  // A row has a fold when a click reaches it and its message is longer than its room.
-  const toggle = closed.more > 0 || more > 0 ? fold.toggle : undefined
-  // The option is in a color of its own and is not dim, so it reads as a control, not as text
-  // of the message.
-  const option = fold.isOpen ? '▾ collapse' : '▸ expand'
-  const head = [
-    <Text color={row.isIncoming ? 'suggestion' : 'subtle'}>{row.isIncoming ? '←' : '→'} </Text>,
-    <Text bold>{row.name}</Text>,
-    <Text dimColor>  {row.kind}</Text>,
-    row.state !== undefined && (
-      <Text color={stateColor(row.state)} dimColor={stateColor(row.state) === undefined}>
-        {'  '}
-        {stateWord(row.state)}
-      </Text>
-    ),
-    row.id !== undefined && <Text dimColor>  {row.id.slice(0, 8)}</Text>,
-    toggle !== undefined && <Text color="suggestion">  {option}</Text>,
-  ]
+  const hasFold = closed.more > 0
+  const color = accent(row.name)
+  // The right end of the first line: what the delivery did, the fold, and the time. Each part
+  // is there only when it says something.
+  const state = row.state !== undefined && (
+    <Text color={stateColor(row.state)} dimColor={stateColor(row.state) === undefined}>
+      {stateWord(row.state)}
+    </Text>
+  )
+  const count = `${closed.more} more ${closed.more === 1 ? 'line' : 'lines'}`
+  const option =
+    hasFold &&
+    (fold.toggle !== undefined ? (
+      <Button key={`row:${index}`} plain onPress={fold.toggle}>
+        <Text color="suggestion">{fold.isOpen ? '▾ collapse' : `▸ ${count}`}</Text>
+      </Button>
+    ) : (
+      <Text dimColor>{count} · ctrl+o</Text>
+    ))
+  const rest = fold.isOpen && more > 0 && <Text dimColor>{more} more in ctrl+o</Text>
+  const id = fold.isOpen && hasFold && row.id !== undefined && <Text dimColor>{row.id.slice(0, 8)}</Text>
+  const time = columns >= NARROW && row.time !== undefined && <Text dimColor>{row.time}</Text>
+  const right = [state, option, rest, id, time].filter(part => part !== false)
 
   return (
     <Box flexDirection="column">
-      {toggle !== undefined ? (
-        <Button key={`row:${index}`} plain onPress={toggle}>
-          {head}
-        </Button>
-      ) : (
-        <Text wrap="truncate-end">{head}</Text>
-      )}
-      <Box flexDirection="column" paddingLeft={2}>
-        {row.answers !== undefined && (
-          // A bar, a name and italic text mark a quote. They set it apart from the body
-          // of the row, which is the message itself.
-          <Text wrap="truncate-end">
-            <Text color="subtle">▎ </Text>
-            <Text dimColor bold>
-              {row.answers.who}
-            </Text>
-            <Text dimColor italic>
-              {'  '}
-              {row.answers.text}
-            </Text>
+      {row.quote !== undefined && (
+        // The bar marks a quote. With no arrow and no name, it cannot read as a message of
+        // its own.
+        <Box paddingLeft={2}>
+          <Text dimColor italic wrap="truncate-end">
+            ▎ {row.quote}
           </Text>
-        )}
+        </Box>
+      )}
+      <Box justifyContent="space-between">
+        <Box flexShrink={1}>
+          <Text wrap="truncate-end">
+            <Text color={color}>{row.isIncoming ? '←' : '→'} </Text>
+            <Text bold color={color}>
+              {row.name}
+            </Text>
+            {row.kind !== undefined && <Text dimColor> · {row.kind}</Text>}
+          </Text>
+        </Box>
+        <Box flexShrink={0} marginLeft={2}>
+          {right.map((part, at) => [at > 0 && <Text dimColor> · </Text>, part])}
+        </Box>
+      </Box>
+      <Box flexDirection="column" paddingLeft={2}>
         {lines.map(line => (
           <Text dimColor={!row.isIncoming}>{line || ' '}</Text>
         ))}
-        {more > 0 && (
-          <Text dimColor>
-            … {more} more {more === 1 ? 'line' : 'lines'}
-            {toggle === undefined || fold.isOpen ? ' · ctrl+o shows all' : ''}
-          </Text>
-        )}
-        {row.note !== undefined && (
-          <Text color={row.state !== undefined && stateColor(row.state) === 'error' ? 'error' : undefined} dimColor>
-            {row.note}
-          </Text>
-        )}
+        {row.note !== undefined && <Text color="error">{row.note}</Text>}
       </Box>
     </Box>
   )

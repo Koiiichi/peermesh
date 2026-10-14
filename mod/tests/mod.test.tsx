@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { parseFrame } from '../hooks/frame'
+import { accent } from '../hooks/text'
 import { FRAMES } from './frames'
 
 const SEND = 'mcp__peermesh__peers_send'
@@ -812,8 +813,8 @@ test('a thread of the largest messages still draws with its reply field', async 
   await ui.unmount()
 })
 
-test('a row that shows the start of a message leaves out its empty lines', async $ => {
-  const body = 'First line.\n\nContext:\n- one\n- two'
+test('a folded row keeps the format of the message and adds no line of its own', async $ => {
+  const body = 'First line.\n\n\n\nContext:\n  - one\n  - two\n\n'
   const ui = await $.ui.mount({
     plugin: 'peermesh',
     surface: 'terminal',
@@ -834,15 +835,18 @@ test('a row that shows the start of a message leaves out its empty lines', async
       isExpanded: false,
     },
   })
-  // Three lines of text, then the mark that the message has more.
-  expect(await ui.find({ type: 'Text', text: /^- one$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^- two$/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /… 1 more line · ctrl\+o shows all/ })).toBeDefined()
+  // Three lines as they were written: a run of empty lines is one empty line.
+  expect(await ui.find({ type: 'Text', text: /^First line\.$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Context:$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /- one/ })).toBeUndefined()
+  // The first line of the row says how much is not shown. The body has no line for it.
+  expect(await ui.find({ type: 'Text', text: /^2 more lines · ctrl\+o$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /…/ })).toBeUndefined()
   await ui.unmount()
 })
 
-test('a click on the first line of a row shows the full message, and a second click folds it', async $ => {
-  const body = ['First line.', '', 'Context:', '- one', '- two', '- three'].join('\n')
+test('the option in the first line of a row opens the full message, and folds it again', async $ => {
+  const body = ['First line.', '', 'Context:', '  - one', '  - two', '  - three'].join('\n')
   const props = {
     calls: [
       {
@@ -867,37 +871,20 @@ test('a click on the first line of a row shows the full message, and a second cl
     viewport: { columns: 100, rows: 40, isFullscreen: true },
     props,
   })
-  expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
-  // One option, on the first line. The last line says how much the row does not show.
-  expect(await ui.find({ type: 'Text', text: /▸ expand/ })).toMatchObject({ props: { color: 'suggestion' } })
+  // One option, in the first line, with the number of lines that the row does not show.
   expect(await ui.findAll({ type: 'Button' })).toHaveLength(1)
-  expect(await ui.find({ type: 'Text', text: /… 2 more lines$/ })).toBeDefined()
-  expect((await ui.find({ key: 'row:0' }))?.text).toMatch(/codex-x.*▸ expand/)
+  expect((await ui.find({ key: 'row:0' }))?.text).toBe('▸ 3 more lines')
+  expect(await ui.find({ type: 'Text', text: /▸ 3 more lines/ })).toMatchObject({ props: { color: 'suggestion' } })
+  expect(await ui.find({ type: 'Text', text: /- three/ })).toBeUndefined()
+  // The id of the message is not in a folded row.
+  expect(await ui.find({ type: 'Text', text: /^bbbbbbbb$/ })).toBeUndefined()
   await ui.press({ key: 'row:0' })
-  expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeDefined()
-  expect((await ui.find({ key: 'row:0' }))?.text).toMatch(/codex-x.*▾ collapse/)
+  expect(await ui.find({ type: 'Text', text: /^  - three$/ })).toBeDefined()
+  expect((await ui.find({ key: 'row:0' }))?.text).toBe('▾ collapse')
+  expect(await ui.find({ type: 'Text', text: /^bbbbbbbb$/ })).toBeDefined()
   await ui.press({ key: 'row:0' })
-  expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /- three/ })).toBeUndefined()
   await ui.unmount()
-  // A click opens each message of the block. A message that then has more than its room
-  // says so, also when its short form had room for all of its text.
-  const gaps = ['Top.', ...Array.from({ length: 70 }, () => ''), 'Bottom.'].join('\n')
-  const pair = await $.ui.mount({
-    plugin: 'peermesh',
-    surface: 'terminal',
-    component: 'ToolGroup',
-    requestId: 'group-pair',
-    viewport: { columns: 100, rows: 40, isFullscreen: true },
-    props: {
-      ...props,
-      calls: [props.calls[0]!, { ...props.calls[0]!, tool_use_id: 'toolu_2', input: { to: ['codex-x'], body: gaps, kind: 'info' } }],
-    },
-  })
-  expect(await pair.find({ key: 'row:1' })).toBeUndefined()
-  await pair.press({ key: 'row:0' })
-  expect((await pair.find({ key: 'row:1' }))?.text).toMatch(/▾ collapse/)
-  expect(await pair.find({ type: 'Text', text: /more lines · ctrl\+o shows all/ })).toBeDefined()
-  await pair.unmount()
   // A broadcast of a long message to many peers stays small when it is open.
   const long = Array.from({ length: 20 }, () => 'y'.repeat(400)).join('\n')
   const many = Array.from({ length: 13 }, (_, i) => ({ ...SENT, to: `peer-${i}` }))
@@ -921,8 +908,9 @@ test('a click on the first line of a row shows the full message, and a second cl
   await broadcast.press({ key: 'row:0' })
   expect(JSON.stringify(await broadcast.drawn()).length).toBeLessThan(50000)
   expect(await broadcast.find({ key: 'row:12' })).toBeDefined()
+  expect(await broadcast.find({ type: 'Text', text: /more in ctrl\+o/ })).toBeDefined()
   await broadcast.unmount()
-  // A different block of rows keeps its own state, and a short message has no line to click.
+  // A different block of rows keeps its own state, and a short message has no option.
   const short = await $.ui.mount({
     plugin: 'peermesh',
     surface: 'terminal',
@@ -931,7 +919,7 @@ test('a click on the first line of a row shows the full message, and a second cl
     viewport: { columns: 100, rows: 40, isFullscreen: true },
     props: { ...props, calls: [{ ...props.calls[0]!, input: { to: ['codex-x'], body: 'One line.', kind: 'info' } }] },
   })
-  expect(await short.find({ key: 'row:0' })).toBeUndefined()
+  expect(await short.findAll({ type: 'Button' })).toHaveLength(0)
   await short.unmount()
   // Outside fullscreen mode a click does not reach the row, so the row names ctrl+o.
   const plain = await $.ui.mount({
@@ -942,8 +930,8 @@ test('a click on the first line of a row shows the full message, and a second cl
     viewport: { columns: 100, rows: 40, isFullscreen: false },
     props,
   })
-  expect(await plain.find({ key: 'row:0' })).toBeUndefined()
-  expect(await plain.find({ type: 'Text', text: /… 2 more lines · ctrl\+o shows all/ })).toBeDefined()
+  expect(await plain.findAll({ type: 'Button' })).toHaveLength(0)
+  expect(await plain.find({ type: 'Text', text: /^3 more lines · ctrl\+o$/ })).toBeDefined()
   await plain.unmount()
 })
 
@@ -976,23 +964,45 @@ test('a reply quotes the message that it answers, apart from its own text', asyn
     `reply from codex-x (codex) · msg ${answer.slice(0, 8)}`,
     '> It is main.',
   ].join('\n')
-  const incoming = await $.ui.mount({
+  const incoming = (columns: number) =>
+    $.ui.mount({
+      plugin: 'peermesh',
+      surface: 'terminal',
+      component: 'UserMessage',
+      viewport: { columns, rows: 40, isFullscreen: true },
+      props: { text: frame, origin: { kind: 'peer' }, isExpanded: false },
+    })
+  const wide = await incoming(100)
+  // The quote has a bar and no arrow and no name, so it is not a message of its own.
+  const quoted = await wide.find({ type: 'Text', text: /^▎ Which branch has the cart fix\?/ })
+  expect(quoted).toMatchObject({ props: { italic: true, dimColor: true } })
+  expect((quoted?.text ?? '').length).toBeLessThan(90)
+  // The text of the reply is not italic and not dim. A reply has no kind and no state.
+  const text = await wide.find({ type: 'Text', text: /^It is main\.$/ })
+  expect(text?.props.italic).toBeUndefined()
+  expect(text?.props.dimColor).toBe(false)
+  expect(await wide.find({ type: 'Text', text: /reply|delivered|done/ })).toBeUndefined()
+  // The time is at the end of the first line, and a narrow terminal leaves it out.
+  expect(await wide.find({ type: 'Text', text: /^\d\d:\d\d$/ })).toBeDefined()
+  await wide.unmount()
+  const narrow = await incoming(50)
+  expect(await narrow.find({ type: 'Text', text: /^\d\d:\d\d$/ })).toBeUndefined()
+  expect(await narrow.find({ type: 'Text', text: /^It is main\.$/ })).toBeDefined()
+  await narrow.unmount()
+  // A reply whose sender reports that the work is complete has the word "done".
+  const finished = await $.ui.mount({
     plugin: 'peermesh',
     surface: 'terminal',
     component: 'UserMessage',
-    props: { text: frame, origin: { kind: 'peer' }, isExpanded: false },
+    props: {
+      text: frame.replace(/(msg [0-9a-f]+)/, '$1 · the sender reports that the requested work is complete'),
+      origin: { kind: 'peer' },
+      isExpanded: false,
+    },
   })
-  expect(await incoming.find({ type: 'Text', text: /^▎ $/ })).toBeDefined()
-  expect(await incoming.find({ type: 'Text', text: /^you$/ })).toMatchObject({ props: { bold: true, dimColor: true } })
-  const quoted = (await incoming.findAll({ type: 'Text', text: /Which branch has the cart fix\?/ })).find(
-    one => one.props.italic === true,
-  )
-  expect(quoted).toMatchObject({ props: { italic: true, dimColor: true } })
-  // The quote is short. The text of the reply is not italic and not dim.
-  expect((quoted?.text ?? '').length).toBeLessThan(90)
-  expect((await incoming.find({ type: 'Text', text: /^It is main\.$/ }))?.props.italic).toBeUndefined()
-  await incoming.unmount()
-  // The agent of this session sends a reply: the quote names the peer.
+  expect(await finished.find({ type: 'Text', text: /^ · done$/ })).toBeDefined()
+  await finished.unmount()
+  // The agent of this session sends a reply: the quote is the message of the peer.
   const sent = await $.ui.mount({
     plugin: 'peermesh',
     surface: 'terminal',
@@ -1013,8 +1023,16 @@ test('a reply quotes the message that it answers, apart from its own text', asyn
       isExpanded: false,
     },
   })
-  expect(await sent.find({ type: 'Text', text: /^▎ $/ })).toBeDefined()
-  expect((await sent.findAll({ type: 'Text', text: /It is main\./ })).some(one => one.props.italic === true)).toBe(true)
-  expect((await sent.findAll({ type: 'Text', text: /^codex-x$/ })).some(one => one.props.dimColor === true)).toBe(true)
+  expect(await sent.find({ type: 'Text', text: /^▎ It is main\.$/ })).toMatchObject({ props: { italic: true } })
   await sent.unmount()
+})
+
+test('a peer has one color in each row', () => {
+  expect(accent('rotom-arch')).toBe(accent('rotom-arch'))
+  const colors = new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(accent))
+  expect(colors.size).toBe(3)
+  // The colors of a state and of the option are not colors of a peer.
+  for (const color of ['success', 'warning', 'error', 'suggestion']) {
+    expect(colors.has(color)).toBe(false)
+  }
 })

@@ -114,18 +114,21 @@ Use the full path of `peers` (`which peers`) if the status line does not find th
 
 ## See messages inside Claude Code
 
-An optional mod for Claude Code 2.1.287 or later draws peermesh in the session itself. A message that wakes the agent, and a message that the agent sends, each become a short row in place of the frame:
+An optional mod for Claude Code 2.1.287 or later draws peermesh in the session itself. Each message has one line for its sender and its text below that line, in place of the frame:
 
 ```text
-→ shop-web  request  answered  84b01ebb
-  Which port does the web dev server use? The API must allow it in CORS.
+→ shop-db · request                                                 19:36
+  List the tables of the database, one on each line, with one short note for each.
 
-← shop-web  reply  5b457c23
-  ▎ you  Which port does the web dev server use? The API must allow it in CORS.
-  The web dev server uses port 5173. Allow http://localhost:5173 as an origin in the API's CORS config.
+  ▎ List the tables of the database, one on each line, with one short note for each.
+← shop-db · done                                                    19:36
+  Tables in the shop database (Postgres 16, port 5432):
+  users - customer accounts.
+  carts - shopping carts that belong to users.
+  orders - orders placed by users.
 ```
 
-The state of a sent message is the state in the ledger now, so `delivered` becomes `answered` when the reply comes. `/mesh` opens a pane of the sessions and the threads, where you can read a thread and send a message to a peer. Install the mod from your checkout:
+The dim line with the bar is the message that the reply answers. A sent message shows `pending`, `delivered` or `failed` until its reply comes, and a long message folds to its first lines. `/mesh` opens a pane of the sessions and the threads, where you can read a thread and send a message to a peer. Install the mod from your checkout:
 
 ```bash
 claude plugin marketplace add ./
