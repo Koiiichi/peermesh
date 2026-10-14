@@ -203,12 +203,26 @@ test('a send that gives no answer is not sent again', async ($, on) => {
   mock.env(on, { HOME: '/home/user' })
   on('session.id', () => ({ value: 'session-1' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  // The command runs too long, then it ends without a result, then it refuses the message.
+  const answers = [
+    { deny: 'the command is still running' },
+    { value: { exitCode: 1, stdout: '', stderr: 'Killed', isStdoutTruncated: false, isStderrTruncated: false } },
+    {
+      value: {
+        exitCode: 2,
+        stdout: '',
+        stderr: 'The session codex-x is not live.\n',
+        isStdoutTruncated: false,
+        isStderrTruncated: false,
+      },
+    },
+  ]
   let sends = 0
   on('process.run', (_$, e) => {
     if (e.argv.includes('send')) {
       sends += 1
 
-      return { deny: 'the command is still running' }
+      return answers[sends - 1] ?? { deny: 'no answer is left' }
     }
 
     return {
@@ -236,9 +250,14 @@ test('a send that gives no answer is not sent again', async ($, on) => {
       view: {},
     },
   })
+  for (const attempt of [1, 2]) {
+    await ui.input({ key: `to:${PEER}`, text: 'Use main.' })
+    expect(sends).toBe(attempt)
+    expect(await ui.find({ type: 'Text', text: /gave no answer.*can be delivered/ })).toBeDefined()
+  }
+  // A refusal is certain: `peers` gave the reason and sent nothing.
   await ui.input({ key: `to:${PEER}`, text: 'Use main.' })
-  expect(sends).toBe(1)
-  expect(await ui.find({ type: 'Text', text: /gave no answer.*can be delivered/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /not sent · The session codex-x is not live\./ })).toBeDefined()
   // No message id is known, so the agent gets no row that claims a send.
   expect(session.appended().length).toBe(0)
   await ui.unmount()
