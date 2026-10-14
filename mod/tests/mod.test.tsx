@@ -70,6 +70,8 @@ test('a peer message is a short row on every surface', async $ => {
     })
     expect(await ui.find({ type: 'Text', text: /rotom-infra/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Check docs\/schema\.md\./ })).toBeDefined()
+    // The row has the blank line above that each block of Claude Code has.
+    expect(await ui.drawn()).toMatchObject({ type: 'Box', props: { marginTop: 1 } })
     // The lines for the agent are not in the row. ctrl+o shows them.
     expect(await ui.find({ type: 'Text', text: /user authority|peers_reply/ })).toBeUndefined()
     await ui.unmount()
@@ -807,5 +809,34 @@ test('a thread of the largest messages still draws with its reply field', async 
   expect(drawn.length).toBeLessThan(20000)
   expect(await ui.find({ type: 'Text', text: /8 earlier/ })).toBeDefined()
   expect(await ui.find({ key: `reply:${'19'.repeat(16)}` })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a row that shows the start of a message leaves out its empty lines', async $ => {
+  const body = 'First line.\n\nContext:\n- one\n- two'
+  const ui = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    props: {
+      calls: [
+        {
+          tool_use_id: 'toolu_1',
+          tool: SEND,
+          input: { to: ['codex-x'], body, kind: 'request' },
+          isRunning: false,
+          isErrored: false,
+          isInterrupted: false,
+          output: JSON.stringify({ result: [SENT] }),
+        },
+      ],
+      isActive: false,
+      isExpanded: false,
+    },
+  })
+  // Three lines of text, then the mark that the message has more.
+  expect(await ui.find({ type: 'Text', text: /^- one$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^- two$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /more of this message/ })).toBeDefined()
   await ui.unmount()
 })

@@ -19,6 +19,8 @@ const REPLY = 'mcp__peermesh__peers_reply'
 // the pane is closed, it reads at each fifth tick, and only while a message that this session
 // sent waits for its peer: no event in this session tells that the peer took it.
 const TICK_MS = 3000
+// A row shows the start of the message that a reply answers. The row cuts it at its width.
+const RE_CHARS = 240
 const WAITING_TICKS = 5
 
 const me = atom({ plugin: 'peermesh', key: 'me' } as const, null)
@@ -338,7 +340,7 @@ function sentRows(
     isIncoming: false,
     kind: isReply ? (input.done === true ? 'reply · done' : 'reply') : text(input.kind) || 'info',
     body: text(input.body),
-    re: parent !== undefined ? oneLine(parent.body, 60) : undefined,
+    re: parent !== undefined ? oneLine(parent.body, RE_CHARS) : undefined,
   }
   const targets = Array.isArray(input.to) ? input.to.map(text).join(', ') : text(input.to)
   const name = parent?.fromName ?? (targets || '…')
@@ -491,7 +493,7 @@ export const register: Register = on => {
           kind: item.isDone ? `${item.kind} · done` : item.kind,
           id: item.id,
           body: item.body,
-          re: parent !== undefined ? oneLine(parent.body, 60) : undefined,
+          re: parent !== undefined ? oneLine(parent.body, RE_CHARS) : undefined,
           note: isAnswered ? 'this session replied' : undefined,
         }
       })

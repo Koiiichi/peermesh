@@ -15,12 +15,18 @@ const LINE_CHARS = 400
 
 /**
  * The lines of a body, with no control character, cut after `rows` lines. `more` is the
- * number of lines that are cut in full or in part.
+ * number of lines that are cut in full or in part. `isDense` leaves out the empty lines, for a
+ * row that shows only the start of a message.
  */
-export function bodyLines(text: string, rows: number): { lines: string[]; more: number } {
+export function bodyLines(
+  text: string,
+  rows: number,
+  isDense = false,
+): { lines: string[]; more: number } {
   const all = text
     .split('\n')
     .map(line => line.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '').replace(/\t/g, '  '))
+    .filter(line => !isDense || line.trim() !== '')
   const lines = all.slice(0, rows).map(line => (line.length > LINE_CHARS ? line.slice(0, LINE_CHARS) + '…' : line))
   const long = all.slice(0, rows).filter(line => line.length > LINE_CHARS).length
 
