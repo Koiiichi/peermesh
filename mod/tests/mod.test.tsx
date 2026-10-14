@@ -893,6 +893,30 @@ test('a click on the last line of a row shows the full message, and a second cli
   await pair.press({ key: 'more:0' })
   expect((await pair.find({ key: 'more:1' }))?.props.label).toMatch(/more · ctrl\+o shows all/)
   await pair.unmount()
+  // A broadcast of a long message to many peers stays small when it is open.
+  const long = Array.from({ length: 20 }, () => 'y'.repeat(400)).join('\n')
+  const many = Array.from({ length: 13 }, (_, i) => ({ ...SENT, to: `peer-${i}` }))
+  const broadcast = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    requestId: 'group-broadcast',
+    viewport: { columns: 100, rows: 40, isFullscreen: true },
+    props: {
+      ...props,
+      calls: [
+        {
+          ...props.calls[0]!,
+          input: { to: many.map(one => one.to), body: long, kind: 'info' },
+          output: JSON.stringify({ result: many }),
+        },
+      ],
+    },
+  })
+  await broadcast.press({ key: 'more:0' })
+  expect(JSON.stringify(await broadcast.drawn()).length).toBeLessThan(50000)
+  expect(await broadcast.find({ key: 'more:12' })).toBeDefined()
+  await broadcast.unmount()
   // A different block of rows keeps its own state, and a short message has no line to click.
   const short = await $.ui.mount({
     plugin: 'peermesh',

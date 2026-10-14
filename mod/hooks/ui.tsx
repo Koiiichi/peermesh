@@ -25,7 +25,9 @@ export type Row = {
 // the message in full, up to OPEN_ROWS lines. ctrl+o shows the message as the agent read it.
 const INCOMING_ROWS = 8
 const OUTGOING_ROWS = 3
-const OPEN_ROWS = 60
+// One block of rows shows this many body lines in all, so a broadcast to many peers and a
+// batch of many messages stay under the limit of Claude Code for the text of one tree.
+const BLOCK_ROWS = 60
 
 /** How a block of message rows shows a message that is longer than its room. */
 export type Fold = {
@@ -40,16 +42,24 @@ export function messageRows(T: ElementTable, rows: readonly Row[], fold: Fold): 
   // The blank line above is the one that Claude Code puts above each block of its own.
   return (
     <Box flexDirection="column" marginTop={1}>
-      {rows.map((row, index) => messageRow(T, row, index, fold))}
+      {rows.map((row, index) => messageRow(T, row, index, fold, Math.max(1, Math.floor(BLOCK_ROWS / rows.length))))}
     </Box>
   )
 }
 
-function messageRow(T: ElementTable, row: Row, index: number, fold: Fold): RenderElement {
+/** One message. `share` is the number of body lines that its block has for each row. */
+function messageRow(
+  T: ElementTable,
+  row: Row,
+  index: number,
+  fold: Fold,
+  share: number,
+): RenderElement {
   const { Box, Button, Text } = T
-  const closed = bodyLines(row.body, row.isIncoming ? INCOMING_ROWS : OUTGOING_ROWS, true)
+  const room = Math.min(row.isIncoming ? INCOMING_ROWS : OUTGOING_ROWS, share)
+  const closed = bodyLines(row.body, room, true)
   // An open row shows the message as it was written, with its empty lines.
-  const { lines, more } = fold.isOpen ? bodyLines(row.body, OPEN_ROWS) : closed
+  const { lines, more } = fold.isOpen ? bodyLines(row.body, Math.max(room, share)) : closed
   const toggle = fold.toggle
 
   return (
