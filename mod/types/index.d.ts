@@ -43,6 +43,7 @@ declare module 'claude-code' {
       messages: Message[]
       view: View
       notice: Notice
+      isSending: boolean
     }
   }
 }

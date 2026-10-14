@@ -395,12 +395,16 @@ test('a second Enter while a send runs does not send again', async ($, on) => {
     },
   })
   const first = ui.input({ key: `to:${PEER}`, text: 'Use main.' })
-  const second = ui.input({ key: `to:${PEER}`, text: 'Use main.' })
-  await second
+  // The same Enter again, before the pane is drawn without its text field.
+  await ui.input({ key: `to:${PEER}`, text: 'Use main.' }).catch(() => undefined)
   expect(sends).toBe(1)
+  // While the send runs, the pane has no text field: a different message cannot be lost.
+  expect(await ui.find({ type: 'Text', text: /sending…/ })).toBeDefined()
+  expect(await ui.find({ key: `to:${PEER}` })).toBeUndefined()
   finish()
   await first
   expect(sends).toBe(1)
+  expect(await ui.find({ key: `to:${PEER}` })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /delivered · codex-x/ })).toBeDefined()
   await ui.unmount()
 })
@@ -475,12 +479,21 @@ test('a sent message that the conversation refused is still reported as sent', a
   await ui.unmount()
 })
 
-test('the timer does not start a read while a read runs', async ($, on) => {
+test('the hooks keep their notice where the mod draws nothing, and the timer waits for a read', async ($, on) => {
   mock.env(on, { HOME: '/home/user' })
   on('session.id', () => ({ value: 'session-1' }))
-  on('env.set', () => ({ value: undefined }))
+  // The marker for the hooks is set only where the mod draws the deliveries.
+  const marks: (string | undefined)[] = []
+  let surface: 'terminal' | null = null
+  on('session.surface', () => ({ value: surface }))
+  on('env.set', (_$, e) => {
+    marks.push(e.value)
+
+    return { value: undefined }
+  })
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('ui.panes', () => ({ value: [{ id: 'peermesh', title: 'peermesh', isPlaced: true, isShown: true, isFocused: false }] }))
   const clock = mock.clock(on)
   let reads = 0
@@ -496,12 +509,17 @@ test('the timer does not start a read while a read runs', async ($, on) => {
       value: { exitCode: 0, stdout: SNAPSHOT, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
     }
   })
+  await $.prompt.submit({ text: 'hello', wait: false, origin: { kind: 'sdk' } })
+  surface = 'terminal'
   await $.session.start({ cwd: '/w/rotom', surface: 'terminal', isInteractive: true })
+  expect(marks).toEqual([undefined, 'session-1'])
   // The pane is open and the first read is slow: five ticks pass during it.
   await clock.advance(15000)
   expect(reads).toBe(1)
   finish()
   await clock.settle()
-  await clock.advance(3000)
+  // One more read follows the first, because the start of the session came during it.
   expect(reads).toBe(2)
+  await clock.advance(3000)
+  expect(reads).toBe(3)
 })

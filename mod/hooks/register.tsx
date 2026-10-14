@@ -26,6 +26,7 @@ const peers = atom({ plugin: 'peermesh', key: 'peers' } as const, [])
 const messages = atom({ plugin: 'peermesh', key: 'messages' } as const, [])
 const view = atom({ plugin: 'peermesh', key: 'view' } as const, { kind: 'home' })
 const notice = atom({ plugin: 'peermesh', key: 'notice' } as const, null)
+const sending = atom({ plugin: 'peermesh', key: 'isSending' } as const, false)
 
 // The executable that ran last, and the state as it was written last. A reload starts them
 // again, which costs one more read.
@@ -35,6 +36,7 @@ let isReading = false
 let isStale = false
 let isSending = false
 let hasWaiting = false
+let drawsDeliveries = false
 
 // A send can wait for the transport of the peer, which gives Codex 30 seconds.
 const SEND_TIMEOUT_MS = 60000
@@ -168,9 +170,12 @@ async function tick($: EngineInterface, count: number): Promise<void> {
 /**
  * Tell the peermesh hooks of this session that the mod draws the messages they give the agent.
  * The value is the session id, so a process that inherits the variable does not match it.
+ * Only the terminal was seen to draw the line of the mod. On each other surface the variable
+ * is not set, and the hooks write their own line.
  */
 async function mark($: EngineInterface): Promise<void> {
-  await $.env.set('PEERMESH_MOD', await $.session.id())
+  drawsDeliveries = (await $.session.surface()) === 'terminal'
+  await $.env.set('PEERMESH_MOD', drawsDeliveries ? await $.session.id() : undefined)
 }
 
 /** Send `body` with `peers send` or `peers reply`, and record the send for the agent. */
@@ -181,10 +186,14 @@ async function send($: EngineInterface, args: readonly string[], body: string): 
   }
   isSending = true
   try {
-    await update($, notice, () => ({ text: 'sending…', isError: false }))
+    // The pane draws no text field while this is true, so a different message cannot be
+    // typed and lost.
+    await update($, sending, () => true)
+    await update($, notice, () => null)
     await deliver($, args, body)
   } finally {
     isSending = false
+    await update($, sending, () => false)
   }
 }
 
@@ -392,7 +401,7 @@ export const register: Register = on => {
       e.origin.kind === 'hook' &&
       (e.origin.event === 'PostToolUse' || e.origin.event === 'UserPromptSubmit') &&
       e.message.name === 'hook_additional_context'
-    if (isDelivery) {
+    if (isDelivery && drawsDeliveries) {
       const context = e.message.content.map(block => (block.type === 'text' ? block.text : '')).join('\n')
       for (const item of parseFrame(context) ?? []) {
         const kind = item.isDone ? `${item.kind} · done` : item.kind
@@ -485,6 +494,7 @@ export const register: Register = on => {
         messages: await read($, messages),
         view: await read($, view),
         notice: await read($, notice),
+        isSending: await read($, sending),
         columns: e.props.bodyColumns,
       },
       {
