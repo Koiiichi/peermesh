@@ -250,7 +250,14 @@ function known(all: readonly Message[], id: unknown): Message | undefined {
 
 /** The rows of one peers_send or peers_reply call, from its input and its result. */
 function sentRows(
-  call: { tool: string; input: unknown; isRunning: boolean; isErrored: boolean; output?: unknown },
+  call: {
+    tool: string
+    input: unknown
+    isRunning: boolean
+    isErrored: boolean
+    isInterrupted: boolean
+    output?: unknown
+  },
   all: readonly Message[],
 ): Row[] {
   const input = (call.input ?? {}) as Record<string, unknown>
@@ -264,6 +271,11 @@ function sentRows(
   }
   const targets = Array.isArray(input.to) ? input.to.map(text).join(', ') : text(input.to)
   const name = parent?.fromName ?? (targets || '…')
+  // An interrupted send has no result. The row must not look like a send that completed.
+  const unknown = 'The message can be delivered. Read the thread before you send it again.'
+  if (call.isInterrupted) {
+    return [{ ...base, name, state: 'interrupted', note: unknown }]
+  }
   if (call.isErrored) {
     return [{ ...base, name, state: 'refused', note: oneLine(text(call.output), 200) }]
   }
@@ -289,7 +301,7 @@ function sentRows(
       }
     })
   } catch {
-    return [{ ...base, name }]
+    return [{ ...base, name, state: 'no result', note: unknown }]
   }
 }
 

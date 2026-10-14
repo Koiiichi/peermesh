@@ -53,7 +53,7 @@ export function stateWord(state: string): string {
 
 export function stateColor(state: string): string | undefined {
   const word = stateWord(state)
-  if (word === 'pending') {
+  if (word === 'pending' || word === 'interrupted' || word === 'no result') {
     return 'warning'
   }
   if (word === 'failed') {
