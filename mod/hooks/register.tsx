@@ -159,12 +159,22 @@ async function send($: EngineInterface, args: readonly string[], body: string): 
 
     return
   }
-  let ran: ProcessRunResult
+  // One attempt only. A send that ran too long, or that ended without its result, can be
+  // delivered, and a second send would be a second message.
+  const ran = await run($, command, ['--json', ...args, '--body', '-'], {
+    stdin: body,
+    timeoutMs: SEND_TIMEOUT_MS,
+  }).catch(() => undefined)
+  let sent: { msg_id?: string | null; to?: string; status?: string; note?: string } | undefined
   try {
-    // One attempt only. A send that ran too long can be delivered, and a second send would
-    // be a second message.
-    ran = await run($, command, ['--json', ...args, '--body', '-'], { stdin: body, timeoutMs: SEND_TIMEOUT_MS })
+    sent = (JSON.parse(ran?.stdout ?? '') as (typeof sent)[])[0]
   } catch {
+    sent = undefined
+  }
+  // `peers` prints a result without an id, or ends with the status 2 and a reason, when it
+  // refused the message before it sent anything.
+  const reason = sent !== undefined ? sent.note : ran?.exitCode === 2 ? oneLine(ran.stderr, 200) : undefined
+  if (sent === undefined && reason === undefined) {
     await update($, notice, () => ({
       text: 'The send gave no answer. The message can be delivered. Read the thread before you send it again.',
       isError: true,
@@ -173,15 +183,8 @@ async function send($: EngineInterface, args: readonly string[], body: string): 
 
     return
   }
-  let sent: { msg_id?: string; to?: string; status?: string; note?: string } | undefined
-  try {
-    sent = (JSON.parse(ran.stdout) as (typeof sent)[])[0]
-  } catch {
-    sent = undefined
-  }
   if (sent === undefined || !sent.msg_id) {
-    const why = sent?.note ?? oneLine(ran.stderr, 200)
-    await update($, notice, () => ({ text: `not sent · ${why}`, isError: true }))
+    await update($, notice, () => ({ text: `not sent · ${reason ?? ''}`, isError: true }))
 
     return
   }
