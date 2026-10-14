@@ -868,11 +868,18 @@ test('a click on the last line of a row shows the full message, and a second cli
     props,
   })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
-  expect((await ui.find({ key: 'more:0' }))?.props.label).toMatch(/click to show the full message/)
+  expect((await ui.find({ key: 'more:0' }))?.props.label).toBe('… more · click to show all')
   await ui.press({ key: 'more:0' })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeDefined()
-  expect((await ui.find({ key: 'more:0' }))?.props.label).toBe('click to show less')
+  expect((await ui.find({ key: 'more:0' }))?.props.label).toBe('▴ show less')
   await ui.press({ key: 'more:0' })
+  expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
+  // The first line of the row opens and folds it too, and its mark shows which it is.
+  expect((await ui.find({ key: 'row:0' }))?.text).toMatch(/codex-x.*▸/)
+  await ui.press({ key: 'row:0' })
+  expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeDefined()
+  expect((await ui.find({ key: 'row:0' }))?.text).toMatch(/codex-x.*▾/)
+  await ui.press({ key: 'row:0' })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
   await ui.unmount()
   // A click opens each message of the block. A message that then has more than its room
@@ -927,6 +934,7 @@ test('a click on the last line of a row shows the full message, and a second cli
     props: { ...props, calls: [{ ...props.calls[0]!, input: { to: ['codex-x'], body: 'One line.', kind: 'info' } }] },
   })
   expect(await short.find({ key: 'more:0' })).toBeUndefined()
+  expect(await short.find({ key: 'row:0' })).toBeUndefined()
   await short.unmount()
   // Outside fullscreen mode a click does not reach the row, so the row names ctrl+o.
   const plain = await $.ui.mount({

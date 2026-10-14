@@ -21,8 +21,8 @@ export type Row = {
   note?: string
 }
 
-// A transcript row shows this many body lines of a message. A click on its last line shows
-// the message in full, up to OPEN_ROWS lines. ctrl+o shows the message as the agent read it.
+// A transcript row shows this many body lines of a message. A click on its first or its last
+// line opens the row and folds it again. ctrl+o shows the message as the agent read it.
 const INCOMING_ROWS = 8
 const OUTGOING_ROWS = 3
 // One block of rows shows this many body lines in all, so a broadcast to many peers and a
@@ -60,22 +60,31 @@ function messageRow(
   const closed = bodyLines(row.body, room, true)
   // An open row shows the message as it was written, with its empty lines.
   const { lines, more } = fold.isOpen ? bodyLines(row.body, Math.max(room, share)) : closed
-  const toggle = fold.toggle
+  // A row has a fold when a click reaches it and its message is longer than its room.
+  const toggle = closed.more > 0 || more > 0 ? fold.toggle : undefined
+  const head = [
+    <Text color={row.isIncoming ? 'suggestion' : 'subtle'}>{row.isIncoming ? '←' : '→'} </Text>,
+    <Text bold>{row.name}</Text>,
+    <Text dimColor>  {row.kind}</Text>,
+    row.state !== undefined && (
+      <Text color={stateColor(row.state)} dimColor={stateColor(row.state) === undefined}>
+        {'  '}
+        {stateWord(row.state)}
+      </Text>
+    ),
+    row.id !== undefined && <Text dimColor>  {row.id.slice(0, 8)}</Text>,
+    toggle !== undefined && <Text dimColor>  {fold.isOpen ? '▾' : '▸'}</Text>,
+  ]
 
   return (
     <Box flexDirection="column">
-      <Text wrap="truncate-end">
-        <Text color={row.isIncoming ? 'suggestion' : 'subtle'}>{row.isIncoming ? '←' : '→'} </Text>
-        <Text bold>{row.name}</Text>
-        <Text dimColor>  {row.kind}</Text>
-        {row.state !== undefined && (
-          <Text color={stateColor(row.state)} dimColor={stateColor(row.state) === undefined}>
-            {'  '}
-            {stateWord(row.state)}
-          </Text>
-        )}
-        {row.id !== undefined && <Text dimColor>  {row.id.slice(0, 8)}</Text>}
-      </Text>
+      {toggle !== undefined ? (
+        <Button key={`row:${index}`} plain onPress={toggle}>
+          {head}
+        </Button>
+      ) : (
+        <Text wrap="truncate-end">{head}</Text>
+      )}
       <Box flexDirection="column" paddingLeft={2}>
         {row.re !== undefined && (
           <Text dimColor wrap="truncate-end">
@@ -85,19 +94,22 @@ function messageRow(
         {lines.map(line => (
           <Text dimColor={!row.isIncoming}>{line || ' '}</Text>
         ))}
-        {toggle !== undefined && !fold.isOpen && more > 0 && (
-          <Button key={`more:${index}`} plain dimColor label="… more · click to show the full message" onPress={toggle} />
-        )}
-        {toggle !== undefined && fold.isOpen && (closed.more > 0 || more > 0) && (
+        {toggle !== undefined && (
           <Button
             key={`more:${index}`}
             plain
             dimColor
-            label={more > 0 ? '… more · ctrl+o shows all · click to show less' : 'click to show less'}
+            label={
+              !fold.isOpen
+                ? '… more · click to show all'
+                : more > 0
+                  ? '… more · ctrl+o shows all · click to show less'
+                  : '▴ show less'
+            }
             onPress={toggle}
           />
         )}
-        {toggle === undefined && more > 0 && <Text dimColor>… more of this message · ctrl+o shows all</Text>}
+        {fold.toggle === undefined && more > 0 && <Text dimColor>… more of this message · ctrl+o shows all</Text>}
         {row.note !== undefined && (
           <Text color={row.state !== undefined && stateColor(row.state) === 'error' ? 'error' : undefined} dimColor>
             {row.note}
