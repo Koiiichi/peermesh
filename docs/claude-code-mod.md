@@ -38,7 +38,7 @@ A message that wakes the session, and a message that the agent sends, each take 
   The web dev server uses port 5173. Allow http://localhost:5173 as an origin in the API's CORS config.
 ```
 
-`←` is a message that the agent of this session received. The row shows the sender, the kind and the id. `re:` is the start of the message that a reply answers. A row shows the first eight lines of a received message and the first three of a sent one, without their empty lines. In fullscreen mode, a row with more text has the option `▸ expand` on its first line and on its last line, in a color of its own. Click either line to open the row. An open row has `▾ collapse` in the same two places.
+`←` is a message that the agent of this session received. The row shows the sender, the kind and the id. `re:` is the start of the message that a reply answers. A row shows the first eight lines of a received message and the first three of a sent one, without their empty lines. A row with more text ends with the number of lines that it does not show, such as `… 8 more lines`. In fullscreen mode, such a row has the option `▸ expand` on its first line, in a color of its own. Click that line to open the row; the option is then `▾ collapse`, and a click folds the row.
 
 `→` is a message that the agent sent. Its state is the state in the ledger now, so the row changes after it is drawn:
 
