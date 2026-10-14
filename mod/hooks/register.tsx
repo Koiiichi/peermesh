@@ -7,7 +7,7 @@ import type { EngineInterface, ProcessRunResult, Register } from 'claude-code'
 
 import type { Message, Peer, View } from '../types'
 import { parseFrame } from './frame'
-import { oneLine, warnsOfResend } from './text'
+import { clock, oneLine, warnsOfResend } from './text'
 import { homeFocus, messageRows, paneTree } from './ui'
 import type { Fold, Row } from './ui'
 
@@ -21,6 +21,8 @@ const REPLY = 'mcp__peermesh__peers_reply'
 const TICK_MS = 3000
 // A row quotes the start of the message that a reply answers, in this many characters.
 const QUOTE_CHARS = 80
+// The width of a row where the surface did not measure its transcript.
+const WIDTH = 80
 const WAITING_TICKS = 5
 
 const me = atom({ plugin: 'peermesh', key: 'me' } as const, null)
@@ -335,11 +337,30 @@ async function fold(
     : { isOpen: false }
 }
 
-/** The quote of the message that a reply answers. "you" is this session. */
-function quote(parent: Message | undefined, mine: string | null): Row['answers'] {
-  return parent === undefined
-    ? undefined
-    : { who: parent.from === mine ? 'you' : parent.fromName, text: oneLine(parent.body, QUOTE_CHARS) }
+/** The start of the message that a reply answers, on one line. */
+function quote(parent: Message | undefined): string | undefined {
+  return parent === undefined ? undefined : oneLine(parent.body, QUOTE_CHARS)
+}
+
+/**
+ * The word on a reply whose sender reports that the requested work is complete. It says
+ * what the sender claims about the work. It is not a state of the delivery.
+ */
+function doneWord(isDone: boolean): string | undefined {
+  return isDone ? 'done' : undefined
+}
+
+/** The local time of a message of the ledger, for the first line of its row. */
+function timeOf(record: Message | undefined): string | undefined {
+  return record === undefined || record.sentAt === 0 ? undefined : clock(record.sentAt)
+}
+
+/**
+ * The state that the row of a sent message shows. A reply is a row of its own, so a message
+ * that has a reply shows no state.
+ */
+function shownState(state: string): string | undefined {
+  return state === 'answered' || state === 'done' ? undefined : state
 }
 
 function known(all: readonly Message[], id: unknown): Message | undefined {
@@ -357,16 +378,15 @@ function sentRows(
     output?: unknown
   },
   all: readonly Message[],
-  mine: string | null,
 ): Row[] {
   const input = (call.input ?? {}) as Record<string, unknown>
   const isReply = call.tool === REPLY
   const parent = isReply ? known(all, input.msg_id) : undefined
   const base = {
     isIncoming: false,
-    kind: isReply ? (input.done === true ? 'reply · done' : 'reply') : text(input.kind) || 'info',
+    kind: isReply ? doneWord(input.done === true) : (text(input.kind) || 'info').replace('_', ' '),
     body: text(input.body),
-    answers: quote(parent, mine),
+    quote: quote(parent),
   }
   const targets = Array.isArray(input.to) ? input.to.map(text).join(', ') : text(input.to)
   const name = parent?.fromName ?? (targets || '…')
@@ -402,7 +422,8 @@ function sentRows(
         ...base,
         name: text(r.to) || name,
         id: text(r.msg_id) || undefined,
-        state,
+        state: shownState(state),
+        time: timeOf(record),
         note: notes.find(warnsOfResend) ?? (isFailed ? notes[0] : undefined),
       }
     })
@@ -471,8 +492,10 @@ export const register: Register = on => {
     if (isDelivery && drawsDeliveries) {
       const context = e.message.content.map(block => (block.type === 'text' ? block.text : '')).join('\n')
       for (const item of parseFrame(context) ?? []) {
-        const kind = item.isDone ? `${item.kind} · done` : item.kind
-        $.ui.log(`← ${item.from} · ${kind} · ${item.id.slice(0, 8)} · ${oneLine(item.body, 200)}`)
+        // One line is all that a mod can add here: the sender, the kind of a message that
+        // is not a reply, and the start of the text.
+        const kind = item.kind === 'reply' ? '' : ` · ${item.kind}`
+        $.ui.log(`← ${item.from}${kind}  ${oneLine(item.body, 200)}`)
       }
       void refresh($)
     }
@@ -508,24 +531,22 @@ export const register: Register = on => {
         return next(e)
       }
       const all = await read($, messages)
-      const mine = await read($, me)
       const rows = items.map((item): Row => {
         const record = known(all, item.id)
         const parent = record?.inReplyTo ? all.find(m => m.id === record.inReplyTo) : undefined
-        const isAnswered = record?.state === 'answered' || record?.state === 'done'
 
         return {
           isIncoming: true,
           name: item.from,
-          kind: item.isDone ? `${item.kind} · done` : item.kind,
+          kind: item.kind === 'reply' ? doneWord(item.isDone) : item.kind,
           id: item.id,
           body: item.body,
-          answers: quote(parent, mine),
-          note: isAnswered ? 'this session replied' : undefined,
+          time: timeOf(record),
+          quote: quote(parent),
         }
       })
 
-      return messageRows($.ui.resolve(e), rows, await fold($, e))
+      return messageRows($.ui.resolve(e), rows, await fold($, e), e.viewport?.columns ?? WIDTH)
     },
   )
 
@@ -535,13 +556,13 @@ export const register: Register = on => {
       return next(e)
     }
     const all = await read($, messages)
-    const mine = await read($, me)
-    const rows = sends.flatMap(call => sentRows(call, all, mine))
+    const rows = sends.flatMap(call => sentRows(call, all))
+    const columns = e.viewport?.columns ?? WIDTH
 
     const T = $.ui.resolve(e)
     const folded = await fold($, e)
     if (sends.length === e.props.calls.length) {
-      return messageRows(T, rows, folded)
+      return messageRows(T, rows, folded, columns)
     }
     // The group has other calls. The line that Claude Code draws for the group stays, because
     // it shows which of them run and which of them failed.
@@ -549,7 +570,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        {messageRows(T, rows, folded)}
+        {messageRows(T, rows, folded, columns)}
         {await next(e)}
       </Box>
     )

@@ -27,38 +27,53 @@ A mod is code that runs with your permissions, outside a sandbox. This one runs 
 
 ## Read messages in the conversation
 
-A message that wakes the session, and a message that the agent sends, each take two or three lines:
+Each message has one line for its sender and its text below that line. These rows are from a session with the name `shop-api`:
 
 ```text
-→ shop-web  request  answered  84b01ebb
-  Which port does the web dev server use? The API must allow it in CORS.
+→ shop-db · request                                                 19:36
+  List the tables of the database, one on each line, with one short note for each.
 
-← shop-web  reply  5b457c23
-  ▎ you  Which port does the web dev server use? The API must allow it in CORS.
-  The web dev server uses port 5173. Allow http://localhost:5173 as an origin in the API's CORS config.
+  ▎ List the tables of the database, one on each line, with one short note for each.
+← shop-db · done                                                    19:36
+  Tables in the shop database (Postgres 16, port 5432):
+  users - customer accounts.
+  carts - shopping carts that belong to users.
+  orders - orders placed by users.
 ```
 
-`←` is a message that the agent of this session received. The row shows the sender, the kind and the id. The line with the bar `▎` is a quote: the start of the message that a reply answers, with `you` or the name of the session that wrote it. A row shows the first eight lines of a received message and the first three of a sent one, without their empty lines. A row with more text ends with the number of lines that it does not show, such as `… 8 more lines`. In fullscreen mode, such a row has the option `▸ expand` on its first line, in a color of its own. Click that line to open the row; the option is then `▾ collapse`, and a click folds the row.
+`→` is a message that the agent of this session sent, and `←` is a message that it received. Each peer has a color of its own on its arrow and its name.
 
-`→` is a message that the agent sent. Its state is the state in the ledger now, so the row changes after it is drawn:
+- **The line with the bar `▎`** is a quote: the start of the message that a reply answers. It is above the reply, dim and in italics.
+- **The word after the name** is the kind of a message that is not a reply: `request`, `info`, `handoff` or `review request`. On a reply, `done` says that its sender reports the work as complete.
+- **The time** is at the end of the first line. A terminal of less than 60 columns leaves it out.
+
+A row shows the first eight lines of a received message and the first three of a sent one, with their indents and their empty lines. The first line then says how many lines are not shown:
+
+```text
+← shop-db                                          ▸ 11 more lines · 19:38
+```
+
+In fullscreen mode, click `▸ 11 more lines` to open the row. The first line is then `▾ collapse · b14be920 · 19:38`, with the id of the message, and a click folds the row. Outside fullscreen mode a click does not reach the row, and the line says `11 more lines · ctrl+o`.
+
+A sent row shows the state of its delivery until the reply comes. The state is the state in the ledger now, so the row changes after it is drawn:
 
 | Word | What happened |
 | --- | --- |
 | `pending` | The message waits for the next tool call or prompt of the peer. |
 | `delivered` | The runtime of the peer has the message. No runtime reports that an agent read it. |
-| `answered` | The peer sent a reply. |
-| `done` | The peer sent a reply and reported that the work is complete. |
 | `failed` | The message was refused, or the peer closed before it got the message. A refused message shows the reason. |
+
+A message that has a reply shows no state, because the reply is a row of its own.
 
 Press ctrl+o to see a message as the agent read it, with the lines that peermesh and Claude Code add for the agent.
 
 A message that a hook gives the agent in the middle of a turn is one line, because Claude Code lets a mod add only a line there:
 
 ```text
-⏺ peermesh: ← peermesh-arch · info · cddf33c9 · The schema file moved to docs/schema.md. The old path src/schema.md is gone as of commit 4be1f0a.
+⏺ peermesh: ← shop-db · info  The orders table gets a new column, shipped_at, in the next migration.
 ```
 
-Without the mod, the same delivery shows as `PostToolUse:Bash says: peermesh: gave the agent info from peermesh-arch`, without the text.
+Without the mod, the same delivery shows as `PostToolUse:Bash says: peermesh: gave the agent info from shop-db`, without the text.
 
 ## Open the pane
 

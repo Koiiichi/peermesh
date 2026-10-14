@@ -14,23 +14,28 @@ export function oneLine(text: string, width: number): string {
 const LINE_CHARS = 400
 
 /**
- * The lines of a body, with no control character, cut after `rows` lines. `more` is the
- * number of lines that are cut in full or in part. `isDense` leaves out the empty lines, for a
- * row that shows only the start of a message.
+ * The first `rows` lines of a body as they were written, with no control character. `more` is
+ * the number of lines with text that are not shown.
+ *
+ * The lines keep their indents and their empty lines. Empty lines at the start, at the end and
+ * at the cut are left out, and a run of empty lines is one empty line, so the room is not
+ * spent on nothing.
  */
-export function bodyLines(
-  text: string,
-  rows: number,
-  isDense = false,
-): { lines: string[]; more: number } {
+export function bodyLines(text: string, rows: number): { lines: string[]; more: number } {
   const all = text
     .split('\n')
-    .map(line => line.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '').replace(/\t/g, '  '))
-    .filter(line => !isDense || line.trim() !== '')
-  const lines = all.slice(0, rows).map(line => (line.length > LINE_CHARS ? line.slice(0, LINE_CHARS) + '…' : line))
-  const long = all.slice(0, rows).filter(line => line.length > LINE_CHARS).length
+    .map(line => line.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '').replace(/\t/g, '  ').trimEnd())
+    .filter((line, at, list) => line !== '' || (at > 0 && list[at - 1] !== ''))
+  while (all[all.length - 1] === '') {
+    all.pop()
+  }
+  const lines = all.slice(0, rows)
+  while (lines[lines.length - 1] === '') {
+    lines.pop()
+  }
+  const shown = lines.map(line => (line.length > LINE_CHARS ? line.slice(0, LINE_CHARS) + '…' : line))
 
-  return { lines, more: all.length - lines.length + long }
+  return { lines: shown, more: all.slice(lines.length).filter(line => line !== '').length }
 }
 
 export function pad(text: string, width: number): string {
@@ -98,4 +103,18 @@ export function shortDir(dir: string): string {
  */
 export function warnsOfResend(note: string): boolean {
   return /do not resend/i.test(note)
+}
+
+// The colors that tell the peers apart. They are the theme colors that carry no state and that
+// a terminal of 256 colors shows as three clearly different colors. More names share a color.
+const ACCENTS = ['claude', 'planMode', 'merged'] as const
+
+/** The color of a peer: the same color for the same name in each row and each session. */
+export function accent(name: string): string {
+  let sum = 0
+  for (const char of name) {
+    sum = (sum * 31 + (char.codePointAt(0) ?? 0)) % 9973
+  }
+
+  return ACCENTS[sum % ACCENTS.length] ?? 'claude'
 }
