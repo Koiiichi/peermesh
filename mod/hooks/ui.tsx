@@ -64,7 +64,7 @@ function messageRow(T: ElementTable, row: Row): RenderElement {
           </Text>
         )}
         {row.note !== undefined && (
-          <Text color={row.state !== undefined && stateWord(row.state) === 'failed' ? 'error' : undefined} dimColor>
+          <Text color={row.state !== undefined && stateColor(row.state) === 'error' ? 'error' : undefined} dimColor>
             {row.note}
           </Text>
         )}

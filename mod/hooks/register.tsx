@@ -316,7 +316,9 @@ function sentRows(
     return [{ ...base, name, state: 'interrupted', note: unknown }]
   }
   if (call.isErrored) {
-    return [{ ...base, name, state: 'refused', note: oneLine(text(call.output), 200) }]
+    // The tool gave an error and no result. The error text says what is known; the server can
+    // fail after it sent the message, so the row does not say that the message was refused.
+    return [{ ...base, name, state: 'error', note: `${oneLine(text(call.output), 200)} · ${unknown}` }]
   }
   if (typeof call.output !== 'string') {
     return [{ ...base, name, state: 'sending' }]
