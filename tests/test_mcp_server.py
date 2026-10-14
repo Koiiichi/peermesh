@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable
+from typing import Any, cast
 
 import pytest
 
@@ -23,7 +25,7 @@ def ctx(make_peer: Callable[..., Peer], monkeypatch: pytest.MonkeyPatch) -> Mesh
     me = make_peer(id="claude:ME", name="claude-me")
     mesh.registry.put(me)
     mesh.registry.put(make_peer(id="codex:X", name="codex-x", runtime="codex", endpoint="X"))
-    monkeypatch.setattr(mcp_server, "_context", lambda: (mesh, me))
+    monkeypatch.setattr(mcp_server, "_context", lambda ctx=None: (mesh, me))
     return mesh
 
 
@@ -52,10 +54,35 @@ def test_the_server_states_that_it_resolves_short_ids(
     me = make_peer(id="claude:ME", name="claude-me")
     mesh.registry.put(me)
     monkeypatch.setattr(Mesh, "default", classmethod(lambda cls: mesh))
-    monkeypatch.setattr(Mesh, "whoami", lambda self: mesh.registry.get("claude:ME"))
+    monkeypatch.setattr(Mesh, "whoami", lambda self, *a: mesh.registry.get("claude:ME"))
     before = mesh.registry._file("claude:ME").read_text()
     assert not accepts_short_ids(me)
     mcp_server._context()
     assert accepts_short_ids(me)
     # The registry record is not written: a stale copy could replace a status from a hook.
     assert mesh.registry._file("claude:ME").read_text() == before
+
+
+class _Request:
+    def __init__(self, meta: dict[str, object] | None) -> None:
+        self.meta = meta
+
+
+class _Ctx:
+    def __init__(self, meta: dict[str, object] | None) -> None:
+        self.request_context = _Request(meta)
+
+
+def test_a_codex_call_names_its_thread_in_the_request_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "OUTER")
+    turn = {"thread_id": "T1", "workspaces": {"/repo": {"has_changes": False}}}
+    env, cwd = mcp_server._session(cast(Any, _Ctx({"x-codex-turn-metadata": turn})))
+    assert env["CODEX_THREAD_ID"] == "T1" and "CLAUDE_CODE_SESSION_ID" not in env
+    assert cwd == "/repo"
+
+
+def test_a_call_without_codex_metadata_uses_the_environment() -> None:
+    assert mcp_server._session(cast(Any, _Ctx({"progressToken": 1}))) == (os.environ, None)
+    assert mcp_server._session(None) == (os.environ, None)

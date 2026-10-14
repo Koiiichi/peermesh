@@ -67,6 +67,9 @@ def test_render_one_message_for_claude_and_codex(pair: tuple[Peer, Peer]) -> Non
     assert "Do not reply only to acknowledge." in text
     assert msg.id not in text and "thread" not in text and "hop" not in text
     assert f'peers reply {msg.id[:8]} --body "<text>"' in render([msg], "codex", short_ids=True)
+    # A Codex session with the plugin has the MCP tools and no rule for the shell command.
+    with_tools = render([msg], "codex", short_ids=True, tools=True)
+    assert f'peers_reply("{msg.id[:8]}", "<text>")' in with_tools
 
 
 def test_render_gives_full_ids_to_a_receiver_that_cannot_resolve_short_ids(

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Runs the peers command of the installed peermesh package, or peers-mcp with --mcp.
+# Codex can start a plugin hook or server with a short PATH, so the script also looks in
+# ~/.local/bin, where `uv tool install` puts the commands.
+name=peers
+if [ "${1-}" = "--mcp" ]; then
+  name=peers-mcp
+  shift
+fi
+exe=$(command -v "$name" 2>/dev/null) || exe="$HOME/.local/bin/$name"
+if [ ! -x "$exe" ]; then
+  echo "peermesh: the $name command is not installed. Install peermesh, then start a new session." >&2
+  exit 127
+fi
+exec "$exe" "$@"

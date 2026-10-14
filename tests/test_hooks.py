@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from peermesh import hooks, paths
+from peermesh import hooks, install, paths
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry
 from peermesh.service import Mesh
@@ -216,3 +216,33 @@ def test_ephemeral_codex_thread_is_not_registered() -> None:
         host_pid=os.getpid(),
     )
     assert mesh.registry.get("claude:C") is not None
+
+
+def test_a_plugin_hook_tells_the_session_to_use_the_mcp_tools() -> None:
+    mesh = _mesh()
+    payload = {"session_id": "T1", "cwd": os.getcwd()}
+    out = hooks.handle(
+        mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid(), plugin=True
+    )
+    assert out is not None
+    rules = out["hookSpecificOutput"]["additionalContext"]
+    assert "peers_send" in rules and "`peers send" not in rules
+    peer = mesh.registry.get("codex:T1")
+    assert peer is not None and peer.has_tools
+    # A hook from `peers install` gives the session the shell commands again.
+    hooks.handle(mesh, "prompt", "codex", payload, env={}, host_pid=os.getpid())
+    peer = mesh.registry.get("codex:T1")
+    assert peer is not None and not peer.has_tools
+
+
+def test_a_plugin_hook_does_nothing_when_peers_install_hooks_serve_the_session() -> None:
+    hooks_file = paths.codex_home() / "hooks.json"
+    hooks_file.parent.mkdir(parents=True)
+    hooks_file.write_text(json.dumps(install.merge_hooks({}, "/bin/peers", "codex")))
+    mesh = _mesh()
+    payload = {"session_id": "T1", "cwd": os.getcwd()}
+    out = hooks.handle(
+        mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid(), plugin=True
+    )
+    assert out is None
+    assert mesh.registry.get("codex:T1") is None

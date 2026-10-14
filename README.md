@@ -37,6 +37,18 @@ peers doctor
 
 `peers install` checks every file first and changes nothing if one is malformed or `claude` is missing. Codex asks once to trust the new hooks, and again after an upgrade changes them. Run `peers install` again after an upgrade; until then, sessions keep the native delivery and do not get the post-tool hook. `peers uninstall` reverses every change; the first backup of each file stays as `*.peermesh.bak`.
 
+## Install the Codex part as a plugin
+
+Codex can get peermesh as a plugin instead of the Codex part of `peers install`. The plugin runs the same five hooks and gives Codex the MCP tools in place of the shell commands, so it needs no `AGENTS.md` block and no sandbox rule. It still runs the `peers` command that `uv tool install` put on your PATH. In the checkout:
+
+```bash
+peers uninstall --runtime codex   # only if `peers install` set up Codex before
+codex plugin marketplace add "$PWD"
+codex plugin add peermesh@peermesh
+```
+
+Codex asks you to trust the five hooks in the next session, and does not ask again after an update. While `~/.codex/hooks.json` holds the hooks of `peers install`, those hooks serve the session and the plugin hooks leave the work to them; a message still arrives once. After `git pull`, run `codex plugin add peermesh@peermesh` again; `codex plugin marketplace upgrade` works only for a Git marketplace. `codex plugin remove peermesh@peermesh` removes the plugin, but Codex keeps the trust records of its hooks in `~/.codex/config.toml`. A session that is open during an update or a removal keeps the plugin it started with until it ends. The plugin is tested with the Codex CLI; the Codex app is not tested yet.
+
 ## How agents use it
 
 Nobody runs these by hand in normal use. The session-start hook tells each agent who it is and which peers are live in the same repository, and the instruction block tells it when to write: a change a peer depends on, finished work a peer waits for, a blocker, a review request.
@@ -51,7 +63,7 @@ Nobody runs these by hand in normal use. The session-start hook tells each agent
 
 Each session gets a name such as `claude-shop-4b`. A Claude Code session that you rename with `/rename` uses your name instead, and its first name still works as an address. The hooks do not register an ephemeral Codex thread, such as a one-time review: it has no rollout file, so it cannot be woken. Such a thread still registers if its agent runs a `peers` command.
 
-Codex gets the command instead of MCP tools because Codex does not pass its thread id to MCP servers. Claude Code agents are told to use these tools, not Claude Code's own `SendMessage`, for other sessions, so every message gets the frame, the limits and a ledger entry. `peers log` shows the recent ledger for people.
+With `peers install`, Codex gets the commands, which the sandbox rule lets run. With the plugin, Codex gets the MCP tools: Codex sends the thread id to an MCP server only in the metadata of each tool call, and the peermesh server reads it there. Claude Code agents are told to use these tools, not Claude Code's own `SendMessage`, for other sessions, so every message gets the frame, the limits and a ledger entry. `peers log` shows the recent ledger for people.
 
 ## Delivery
 
@@ -144,7 +156,7 @@ Delivery does not use the mod, and a session without it works as before. [docs/c
 - A thread stops after 8 messages that each answer the previous one within 2 minutes; a slower answer, which follows real work, starts the count again. One sender can add at most 8 messages to one thread in 10 minutes. A `peers send` to a peer that messaged you in the last 15 minutes continues that thread, so an answer sent either way counts. A sender can start at most 6 threads with one peer per 10 minutes. Replies that only acknowledge are refused. A reply to a broadcast goes to its sender only.
 - Bodies are capped at 8 KB, to hold decisions, paths and commit hashes rather than transcripts.
 - `peers` and the MCP tools act only as the session they run under: the session's host process must be an ancestor of the caller. This stops an agent from sending as another session through peermesh. It does not stop a process running as your user from writing to a Claude inbox socket or calling `codex queue` directly.
-- Codex receives peer messages as ordinary user input; the frame and the AGENTS.md rule are the only provenance it has.
+- Codex receives peer messages as ordinary user input; the frame and the peermesh rules from the hooks and the instruction block are the only provenance it has.
 
 ## Try it with two sessions
 

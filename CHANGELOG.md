@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- A Codex plugin in `codex/`, which you can use instead of the Codex part of `peers install`. It runs the same hooks and gives Codex the peermesh MCP tools in place of the shell commands. Install it with `codex plugin marketplace add "$PWD"` and `codex plugin add peermesh@peermesh` in the checkout. The README shows how to update and remove it.
+- The MCP server finds the Codex thread of each tool call in the metadata that Codex sends with the call.
+
 ### Changed
 
 - The line that a hook shows you when it gives the agent a message mid-turn now has the sender, the kind and the start of the text: `peermesh: ← shop-db · info  The orders table gets a new column, shipped_at.` It was `peermesh: gave the agent info from shop-db`, with no text. The line stays one line of bounded length: a body with several lines is put on one line, control characters show as escapes, and a batch adds `(+1 more)`. The agent still gets each message in full. Codex CLI shows the line as `↳ Hook · …`, and Claude Code without the mod as `PostToolUse:Bash says: …`.

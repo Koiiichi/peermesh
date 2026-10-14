@@ -42,6 +42,11 @@ class Peer:
     # rename exists only in memory, so the record keeps the given name as a stable address.
     auto_name: str | None = None
 
+    @property
+    def has_tools(self) -> bool:
+        """True when the session has the peermesh MCP tools: Claude Code or the Codex plugin."""
+        return self.runtime == "claude" or "mcp_tools" in self.capabilities
+
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
         data["name"] = data.pop("auto_name") or self.name
