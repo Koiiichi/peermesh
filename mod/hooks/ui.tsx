@@ -28,12 +28,17 @@ const OUTGOING_ROWS = 3
 export function messageRows(T: ElementTable, rows: readonly Row[]): RenderElement {
   const { Box } = T
 
-  return <Box flexDirection="column">{rows.map(row => messageRow(T, row))}</Box>
+  // The blank line above is the one that Claude Code puts above each block of its own.
+  return (
+    <Box flexDirection="column" marginTop={1}>
+      {rows.map(row => messageRow(T, row))}
+    </Box>
+  )
 }
 
 function messageRow(T: ElementTable, row: Row): RenderElement {
   const { Box, Text } = T
-  const { lines, more } = bodyLines(row.body, row.isIncoming ? INCOMING_ROWS : OUTGOING_ROWS)
+  const { lines, more } = bodyLines(row.body, row.isIncoming ? INCOMING_ROWS : OUTGOING_ROWS, true)
 
   return (
     <Box flexDirection="column">
