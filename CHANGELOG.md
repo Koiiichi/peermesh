@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-10-13
+
+### Upgrade
+
+1. Pull: `git pull`. No reinstall is necessary.
+2. To get the mod, which is optional, run `claude plugin marketplace add ./` and `claude plugin install peermesh@peermesh` in the checkout. Sessions that start after that have it.
 
 ### Added
 
