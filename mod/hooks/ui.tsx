@@ -81,6 +81,8 @@ export type PaneData = {
   notice: Notice
   /** A send from the pane runs. The pane draws no text field until it ends. */
   isSending: boolean
+  /** False when the last read of peermesh failed. The lists are then the last ones read. */
+  isCurrent: boolean
   columns: number
 }
 
@@ -106,6 +108,9 @@ export function paneTree(T: ElementTable, data: PaneData, on: PaneHandlers): Ren
 
   return (
     <Box flexDirection="column">
+      {!data.isCurrent && (
+        <Text color="warning">The peers command gave no answer. The lists can be old. Run peers doctor.</Text>
+      )}
       {data.isSending && <Text color="warning">sending…</Text>}
       {data.notice !== null && (
         <Text color={data.notice.isError ? 'error' : 'success'}>{data.notice.text}</Text>

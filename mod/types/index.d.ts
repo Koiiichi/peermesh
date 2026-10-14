@@ -44,6 +44,7 @@ declare module 'claude-code' {
       view: View
       notice: Notice
       isSending: boolean
+      isCurrent: boolean
     }
   }
 }

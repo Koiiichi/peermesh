@@ -27,6 +27,7 @@ const messages = atom({ plugin: 'peermesh', key: 'messages' } as const, [])
 const view = atom({ plugin: 'peermesh', key: 'view' } as const, { kind: 'home' })
 const notice = atom({ plugin: 'peermesh', key: 'notice' } as const, null)
 const sending = atom({ plugin: 'peermesh', key: 'isSending' } as const, false)
+const current = atom({ plugin: 'peermesh', key: 'isCurrent' } as const, true)
 
 // The executable that ran last, and the state as it was written last. A reload starts them
 // again, which costs one more read.
@@ -36,6 +37,7 @@ let reading: Promise<void> | undefined
 let isStale = false
 let isSending = false
 let hasWaiting = false
+let wasRead = true
 let drawsDeliveries = false
 
 // A send can wait for the transport of the peer, which gives Codex 30 seconds.
@@ -105,58 +107,65 @@ function refresh($: EngineInterface): Promise<void> {
   return reading
 }
 
+/** Read the state one time. The pane says so when the read fails and its lists can be old. */
 async function readState($: EngineInterface): Promise<void> {
-  try {
-    const ran = await readPeers($, ['--json', 'watch'])
-    if (ran === undefined || ran.exitCode !== 0) {
-      return
-    }
-    const data = JSON.parse(ran.stdout) as {
-      me: string | null
-      peers: Record<string, unknown>[]
-      messages: Record<string, unknown>[]
-    }
-    const nextPeers: Peer[] = data.peers.map(p => ({
-      id: text(p.id),
-      name: text(p.name),
-      runtime: text(p.runtime),
-      status: text(p.status),
-      branch: typeof p.branch === 'string' ? p.branch : null,
-      dir: text(p.worktree) || text(p.cwd),
-      waiting: Number(p.waiting) || 0,
-    }))
-    const nextMessages: Message[] = data.messages.map(m => ({
-      id: text(m.id),
-      from: text(m.from),
-      fromName: text(m.from_name),
-      to: text(m.to),
-      toName: text(m.to_name),
-      kind: text(m.kind),
-      body: text(m.body),
-      sentAt: Number(m.sent_at) || 0,
-      thread: text(m.thread) || text(m.id),
-      inReplyTo: typeof m.in_reply_to === 'string' ? m.in_reply_to : null,
-      state: text(m.state),
-      note: text(m.note),
-    }))
-    // A write draws each reader again, so a list that did not change is not written.
-    const next = { me: data.me, peers: JSON.stringify(nextPeers), messages: JSON.stringify(nextMessages) }
-    if (next.me !== written.me) {
-      await update($, me, () => data.me)
-    }
-    if (next.peers !== written.peers) {
-      await update($, peers, () => nextPeers)
-    }
-    if (next.messages !== written.messages) {
-      await update($, messages, () => nextMessages)
-    }
-    written = next
-    hasWaiting = nextMessages.some(
-      m => m.from === data.me && (m.state === 'pending' || m.state === 'sending'),
-    )
-  } catch {
-    // A read that fails leaves the last state on the screen. The next read tries again.
+  const isRead = await readOnce($).catch(() => false)
+  if (isRead !== wasRead) {
+    wasRead = isRead
+    await update($, current, () => isRead)
   }
+}
+
+async function readOnce($: EngineInterface): Promise<boolean> {
+  const ran = await readPeers($, ['--json', 'watch'])
+  if (ran === undefined || ran.exitCode !== 0) {
+    return false
+  }
+  const data = JSON.parse(ran.stdout) as {
+    me: string | null
+    peers: Record<string, unknown>[]
+    messages: Record<string, unknown>[]
+  }
+  const nextPeers: Peer[] = data.peers.map(p => ({
+    id: text(p.id),
+    name: text(p.name),
+    runtime: text(p.runtime),
+    status: text(p.status),
+    branch: typeof p.branch === 'string' ? p.branch : null,
+    dir: text(p.worktree) || text(p.cwd),
+    waiting: Number(p.waiting) || 0,
+  }))
+  const nextMessages: Message[] = data.messages.map(m => ({
+    id: text(m.id),
+    from: text(m.from),
+    fromName: text(m.from_name),
+    to: text(m.to),
+    toName: text(m.to_name),
+    kind: text(m.kind),
+    body: text(m.body),
+    sentAt: Number(m.sent_at) || 0,
+    thread: text(m.thread) || text(m.id),
+    inReplyTo: typeof m.in_reply_to === 'string' ? m.in_reply_to : null,
+    state: text(m.state),
+    note: text(m.note),
+  }))
+  // A write draws each reader again, so a list that did not change is not written.
+  const next = { me: data.me, peers: JSON.stringify(nextPeers), messages: JSON.stringify(nextMessages) }
+  if (next.me !== written.me) {
+    await update($, me, () => data.me)
+  }
+  if (next.peers !== written.peers) {
+    await update($, peers, () => nextPeers)
+  }
+  if (next.messages !== written.messages) {
+    await update($, messages, () => nextMessages)
+  }
+  written = next
+  hasWaiting = nextMessages.some(
+    m => m.from === data.me && (m.state === 'pending' || m.state === 'sending'),
+  )
+
+  return true
 }
 
 async function tick($: EngineInterface, count: number): Promise<void> {
@@ -525,6 +534,7 @@ export const register: Register = on => {
         view: await read($, view),
         notice: await read($, notice),
         isSending: await read($, sending),
+        isCurrent: await read($, current),
         columns: e.props.bodyColumns,
       },
       {
