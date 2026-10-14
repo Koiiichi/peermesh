@@ -7,7 +7,7 @@ import type { EngineInterface, ProcessRunResult, Register } from 'claude-code'
 
 import type { Message, Peer, View } from '../types'
 import { parseFrame } from './frame'
-import { oneLine } from './text'
+import { oneLine, warnsOfResend } from './text'
 import { homeFocus, messageRows, paneTree } from './ui'
 import type { Row } from './ui'
 
@@ -236,11 +236,12 @@ async function deliver($: EngineInterface, args: readonly string[], body: string
     return
   }
   const id = sent.msg_id.slice(0, 8)
-  const isRefused = sent.status === 'refused'
-  // The note of a refused message says why. It can say that the message is in the queue of
-  // the peer and must not be sent again.
-  const outcome = `${sent.status} · ${sent.to} · ${id}` + (isRefused && sent.note ? ` · ${sent.note}` : '')
-  await update($, notice, () => ({ text: outcome, isError: isRefused }))
+  // A note says why a message was refused. A note can also say that the message is with the
+  // peer although the send did not confirm it, and that it must not be sent again.
+  const hasWarning = sent.status === 'refused' || warnsOfResend(sent.note ?? '')
+  const status = hasWarning && sent.note ? `${sent.status} · ${sent.note}` : `${sent.status}`
+  const outcome = `${sent.status} · ${sent.to} · ${id}` + (hasWarning && sent.note ? ` · ${sent.note}` : '')
+  await update($, notice, () => ({ text: outcome, isError: hasWarning }))
   // The agent of this session did not write the message. Without this row, it cannot
   // understand a reply to it.
   const quoted = body.split('\n').map(line => '> ' + line)
@@ -255,7 +256,7 @@ async function deliver($: EngineInterface, args: readonly string[], body: string
               'peermesh: The user sent a message from the peermesh pane of this session.',
               'The message has this session as its sender. A reply to it comes to this session.',
               '',
-              `to ${sent.to} · msg ${id} · ${sent.status}` + (isRefused && sent.note ? ` · ${sent.note}` : ''),
+              `to ${sent.to} · msg ${id} · ${status}`,
               ...quoted,
             ].join('\n'),
           },
@@ -338,7 +339,7 @@ function sentRows(
         name: text(r.to) || name,
         id: text(r.msg_id) || undefined,
         state,
-        note: state === 'refused' ? text(r.note) : undefined,
+        note: state === 'refused' || warnsOfResend(text(r.note)) ? text(r.note) : undefined,
       }
     })
   } catch {
