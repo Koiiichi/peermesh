@@ -875,6 +875,24 @@ test('a click on the last line of a row shows the full message, and a second cli
   await ui.press({ key: 'more:0' })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
   await ui.unmount()
+  // A click opens each message of the block. A message that then has more than its room
+  // says so, also when its short form had room for all of its text.
+  const gaps = ['Top.', ...Array.from({ length: 70 }, () => ''), 'Bottom.'].join('\n')
+  const pair = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    requestId: 'group-pair',
+    viewport: { columns: 100, rows: 40, isFullscreen: true },
+    props: {
+      ...props,
+      calls: [props.calls[0]!, { ...props.calls[0]!, tool_use_id: 'toolu_2', input: { to: ['codex-x'], body: gaps, kind: 'info' } }],
+    },
+  })
+  expect(await pair.find({ key: 'more:1' })).toBeUndefined()
+  await pair.press({ key: 'more:0' })
+  expect((await pair.find({ key: 'more:1' }))?.props.label).toMatch(/more · ctrl\+o shows all/)
+  await pair.unmount()
   // A different block of rows keeps its own state, and a short message has no line to click.
   const short = await $.ui.mount({
     plugin: 'peermesh',

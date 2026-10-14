@@ -78,7 +78,7 @@ function messageRow(T: ElementTable, row: Row, index: number, fold: Fold): Rende
         {toggle !== undefined && !fold.isOpen && more > 0 && (
           <Button key={`more:${index}`} plain dimColor label="… more · click to show the full message" onPress={toggle} />
         )}
-        {toggle !== undefined && fold.isOpen && closed.more > 0 && (
+        {toggle !== undefined && fold.isOpen && (closed.more > 0 || more > 0) && (
           <Button
             key={`more:${index}`}
             plain
