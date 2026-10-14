@@ -474,3 +474,34 @@ test('a sent message that the conversation refused is still reported as sent', a
   expect(await ui.find({ type: 'Text', text: /delivered · codex-x · bbbbbbbb · .*has no record/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('the timer does not start a read while a read runs', async ($, on) => {
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'session-1' }))
+  on('env.set', () => ({ value: undefined }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('ui.panes', () => ({ value: [{ id: 'peermesh', title: 'peermesh', isPlaced: true, isShown: true, isFocused: false }] }))
+  const clock = mock.clock(on)
+  let reads = 0
+  let finish = () => {}
+  const running = new Promise<void>(resolve => {
+    finish = resolve
+  })
+  on('process.run', async () => {
+    reads += 1
+    await running
+
+    return {
+      value: { exitCode: 0, stdout: SNAPSHOT, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }
+  })
+  await $.session.start({ cwd: '/w/rotom', surface: 'terminal', isInteractive: true })
+  // The pane is open and the first read is slow: five ticks pass during it.
+  await clock.advance(15000)
+  expect(reads).toBe(1)
+  finish()
+  await clock.settle()
+  await clock.advance(3000)
+  expect(reads).toBe(2)
+})

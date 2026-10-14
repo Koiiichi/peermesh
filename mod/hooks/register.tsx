@@ -154,6 +154,11 @@ async function readState($: EngineInterface): Promise<void> {
 }
 
 async function tick($: EngineInterface, count: number): Promise<void> {
+  // A tick during a read asks for nothing more. A read that is slower than the timer would
+  // otherwise run again without an end.
+  if (isReading) {
+    return
+  }
   const isDue = hasWaiting && count % WAITING_TICKS === 0
   if (isDue || (await $.ui.panes()).some(pane => pane.id === PANE)) {
     await refresh($)
@@ -212,7 +217,7 @@ async function deliver($: EngineInterface, args: readonly string[], body: string
       text: 'The send gave no answer. The message can be delivered. Read the thread before you send it again.',
       isError: true,
     }))
-    await refresh($)
+    void refresh($)
 
     return
   }
@@ -257,7 +262,8 @@ async function deliver($: EngineInterface, args: readonly string[], body: string
       isError: true,
     }))
   }
-  await refresh($)
+  // The send is complete. The read that shows it must not hold the next send.
+  void refresh($)
 }
 
 /** Show a view of the pane and give the keyboard to the element with the key `focus`. */
