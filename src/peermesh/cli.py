@@ -196,6 +196,13 @@ def main(argv: list[str] | None = None) -> int:
             entries = mesh.ledger.latest()[-args.limit :]
             _print(args, entries, [_log_line(e) for e in entries])
             return 0
+        if args.cmd == "watch" and args.json:
+            try:
+                me = mesh.whoami()
+            except PeerError:
+                me = None
+            print(json.dumps(views.snapshot(mesh, me)))
+            return 0
         if args.cmd == "watch":
             from rich.console import Console
 
