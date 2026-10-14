@@ -15,10 +15,11 @@ const PANE = 'peermesh'
 const COMMAND = 'mesh'
 const SEND = 'mcp__peermesh__peers_send'
 const REPLY = 'mcp__peermesh__peers_reply'
-// The timer runs at this period. It reads the state at each tick while the pane is open, and
-// at each fifth tick while it is closed.
+// The timer runs at this period. It reads the state at each tick while the pane is open. While
+// the pane is closed, it reads at each fifth tick, and only while a message that this session
+// sent waits for its peer: no event in this session tells that the peer took it.
 const TICK_MS = 3000
-const IDLE_TICKS = 5
+const WAITING_TICKS = 5
 
 const me = atom({ plugin: 'peermesh', key: 'me' } as const, null)
 const peers = atom({ plugin: 'peermesh', key: 'peers' } as const, [])
@@ -32,6 +33,7 @@ let command: string | undefined
 let written: { me: string | null; peers: string; messages: string } = { me: null, peers: '', messages: '' }
 let isReading = false
 let isSending = false
+let hasWaiting = false
 
 // A send can wait for the transport of the peer, which gives Codex 30 seconds.
 const SEND_TIMEOUT_MS = 60000
@@ -125,6 +127,9 @@ async function refresh($: EngineInterface): Promise<void> {
       await update($, messages, () => nextMessages)
     }
     written = next
+    hasWaiting = nextMessages.some(
+      m => m.from === data.me && (m.state === 'pending' || m.state === 'sending'),
+    )
   } catch {
     // A read that fails leaves the last state on the screen. The next read tries again.
   } finally {
@@ -133,8 +138,8 @@ async function refresh($: EngineInterface): Promise<void> {
 }
 
 async function tick($: EngineInterface, count: number): Promise<void> {
-  const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
-  if (isOpen || count % IDLE_TICKS === 0) {
+  const isDue = hasWaiting && count % WAITING_TICKS === 0
+  if (isDue || (await $.ui.panes()).some(pane => pane.id === PANE)) {
     await refresh($)
   }
 }
@@ -401,7 +406,7 @@ export const register: Register = on => {
         }
       })
 
-      return messageRows($.ui.resolve(e), rows, 0)
+      return messageRows($.ui.resolve(e), rows)
     },
   )
 
@@ -413,7 +418,20 @@ export const register: Register = on => {
     const all = await read($, messages)
     const rows = sends.flatMap(call => sentRows(call, all))
 
-    return messageRows($.ui.resolve(e), rows, e.props.calls.length - sends.length)
+    const T = $.ui.resolve(e)
+    if (sends.length === e.props.calls.length) {
+      return messageRows(T, rows)
+    }
+    // The group has other calls. The line that Claude Code draws for the group stays, because
+    // it shows which of them run and which of them failed.
+    const { Box } = T
+
+    return (
+      <Box flexDirection="column">
+        {messageRows(T, rows)}
+        {await next(e)}
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) =>
