@@ -305,3 +305,53 @@ test('a refused send keeps the warning of the transport', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /Do not resend/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('a second Enter while a send runs does not send again', async ($, on) => {
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'session-1' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  let sends = 0
+  let finish = () => {}
+  const running = new Promise<void>(resolve => {
+    finish = resolve
+  })
+  on('process.run', async (_$, e) => {
+    const isSend = e.argv.includes('send')
+    if (isSend) {
+      sends += 1
+      await running
+    }
+    const stdout = isSend ? JSON.stringify([SENT]) : SNAPSHOT
+
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  await $.command.run({
+    command: 'mesh',
+    args: 'codex-x',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  const ui = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'peermesh',
+    props: {
+      title: 'peermesh',
+      isFocused: true,
+      bodyColumns: 60,
+      placement: 'dock',
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  })
+  const first = ui.input({ key: `to:${PEER}`, text: 'Use main.' })
+  const second = ui.input({ key: `to:${PEER}`, text: 'Use main.' })
+  await second
+  expect(sends).toBe(1)
+  finish()
+  await first
+  expect(sends).toBe(1)
+  expect(await ui.find({ type: 'Text', text: /delivered · codex-x/ })).toBeDefined()
+  await ui.unmount()
+})

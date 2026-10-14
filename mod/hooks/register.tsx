@@ -31,6 +31,7 @@ const notice = atom({ plugin: 'peermesh', key: 'notice' } as const, null)
 let command: string | undefined
 let written: { me: string | null; peers: string; messages: string } = { me: null, peers: '', messages: '' }
 let isReading = false
+let isSending = false
 
 // A send can wait for the transport of the peer, which gives Codex 30 seconds.
 const SEND_TIMEOUT_MS = 60000
@@ -148,9 +149,20 @@ async function mark($: EngineInterface): Promise<void> {
 
 /** Send `body` with `peers send` or `peers reply`, and record the send for the agent. */
 async function send($: EngineInterface, args: readonly string[], body: string): Promise<void> {
-  if (body.trim() === '') {
+  // A second Enter while a send runs would be a second message.
+  if (body.trim() === '' || isSending) {
     return
   }
+  isSending = true
+  try {
+    await update($, notice, () => ({ text: 'sending…', isError: false }))
+    await deliver($, args, body)
+  } finally {
+    isSending = false
+  }
+}
+
+async function deliver($: EngineInterface, args: readonly string[], body: string): Promise<void> {
   if (command === undefined) {
     await refresh($)
   }
