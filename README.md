@@ -47,7 +47,7 @@ codex plugin marketplace add "$PWD"
 codex plugin add peermesh@peermesh
 ```
 
-Codex asks you to trust the five hooks in the next session, and does not ask again after an update. While `~/.codex/hooks.json` holds the hooks of `peers install`, those hooks serve the session and the plugin hooks leave the work to them; a message still arrives once. After `git pull`, run `codex plugin add peermesh@peermesh` again; `codex plugin marketplace upgrade` works only for a Git marketplace. `codex plugin remove peermesh@peermesh` removes the plugin, but Codex keeps the trust records of its hooks in `~/.codex/config.toml`. A session that is open during an update or a removal keeps the plugin it started with until it ends. The plugin is tested with the Codex CLI; the Codex app is not tested yet.
+Codex asks you to trust the five hooks in the next session, and does not ask again after an update. A plugin hook does nothing while `~/.codex/hooks.json` holds the `peers install` hook of the same event, so a session that has both gets one set of rules and each message once. After `git pull`, run `codex plugin add peermesh@peermesh` again; `codex plugin marketplace upgrade` works only for a Git marketplace. `codex plugin remove peermesh@peermesh` removes the plugin, but Codex keeps the trust records of its hooks in `~/.codex/config.toml`. A session that is open during an update or a removal keeps the plugin it started with until it ends. The plugin is tested with the Codex CLI; the Codex app is not tested yet.
 
 ## How agents use it
 

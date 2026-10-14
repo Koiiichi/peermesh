@@ -13,7 +13,7 @@ from peermesh.envelope import Ending, render
 from peermesh.errors import NoInboxError
 from peermesh.identity import detect
 from peermesh.inbox import Waiting
-from peermesh.install import hooks_installed
+from peermesh.install import HOOK_EVENTS, hooks_installed
 from peermesh.registry import Peer, Runtime, current_branch, is_alive, repo_info
 from peermesh.service import SHORT_IDS, Mesh, accepts_short_ids
 from peermesh.views import printable
@@ -24,6 +24,8 @@ _HOOK_NAMES = {
     "prompt": "UserPromptSubmit",
     "post-tool": "PostToolUse",
 }
+# The hook event of the runtime for each peermesh hook name.
+_EVENTS = {name: event for event, name in HOOK_EVENTS.items()}
 Emit = Callable[[dict[str, Any]], None]
 # The peermesh mod for Claude Code sets this variable to the id of its session. The mod draws
 # each message that a hook gives the agent, so the hook does not write a notice line too.
@@ -193,8 +195,8 @@ def handle(
     this runtime is installed, so senders can leave messages for it. `plugin` is True for a
     hook of the Codex plugin, whose session has the peermesh MCP tools.
     """
-    if plugin and hooks_installed(runtime):
-        # The hooks of `peers install` serve this session, so the plugin hooks do nothing.
+    if plugin and hooks_installed(runtime, _EVENTS.get(event)):
+        # A hook of `peers install` serves this event, so the plugin hook does nothing.
         return None
     # The payload names the session that fired the hook; an env value can be inherited from a
     # parent session, so it is only a fallback.

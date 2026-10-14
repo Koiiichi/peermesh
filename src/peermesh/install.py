@@ -122,9 +122,10 @@ def _hook_config(runtime: str) -> dict[str, Any]:
         return {}
 
 
-def hooks_installed(runtime: str) -> bool:
-    """True when the hook configuration of runtime holds hooks from `peers install`."""
-    return _has_ours(_hook_config(runtime))
+def hooks_installed(runtime: str, event: str | None = None) -> bool:
+    """True when the hook configuration of runtime holds hooks from `peers install`, for the
+    hook event `event` (such as "SessionStart") when it is given."""
+    return _has_ours(_hook_config(runtime), event)
 
 
 def post_tool_installed(runtime: str) -> bool:
