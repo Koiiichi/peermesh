@@ -703,3 +703,54 @@ test('the ledger says which conversation sent a message from the pane', async ($
   expect(session.appended().length).toBe(1)
   await ui.unmount()
 })
+
+test('the pane says when it cannot read peermesh', async ($, on) => {
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'me' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  let isBroken = true
+  on('process.run', () =>
+    isBroken
+      ? { deny: 'the command did not start' }
+      : { value: { exitCode: 0, stdout: SNAPSHOT, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } },
+  )
+  const open = () =>
+    $.command.run({
+      command: 'mesh',
+      args: '',
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: true, columns: 120 },
+    })
+  const mount = () =>
+    $.ui.mount({
+      plugin: 'peermesh',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'peermesh',
+      props: {
+        title: 'peermesh',
+        isFocused: true,
+        bodyColumns: 60,
+        placement: 'dock',
+        scroll: { offset: 0, bodyRows: 30 },
+        view: {},
+      },
+    })
+  await open()
+  const broken = await mount()
+  expect(await broken.find({ type: 'Text', text: /gave no answer/ })).toBeDefined()
+  await broken.unmount()
+  isBroken = false
+  await open()
+  const working = await mount()
+  expect(await working.find({ type: 'Text', text: /gave no answer/ })).toBeUndefined()
+  expect(await working.find({ key: `peer:${PEER}` })).toBeDefined()
+  await working.unmount()
+  // A read that fails later keeps the lists and says that they can be old.
+  isBroken = true
+  await open()
+  const stale = await mount()
+  expect(await stale.find({ type: 'Text', text: /gave no answer/ })).toBeDefined()
+  expect(await stale.find({ key: `peer:${PEER}` })).toBeDefined()
+  await stale.unmount()
+})
