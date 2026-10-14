@@ -78,3 +78,11 @@ export function threads(messages: readonly Message[]): { last: Message; count: n
 export function shortDir(dir: string): string {
   return dir.replace(/^\/(?:Users|home)\/[^/]+/, '~')
 }
+
+/**
+ * True for a delivery note that a person must see: peermesh ends such a note with "Do not
+ * resend" when a message can be with the peer although the send did not confirm it.
+ */
+export function warnsOfResend(note: string): boolean {
+  return /do not resend/i.test(note)
+}

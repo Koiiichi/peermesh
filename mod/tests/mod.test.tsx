@@ -326,6 +326,67 @@ test('a send that gives no answer is not sent again', async ($, on) => {
   await ui.unmount()
 })
 
+test('a delivered send keeps a warning against a second send', async ($, on) => {
+  // peermesh sent the message and could not record it: the status is delivered, with a note.
+  const note = 'submitted, not recorded, do not resend'
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'session-1' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', (_$, e) => {
+    const stdout = e.argv.includes('send') ? JSON.stringify([{ ...SENT, note }]) : SNAPSHOT
+
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const session = mock.session(on)
+  await $.command.run({
+    command: 'mesh',
+    args: 'codex-x',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  const ui = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'peermesh',
+    props: {
+      title: 'peermesh',
+      isFocused: true,
+      bodyColumns: 60,
+      placement: 'dock',
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  })
+  await ui.input({ key: `to:${PEER}`, text: 'Use main.' })
+  expect(await ui.find({ type: 'Text', text: /delivered · codex-x · bbbbbbbb · .*do not resend/ })).toBeDefined()
+  expect(JSON.stringify(session.appended().map(row => row.message.content))).toMatch(/do not resend/)
+  await ui.unmount()
+  // The row of a send that the agent made keeps the same note.
+  const row = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    props: {
+      calls: [
+        {
+          tool_use_id: 'toolu_1',
+          tool: SEND,
+          input: { to: ['codex-x'], body: 'Use main.', kind: 'request' },
+          isRunning: false,
+          isErrored: false,
+          isInterrupted: false,
+          output: JSON.stringify({ result: [{ ...SENT, note }] }),
+        },
+      ],
+      isActive: false,
+      isExpanded: false,
+    },
+  })
+  expect(await row.find({ type: 'Text', text: /do not resend/ })).toBeDefined()
+  await row.unmount()
+})
+
 test('a refused send keeps the warning of the transport', async ($, on) => {
   mock.env(on, { HOME: '/home/user' })
   on('session.id', () => ({ value: 'session-1' }))
