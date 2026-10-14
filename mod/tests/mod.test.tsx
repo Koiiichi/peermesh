@@ -104,6 +104,21 @@ test('a sent message shows the state that the ledger has, not a guess', async ($
   expect(await done.find({ type: 'Text', text: /pending/ })).toBeDefined()
   expect(await done.find({ type: 'Text', text: /read|seen/ })).toBeUndefined()
   await done.unmount()
+  // An interrupted send has no result. Its row says so and does not show a state of a send.
+  const cut = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    props: {
+      calls: [{ ...call('Interrupted by user'), isInterrupted: true }],
+      isActive: false,
+      isExpanded: false,
+    },
+  })
+  expect(await cut.find({ type: 'Text', text: /interrupted/ })).toBeDefined()
+  expect(await cut.find({ type: 'Text', text: /can be delivered/ })).toBeDefined()
+  expect(await cut.find({ type: 'Text', text: /delivered  |pending|answered/ })).toBeUndefined()
+  await cut.unmount()
 })
 
 test('a group with other tool calls keeps the line that Claude Code draws for it', async ($, on) => {
