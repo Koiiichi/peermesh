@@ -36,6 +36,8 @@ const LINE_CHARS = 400
 const BLOCK_CHARS = 40000
 // Below this width the first line of a row has no time.
 const NARROW = 60
+// The first line keeps this many columns for the arrow, the name and the kind.
+const SENDER_ROOM = 24
 
 /** How a block of message rows shows a message that is longer than its room. */
 export type Fold = {
@@ -87,25 +89,49 @@ function messageRow(
   const color = accent(row.name)
   // The right end of the first line: what the delivery did, the fold, and the time. Each part
   // is there only when it says something.
-  const state = row.state !== undefined && (
-    <Text color={stateColor(row.state)} dimColor={stateColor(row.state) === undefined}>
-      {stateWord(row.state)}
-    </Text>
-  )
   const count = closed.more === 0 ? 'more' : `${closed.more} more ${closed.more === 1 ? 'line' : 'lines'}`
-  const option =
-    hasFold &&
-    (fold.toggle !== undefined ? (
-      <Button key={`row:${index}`} plain onPress={fold.toggle}>
-        <Text color="suggestion">{fold.isOpen ? '▾ collapse' : `▸ ${count}`}</Text>
-      </Button>
-    ) : (
-      <Text dimColor>{count} · ctrl+o</Text>
-    ))
-  const rest = fold.isOpen && (open.more > 0 || open.isCut) && <Text dimColor>more in ctrl+o</Text>
-  const id = fold.isOpen && hasFold && row.id !== undefined && <Text dimColor>{row.id.slice(0, 8)}</Text>
-  const time = columns >= NARROW && row.time !== undefined && <Text dimColor>{row.time}</Text>
-  const right = [state, option, rest, id, time].filter(part => part !== false)
+  const label = fold.toggle === undefined ? `${count} · ctrl+o` : fold.isOpen ? '▾ collapse' : `▸ ${count}`
+  // The right end of the first line, in the order shown. Each part is there only when it
+  // says something. `drop` is the order in which the parts give way to the sender: the name
+  // must stay, because it tells the rows of the peers apart. The option never gives way.
+  const parts = [
+    row.state !== undefined && {
+      drop: 4,
+      text: stateWord(row.state),
+      draw: (
+        <Text color={stateColor(row.state)} dimColor={stateColor(row.state) === undefined}>
+          {stateWord(row.state)}
+        </Text>
+      ),
+    },
+    hasFold && {
+      drop: 9,
+      text: label,
+      draw:
+        fold.toggle !== undefined ? (
+          <Button key={`row:${index}`} plain onPress={fold.toggle}>
+            <Text color="suggestion">{label}</Text>
+          </Button>
+        ) : (
+          <Text dimColor>{label}</Text>
+        ),
+    },
+    fold.isOpen && (open.more > 0 || open.isCut) && { drop: 2, text: 'more in ctrl+o', draw: <Text dimColor>more in ctrl+o</Text> },
+    fold.isOpen && hasFold && row.id !== undefined && {
+      drop: 1,
+      text: row.id.slice(0, 8),
+      draw: <Text dimColor>{row.id.slice(0, 8)}</Text>,
+    },
+    columns >= NARROW && row.time !== undefined && { drop: 3, text: row.time, draw: <Text dimColor>{row.time}</Text> },
+  ].filter(part => part !== false)
+  const sender = 2 + row.name.length + (row.kind !== undefined ? 3 + row.kind.length : 0)
+  const width = (list: typeof parts) => list.reduce((sum, part) => sum + part.text.length + 3, 0)
+  let right = parts
+  for (const drop of [1, 2, 3, 4]) {
+    if (Math.min(sender, SENDER_ROOM) + 2 + width(right) > columns) {
+      right = right.filter(part => part.drop !== drop)
+    }
+  }
 
   return (
     <Box flexDirection="column">
@@ -129,7 +155,7 @@ function messageRow(
           </Text>
         </Box>
         <Box flexShrink={0} marginLeft={2}>
-          {right.map((part, at) => [at > 0 && <Text dimColor> · </Text>, part])}
+          {right.map((part, at) => [at > 0 && <Text dimColor> · </Text>, part.draw])}
         </Box>
       </Box>
       <Box flexDirection="column" paddingLeft={2}>

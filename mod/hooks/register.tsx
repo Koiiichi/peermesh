@@ -492,9 +492,10 @@ export const register: Register = on => {
     if (isDelivery && drawsDeliveries) {
       const context = e.message.content.map(block => (block.type === 'text' ? block.text : '')).join('\n')
       for (const item of parseFrame(context) ?? []) {
-        // One line is all that a mod can add here: the sender, the kind of a message that
-        // is not a reply, and the start of the text.
-        const kind = item.kind === 'reply' ? '' : ` · ${item.kind}`
+        // One line is all that a mod can add here: the sender, the word that a row has after
+        // the name, and the start of the text.
+        const word = item.kind === 'reply' ? doneWord(item.isDone) : item.kind
+        const kind = word === undefined ? '' : ` · ${word}`
         $.ui.log(`← ${item.from}${kind}  ${oneLine(item.body, 200)}`)
       }
       void refresh($)

@@ -927,6 +927,33 @@ test('the option in the first line of a row opens the full message, and folds it
   await cut.press({ key: 'row:0' })
   expect(await cut.find({ type: 'Text', text: /^z{401}$/ })).toBeDefined()
   await cut.unmount()
+  // On a narrow terminal the open row keeps the sender, the state and the option. The id and
+  // the note about ctrl+o give way.
+  const tall = Array.from({ length: 70 }, (_, i) => `line ${i}`).join('\n')
+  const slim = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    requestId: 'group-slim',
+    viewport: { columns: 50, rows: 40, isFullscreen: true },
+    props: {
+      ...props,
+      calls: [
+        {
+          ...props.calls[0]!,
+          input: { to: ['a-peer-with-a-long-name'], body: tall, kind: 'request' },
+          output: JSON.stringify({ result: [{ ...SENT, to: 'a-peer-with-a-long-name', status: 'pending' }] }),
+        },
+      ],
+    },
+  })
+  await slim.press({ key: 'row:0' })
+  expect((await slim.find({ key: 'row:0' }))?.text).toBe('▾ collapse')
+  expect(await slim.find({ type: 'Text', text: /^a-peer-with-a-long-name$/ })).toBeDefined()
+  expect(await slim.find({ type: 'Text', text: /^pending$/ })).toBeDefined()
+  expect(await slim.find({ type: 'Text', text: /^bbbbbbbb$/ })).toBeUndefined()
+  expect(await slim.find({ type: 'Text', text: /more in ctrl\+o/ })).toBeUndefined()
+  await slim.unmount()
   // A different block of rows keeps its own state, and a short message has no option.
   const short = await $.ui.mount({
     plugin: 'peermesh',
@@ -1052,4 +1079,48 @@ test('a peer has one color in each row', () => {
   for (const color of ['success', 'warning', 'error', 'suggestion']) {
     expect(colors.has(color)).toBe(false)
   }
+})
+
+test('a message that a hook gives the agent is one line, with the word that its row has', async ($, on) => {
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'me' }))
+  on('session.surface', () => ({ value: 'terminal' }))
+  on('env.set', () => ({ value: undefined }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
+  on('process.run', () => ({
+    value: { exitCode: 0, stdout: SNAPSHOT, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
+  const logs: string[] = []
+  on('ui.log', (_$, e) => {
+    logs.push(e.text)
+
+    return { value: undefined }
+  })
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  mock.session(on)
+  // The mod draws the deliveries of a hook only in a terminal session.
+  await $.prompt.submit({ text: 'hello', wait: false, origin: { kind: 'composer' } })
+  const give = (frame: string, uuid: string) =>
+    $.session.append({
+      door: 'hook-context',
+      origin: { kind: 'hook', event: 'PostToolUse' },
+      uuid,
+      message: {
+        type: 'attachment',
+        name: 'hook_additional_context',
+        role: 'user',
+        content: [{ type: 'text', text: 'PostToolUse:Bash hook additional context: ' + frame }],
+      },
+    })
+  // A request, then a reply whose sender reports that the work is complete.
+  await give(FRAMES[0]?.text ?? '', 'row-1')
+  await give(FRAMES[1]?.text ?? '', 'row-2')
+  expect(logs).toEqual(['← rotom-infra · request  Check docs/schema.md.', '← codex-rotom-12 · done  It is correct.'])
+  // Each delivery starts a read of the ledger. The command waits for the reads to end.
+  await $.command.run({
+    command: 'mesh',
+    args: '',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
 })
