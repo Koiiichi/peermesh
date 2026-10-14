@@ -77,6 +77,9 @@ test('a peer message is a short row on every surface', async $ => {
 })
 
 test('a sent message shows the state that the ledger has, not a guess', async ($, on) => {
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'me' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
   on('process.run', () => ({
     value: { exitCode: 0, stdout: SNAPSHOT, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
@@ -96,6 +99,13 @@ test('a sent message shows the state that the ledger has, not a guess', async ($
       component: 'ToolGroup',
       props: { calls: [call(output)], isActive: true, isExpanded: false },
     })
+  // Read the ledger once, as the mod does at the start of a session.
+  await $.command.run({
+    command: 'mesh',
+    args: '',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
   const running = await mount()
   expect(await running.find({ type: 'Text', text: /pending/ })).toBeDefined()
   await running.unmount()
@@ -104,6 +114,15 @@ test('a sent message shows the state that the ledger has, not a guess', async ($
   expect(await done.find({ type: 'Text', text: /pending/ })).toBeDefined()
   expect(await done.find({ type: 'Text', text: /read|seen/ })).toBeUndefined()
   await done.unmount()
+  // The send was pending. The ledger now has it as refused, with a warning. The row shows
+  // the note of the ledger, not the note of the first result.
+  const later = await mount(
+    JSON.stringify({ result: [{ msg_id: TIMED_OUT, to: 'codex-x', status: 'pending', note: 'The peer reads it later.' }] }),
+  )
+  expect(await later.find({ type: 'Text', text: /failed/ })).toBeDefined()
+  expect(await later.find({ type: 'Text', text: /Do not resend/ })).toBeDefined()
+  expect(await later.find({ type: 'Text', text: /reads it later/ })).toBeUndefined()
+  await later.unmount()
   // An interrupted send has no result. Its row says so and does not show a state of a send.
   const cut = await $.ui.mount({
     plugin: 'peermesh',

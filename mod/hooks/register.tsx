@@ -350,14 +350,19 @@ function sentRows(
 
     return results.map(r => {
       // The ledger knows what happened after the send. The result holds the first outcome.
-      const state = known(all, r.msg_id)?.state ?? text(r.status)
+      const record = known(all, r.msg_id)
+      const state = record?.state ?? text(r.status)
+      // A warning against a second send stays, from the ledger or from the result. A message
+      // that failed shows the reason that the ledger has now.
+      const notes = [record?.note ?? '', text(r.note)].filter(note => note !== '')
+      const isFailed = state === 'refused' || state === 'undelivered'
 
       return {
         ...base,
         name: text(r.to) || name,
         id: text(r.msg_id) || undefined,
         state,
-        note: state === 'refused' || warnsOfResend(text(r.note)) ? text(r.note) : undefined,
+        note: notes.find(warnsOfResend) ?? (isFailed ? notes[0] : undefined),
       }
     })
   } catch {
