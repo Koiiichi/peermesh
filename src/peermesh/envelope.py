@@ -188,11 +188,13 @@ def render(
     *,
     short_ids: bool = False,
     ending: Ending | None = None,
+    tools: bool | None = None,
 ) -> str:
     """The text that the receiver reads for one or more messages, oldest first.
 
     `short_ids` shows the first characters of each message id. Pass True only for a receiver
-    that can resolve a short id; any other receiver needs the full id to reply.
+    that can resolve a short id; any other receiver needs the full id to reply. `tools` tells
+    the receiver to reply with the MCP tools; the default is True for Claude Code only.
 
     Every body line is quoted, so a line without "> " comes from peermesh. `ending` adds the
     instruction about the final report: "after_completion" for a message that can start a new
@@ -214,7 +216,9 @@ def render(
     ref = "<msg>"
     if len(msgs) == 1:
         ref = short_id(msgs[0].id) if short_ids else msgs[0].id
-    if for_runtime == "claude":
+    if tools is None:
+        tools = for_runtime == "claude"
+    if tools:
         how = f'Reply with peers_reply("{ref}", "<text>"). Add done=true for completed work.'
     else:
         how = f'Reply with peers reply {ref} --body "<text>". Add --done for completed work.'

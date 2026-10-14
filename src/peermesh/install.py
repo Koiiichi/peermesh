@@ -47,6 +47,8 @@ CODEX_RULE = (
     )
 )
 MIN_CLAUDE = (2, 1, 224)
+# The launcher in the Codex plugin that runs the installed peers command.
+PLUGIN_EXE = '"$PLUGIN_ROOT/bin/peers"'
 
 Runner = Callable[..., "subprocess.CompletedProcess[str]"]
 Which = Callable[[str], "str | None"]
@@ -70,33 +72,65 @@ def _is_ours(hook: Any) -> bool:
 def merge_hooks(config: dict[str, Any], exe: str, runtime: str) -> dict[str, Any]:
     config = strip_hooks(config)
     hooks = config.setdefault("hooks", {})
-    for event, name in HOOK_EVENTS.items():
-        # --inbox tells the hook that the post-tool hook below is installed with it.
-        flag = " --inbox" if name in ("session-start", "prompt") else ""
-        command = f"{shlex.quote(exe)} hook {name} --runtime {runtime}{flag} {MARK}"
-        # A Stop hook can wake its own session through `codex queue`, which has 30 seconds.
-        # Codex caps SessionEnd at 3 seconds and warns at every start when a hook asks for more.
-        timeout = {"Stop": 45, "SessionEnd": 3}.get(event, 10)
-        hooks.setdefault(event, []).append(
-            {"hooks": [{"type": "command", "command": command, "timeout": timeout}]}
-        )
-    hooks.setdefault("PostToolUse", []).append(
-        {"hooks": [{"type": "command", "command": post_tool_command(exe, runtime), "timeout": 10}]}
-    )
+    for event, groups in _hook_groups(shlex.quote(exe), runtime).items():
+        hooks.setdefault(event, []).extend(groups)
     return config
 
 
+def plugin_hooks() -> dict[str, Any]:
+    """The hooks of the Codex plugin: the Codex hooks of `peers install`, run through the
+    launcher of the plugin. Codex sets $PLUGIN_ROOT for a plugin hook. The command text does
+    not change when the plugin path changes, so an update does not ask for trust again."""
+    return {"hooks": _hook_groups(PLUGIN_EXE, "codex", plugin=True)}
+
+
+def _hook_groups(exe: str, runtime: str, *, plugin: bool = False) -> dict[str, Any]:
+    """The hook groups for each event. `exe` is the peers executable as a shell word."""
+    groups: dict[str, Any] = {}
+    for event, name in HOOK_EVENTS.items():
+        # --inbox tells the hook that the post-tool hook below is installed with it.
+        flag = " --inbox" if name in ("session-start", "prompt") else ""
+        flag += " --plugin" if plugin else ""
+        command = f"{exe} hook {name} --runtime {runtime}{flag} {MARK}"
+        # A Stop hook can wake its own session through `codex queue`, which has 30 seconds.
+        # Codex caps SessionEnd at 3 seconds and warns at every start when a hook asks for more.
+        timeout = {"Stop": 45, "SessionEnd": 3}.get(event, 10)
+        groups[event] = [{"hooks": [{"type": "command", "command": command, "timeout": timeout}]}]
+    groups["PostToolUse"] = [
+        {"hooks": [{"type": "command", "command": _post_tool(exe, runtime), "timeout": 10}]}
+    ]
+    return groups
+
+
 def post_tool_command(exe: str, runtime: str) -> str:
-    return f"/bin/sh -c {shlex.quote(POST_TOOL_GUARD)} peermesh {shlex.quote(exe)} {runtime} {MARK}"
+    return _post_tool(shlex.quote(exe), runtime)
+
+
+def _post_tool(exe: str, runtime: str) -> str:
+    return f"/bin/sh -c {shlex.quote(POST_TOOL_GUARD)} peermesh {exe} {runtime} {MARK}"
+
+
+def _hook_config(runtime: str) -> dict[str, Any]:
+    """The hook file of runtime that `peers install` writes, or {} when it is not valid."""
+    if runtime == "claude":
+        path = paths.claude_dir() / "settings.json"
+    else:
+        path = paths.codex_home() / "hooks.json"
+    try:
+        return _read_json(path)
+    except (OSError, ValueError):
+        return {}
+
+
+def hooks_installed(runtime: str) -> bool:
+    """True when the hook configuration of runtime holds hooks from `peers install`."""
+    config = _hook_config(runtime)
+    return config != strip_hooks(config)
 
 
 def post_tool_installed(runtime: str) -> bool:
     """True when the hook configuration of runtime holds the peermesh post-tool hook."""
-    path = paths.claude_dir() / "settings.json" if runtime == "claude" else paths.codex_home()
-    try:
-        config = _read_json(path if runtime == "claude" else path / "hooks.json")
-    except (OSError, ValueError):
-        return False
+    config = _hook_config(runtime)
     hooks = config.get("hooks")
     groups = hooks.get("PostToolUse", []) if isinstance(hooks, dict) else []
     return any(

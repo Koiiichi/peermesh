@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "peermesh": {
+      "command": "./bin/peers",
+      "args": ["--mcp"],
+      "cwd": ".",
+      "env_vars": ["PATH", "PEERMESH_HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR"],
+      "default_tools_approval_mode": "approve"
+    }
+  }
+}

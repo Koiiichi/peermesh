@@ -405,7 +405,9 @@ class Mesh:
                     # read `rendered`, so the record keeps it for a session whose hooks run
                     # an older version after a rollback.
                     self.inbox.put(
-                        target.id, msg.to_json() | {"rendered": render([msg], target.runtime)}
+                        target.id,
+                        msg.to_json()
+                        | {"rendered": render([msg], target.runtime, tools=target.has_tools)},
                     )
             except OSError:
                 return SendResult(
@@ -424,6 +426,7 @@ class Mesh:
             target.runtime,
             short_ids=accepts_short_ids(target),
             ending="after_completion" if after_completion else None,
+            tools=target.has_tools,
         )
         outcome = self.transports[target.runtime].deliver(target, rendered, msg)
         if outcome.offline:

@@ -1,0 +1,20 @@
+{
+  "name": "peermesh",
+  "interface": {
+    "displayName": "peermesh"
+  },
+  "plugins": [
+    {
+      "name": "peermesh",
+      "source": {
+        "source": "local",
+        "path": "./codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

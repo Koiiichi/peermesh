@@ -13,6 +13,7 @@ from peermesh.envelope import Ending, render
 from peermesh.errors import NoInboxError
 from peermesh.identity import detect
 from peermesh.inbox import Waiting
+from peermesh.install import hooks_installed
 from peermesh.registry import Peer, Runtime, current_branch, is_alive, repo_info
 from peermesh.service import SHORT_IDS, Mesh, accepts_short_ids
 from peermesh.views import printable
@@ -97,6 +98,7 @@ def _render(peer: Peer, items: list[Waiting], ending: Ending | None = None) -> s
         peer.runtime,
         short_ids=accepts_short_ids(peer),
         ending=ending,
+        tools=peer.has_tools,
     )
 
 
@@ -181,14 +183,19 @@ def handle(
     env: Mapping[str, str],
     host_pid: int | None = None,
     inbox: bool = False,
+    plugin: bool = False,
     emit: Emit = lambda out: None,
 ) -> dict[str, Any] | None:
     """Run one hook event and return its output; `emit` writes the output to the runtime.
 
     The hook calls `emit` itself for output that carries peer messages, under the ledger lock
     and before it records the messages as injected. `inbox` is True when the post-tool hook of
-    this runtime is installed, so senders can leave messages for it.
+    this runtime is installed, so senders can leave messages for it. `plugin` is True for a
+    hook of the Codex plugin, whose session has the peermesh MCP tools.
     """
+    if plugin and hooks_installed(runtime):
+        # The hooks of `peers install` serve this session, so the plugin hooks do nothing.
+        return None
     # The payload names the session that fired the hook; an env value can be inherited from a
     # parent session, so it is only a fallback.
     session_id = str(payload.get("session_id") or "")
@@ -218,7 +225,7 @@ def handle(
             # Claude Code can run SessionStart before it writes the inbox socket path. The
             # next prompt registers the session; the rules apply from the start.
             if event == "session-start":
-                out = _context(event, text.unregistered_text(runtime))
+                out = _context(event, text.unregistered_text(runtime == "claude" or plugin))
                 emit(out)
                 return out
             raise
@@ -228,8 +235,9 @@ def handle(
     if runtime == "codex" and transcript and Path(transcript).exists():
         peer.transcript = transcript
     if event in ("session-start", "prompt"):
-        others = [c for c in peer.capabilities if c != "inbox"]
-        peer.capabilities = [*others, "inbox"] if inbox else others
+        flags = {"inbox": inbox, "mcp_tools": plugin}
+        others = [c for c in peer.capabilities if c not in flags]
+        peer.capabilities = [*others, *(c for c, on in flags.items() if on)]
     if event == "stop":
         return _stop(mesh, peer, payload, emit)
     peer.status = "busy" if event == "prompt" else "idle"

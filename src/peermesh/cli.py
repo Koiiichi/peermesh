@@ -123,6 +123,7 @@ def _hook(args: argparse.Namespace) -> int:
             payload,
             env=os.environ,
             inbox=args.inbox,
+            plugin=args.plugin,
             emit=lambda out: print(json.dumps(out), flush=True),
         )
     except Exception:  # a hook must never break the host session
@@ -171,6 +172,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     hk.add_argument("--runtime", choices=["claude", "codex"], required=True)
     hk.add_argument("--inbox", action="store_true", help="the post-tool hook is installed")
+    hk.add_argument("--plugin", action="store_true", help="the hook runs from the Codex plugin")
     sub.add_parser("doctor")
     ins = sub.add_parser("install")
     ins.add_argument("--dry-run", action="store_true")
