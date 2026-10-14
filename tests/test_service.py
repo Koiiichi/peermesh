@@ -399,6 +399,14 @@ def test_whoami_accepts_own_ancestor(world: World) -> None:
     assert world.mesh.whoami(env={"CODEX_THREAD_ID": "A"}).id == "codex:A"
 
 
+def test_a_codex_thread_can_act_as_another_thread_of_the_same_host_process(world: World) -> None:
+    # The known limit in "Safety limits" of the README: the threads of one Codex process
+    # share a host pid, so the ancestor check cannot tell them apart. A fix changes this test
+    # and the README together.
+    assert world.peers["xa"].pid == world.peers["xb"].pid
+    assert world.mesh.whoami(env={"CODEX_THREAD_ID": "B"}).id == "codex:B"
+
+
 def test_status_unknown_lists_live_names(world: World) -> None:
     st = world.mesh.status("nobody")
     assert st["alive"] is False
