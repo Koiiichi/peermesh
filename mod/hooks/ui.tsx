@@ -60,7 +60,7 @@ function messageRow(T: ElementTable, row: Row): RenderElement {
         ))}
         {more > 0 && (
           <Text dimColor>
-            … {more} more {more === 1 ? 'line' : 'lines'} · ctrl+o shows all
+            … more of this message · ctrl+o shows all
           </Text>
         )}
         {row.note !== undefined && (
@@ -97,6 +97,9 @@ export type PaneHandlers = {
 // The pane lists this many threads. `peers log` and `peers thread` show older messages.
 const HOME_THREADS = 8
 const THREAD_BODY_ROWS = 30
+// A thread view shows this many of its newest messages, so its tree stays under the limit
+// of Claude Code for the text of one tree.
+const THREAD_MESSAGES = 12
 
 export function paneTree(T: ElementTable, data: PaneData, on: PaneHandlers): RenderElement {
   const { Box, Text } = T
@@ -289,7 +292,12 @@ function threadView(
   return (
     <Box flexDirection="column">
       {backButton(T, data, on)}
-      {thread.map(m => {
+      {thread.length > THREAD_MESSAGES && (
+        <Text dimColor>
+          … {thread.length - THREAD_MESSAGES} earlier · peers thread {(thread[0]?.id ?? '').slice(0, 8)}
+        </Text>
+      )}
+      {thread.slice(-THREAD_MESSAGES).map(m => {
         const { lines, more } = bodyLines(m.body, THREAD_BODY_ROWS)
 
         return (
@@ -309,7 +317,7 @@ function threadView(
               {lines.map(line => (
                 <Text>{line || ' '}</Text>
               ))}
-              {more > 0 && <Text dimColor>… {more} more lines · peers thread {m.id.slice(0, 8)}</Text>}
+              {more > 0 && <Text dimColor>… more of this message · peers thread {m.id.slice(0, 8)}</Text>}
               {stateWord(m.state) === 'failed' && m.note !== '' && <Text color="error">{m.note}</Text>}
             </Box>
           </Box>

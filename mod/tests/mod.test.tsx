@@ -754,3 +754,58 @@ test('the pane says when it cannot read peermesh', async ($, on) => {
   expect(await stale.find({ key: `peer:${PEER}` })).toBeDefined()
   await stale.unmount()
 })
+
+test('a thread of the largest messages still draws with its reply field', async ($, on) => {
+  // Twenty messages of one line of 8192 characters, the largest body that peermesh takes.
+  const big = Array.from({ length: 20 }, (_, i) => ({
+    id: `${String(i).padStart(2, '0')}`.repeat(16),
+    from: PEER,
+    from_name: 'codex-x',
+    to: ME,
+    to_name: 'rotom-infra',
+    kind: 'request',
+    body: 'x'.repeat(8192),
+    sent_at: 1791936000 + i,
+    thread: 'thread-big',
+    in_reply_to: null,
+    state: 'delivered',
+  }))
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'me' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', () => ({
+    value: {
+      exitCode: 0,
+      stdout: JSON.stringify({ ...JSON.parse(SNAPSHOT), messages: big }),
+      stderr: '',
+      isStdoutTruncated: false,
+      isStderrTruncated: false,
+    },
+  }))
+  await $.command.run({
+    command: 'mesh',
+    args: '',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  const ui = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'peermesh',
+    props: {
+      title: 'peermesh',
+      isFocused: true,
+      bodyColumns: 60,
+      placement: 'dock',
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  })
+  await ui.press({ key: 'thread:thread-big' })
+  const drawn = JSON.stringify(await ui.drawn())
+  expect(drawn.length).toBeLessThan(20000)
+  expect(await ui.find({ type: 'Text', text: /8 earlier/ })).toBeDefined()
+  expect(await ui.find({ key: `reply:${'19'.repeat(16)}` })).toBeDefined()
+  await ui.unmount()
+})
