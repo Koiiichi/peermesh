@@ -124,18 +124,25 @@ def _hook_config(runtime: str) -> dict[str, Any]:
 
 def hooks_installed(runtime: str) -> bool:
     """True when the hook configuration of runtime holds hooks from `peers install`."""
-    config = _hook_config(runtime)
-    return config != strip_hooks(config)
+    return _has_ours(_hook_config(runtime))
 
 
 def post_tool_installed(runtime: str) -> bool:
     """True when the hook configuration of runtime holds the peermesh post-tool hook."""
-    config = _hook_config(runtime)
+    return _has_ours(_hook_config(runtime), "PostToolUse", "hook post-tool")
+
+
+def _has_ours(config: dict[str, Any], event: str | None = None, part: str = "") -> bool:
+    """True when config has a peermesh hook, for `event` if given, with `part` in its command."""
     hooks = config.get("hooks")
-    groups = hooks.get("PostToolUse", []) if isinstance(hooks, dict) else []
+    if not isinstance(hooks, dict):
+        return False
+    events = [event] if event is not None else list(hooks)
     return any(
-        _is_ours(h) and "hook post-tool" in str(h.get("command", ""))
-        for g in groups
+        _is_ours(h) and part in str(h.get("command", ""))
+        for name in events
+        if isinstance(hooks.get(name), list)
+        for g in hooks[name]
         if isinstance(g, dict) and isinstance(g.get("hooks"), list)
         for h in g["hooks"]
     )
