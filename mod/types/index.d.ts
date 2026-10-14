@@ -22,6 +22,8 @@ export type Message = {
   thread: string
   inReplyTo: string | null
   state: string
+  /** What the transport said about the delivery, such as why it refused the message. */
+  note: string
 }
 
 /** What the pane shows: the lists, one session, or one thread. */
