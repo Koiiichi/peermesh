@@ -32,6 +32,7 @@ const notice = atom({ plugin: 'peermesh', key: 'notice' } as const, null)
 let command: string | undefined
 let written: { me: string | null; peers: string; messages: string } = { me: null, peers: '', messages: '' }
 let isReading = false
+let isStale = false
 let isSending = false
 let hasWaiting = false
 
@@ -76,12 +77,29 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-/** Read the sessions and the messages, and write each list to the state if it changed. */
+/**
+ * Read the sessions and the messages, and write each list to the state if it changed.
+ * A call during a read does not start a second read. The read runs one more time after it
+ * ends, because its answer can be older than the event that made the call.
+ */
 async function refresh($: EngineInterface): Promise<void> {
   if (isReading) {
+    isStale = true
+
     return
   }
   isReading = true
+  try {
+    do {
+      isStale = false
+      await readState($)
+    } while (isStale)
+  } finally {
+    isReading = false
+  }
+}
+
+async function readState($: EngineInterface): Promise<void> {
   try {
     const ran = await readPeers($, ['--json', 'watch'])
     if (ran === undefined || ran.exitCode !== 0) {
@@ -132,8 +150,6 @@ async function refresh($: EngineInterface): Promise<void> {
     )
   } catch {
     // A read that fails leaves the last state on the screen. The next read tries again.
-  } finally {
-    isReading = false
   }
 }
 
