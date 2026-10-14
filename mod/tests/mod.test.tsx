@@ -809,6 +809,8 @@ test('a thread of the largest messages still draws with its reply field', async 
   const drawn = JSON.stringify(await ui.drawn())
   expect(drawn.length).toBeLessThan(20000)
   expect(await ui.find({ type: 'Text', text: /8 earlier/ })).toBeDefined()
+  // A line that the thread cuts says where the full message is.
+  expect(await ui.find({ type: 'Text', text: /more of this message: peers thread 19191919/ })).toBeDefined()
   expect(await ui.find({ key: `reply:${'19'.repeat(16)}` })).toBeDefined()
   await ui.unmount()
 })
@@ -910,6 +912,21 @@ test('the option in the first line of a row opens the full message, and folds it
   expect(await broadcast.find({ key: 'row:12' })).toBeDefined()
   expect(await broadcast.find({ type: 'Text', text: /more in ctrl\+o/ })).toBeDefined()
   await broadcast.unmount()
+  // One line that is longer than a folded row shows has an option too, and opens in full.
+  const paragraph = 'z'.repeat(401)
+  const cut = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    requestId: 'group-cut',
+    viewport: { columns: 100, rows: 40, isFullscreen: true },
+    props: { ...props, calls: [{ ...props.calls[0]!, input: { to: ['codex-x'], body: paragraph, kind: 'info' } }] },
+  })
+  expect((await cut.find({ key: 'row:0' }))?.text).toBe('▸ more')
+  expect(await cut.find({ type: 'Text', text: /^z{400}…$/ })).toBeDefined()
+  await cut.press({ key: 'row:0' })
+  expect(await cut.find({ type: 'Text', text: /^z{401}$/ })).toBeDefined()
+  await cut.unmount()
   // A different block of rows keeps its own state, and a short message has no option.
   const short = await $.ui.mount({
     plugin: 'peermesh',

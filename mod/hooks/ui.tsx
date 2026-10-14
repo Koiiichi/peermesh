@@ -31,6 +31,9 @@ const OUTGOING_ROWS = 3
 // One block of rows shows this many body lines in all, so a broadcast to many peers and a
 // batch of many messages stay under the limit of Claude Code for the text of one tree.
 const BLOCK_ROWS = 60
+// A folded row shows this many characters of a line, and an open block this many in all.
+const LINE_CHARS = 400
+const BLOCK_CHARS = 40000
 // Below this width the first line of a row has no time.
 const NARROW = 60
 
@@ -49,7 +52,10 @@ export function messageRows(
   columns: number,
 ): RenderElement {
   const { Box } = T
-  const share = Math.max(1, Math.floor(BLOCK_ROWS / rows.length))
+  const share = {
+    rows: Math.max(1, Math.floor(BLOCK_ROWS / rows.length)),
+    chars: Math.floor(BLOCK_CHARS / rows.length),
+  }
 
   // The blank line above is the one that Claude Code puts above each block of its own.
   return (
@@ -61,21 +67,23 @@ export function messageRows(
 
 /**
  * One message: the message that it answers, then a line with its sender, then its text.
- * `share` is the number of body lines that its block has for each row.
+ * `share` is the room that its block has for each row when the block is open.
  */
 function messageRow(
   T: ElementTable,
   row: Row,
   index: number,
   fold: Fold,
-  share: number,
+  share: { rows: number; chars: number },
   columns: number,
 ): RenderElement {
   const { Box, Button, Text } = T
-  const room = Math.min(row.isIncoming ? INCOMING_ROWS : OUTGOING_ROWS, share)
-  const closed = bodyLines(row.body, room)
-  const { lines, more } = fold.isOpen ? bodyLines(row.body, Math.max(room, share)) : closed
-  const hasFold = closed.more > 0
+  const room = Math.min(row.isIncoming ? INCOMING_ROWS : OUTGOING_ROWS, share.rows)
+  const closed = bodyLines(row.body, room, LINE_CHARS)
+  const open = bodyLines(row.body, Math.max(room, share.rows), share.chars, share.chars)
+  const { lines } = fold.isOpen ? open : closed
+  // A row has a fold when it does not show all of its message: lines, or the end of a line.
+  const hasFold = closed.more > 0 || closed.isCut
   const color = accent(row.name)
   // The right end of the first line: what the delivery did, the fold, and the time. Each part
   // is there only when it says something.
@@ -84,7 +92,7 @@ function messageRow(
       {stateWord(row.state)}
     </Text>
   )
-  const count = `${closed.more} more ${closed.more === 1 ? 'line' : 'lines'}`
+  const count = closed.more === 0 ? 'more' : `${closed.more} more ${closed.more === 1 ? 'line' : 'lines'}`
   const option =
     hasFold &&
     (fold.toggle !== undefined ? (
@@ -94,7 +102,7 @@ function messageRow(
     ) : (
       <Text dimColor>{count} · ctrl+o</Text>
     ))
-  const rest = fold.isOpen && more > 0 && <Text dimColor>{more} more in ctrl+o</Text>
+  const rest = fold.isOpen && (open.more > 0 || open.isCut) && <Text dimColor>more in ctrl+o</Text>
   const id = fold.isOpen && hasFold && row.id !== undefined && <Text dimColor>{row.id.slice(0, 8)}</Text>
   const time = columns >= NARROW && row.time !== undefined && <Text dimColor>{row.time}</Text>
   const right = [state, option, rest, id, time].filter(part => part !== false)
@@ -359,7 +367,7 @@ function threadView(
         </Text>
       )}
       {thread.slice(-THREAD_MESSAGES).map(m => {
-        const { lines, more } = bodyLines(m.body, THREAD_BODY_ROWS)
+        const { lines, more, isCut } = bodyLines(m.body, THREAD_BODY_ROWS, LINE_CHARS)
 
         return (
           <Box flexDirection="column" marginTop={1}>
@@ -378,7 +386,7 @@ function threadView(
               {lines.map(line => (
                 <Text>{line || ' '}</Text>
               ))}
-              {more > 0 && <Text dimColor>… more of this message · peers thread {m.id.slice(0, 8)}</Text>}
+              {(more > 0 || isCut) && <Text dimColor>more of this message: peers thread {m.id.slice(0, 8)}</Text>}
               {stateWord(m.state) === 'failed' && m.note !== '' && <Text color="error">{m.note}</Text>}
             </Box>
           </Box>
