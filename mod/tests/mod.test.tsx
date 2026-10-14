@@ -910,7 +910,7 @@ test('the option in the first line of a row opens the full message, and folds it
   await broadcast.press({ key: 'row:0' })
   expect(JSON.stringify(await broadcast.drawn()).length).toBeLessThan(50000)
   expect(await broadcast.find({ key: 'row:12' })).toBeDefined()
-  expect(await broadcast.find({ type: 'Text', text: /more in ctrl\+o/ })).toBeDefined()
+  expect((await broadcast.find({ key: 'row:0' }))?.text).toBe('▾ collapse · rest in ctrl+o')
   await broadcast.unmount()
   // One line that is longer than a folded row shows has an option too, and opens in full.
   const paragraph = 'z'.repeat(401)
@@ -927,8 +927,8 @@ test('the option in the first line of a row opens the full message, and folds it
   await cut.press({ key: 'row:0' })
   expect(await cut.find({ type: 'Text', text: /^z{401}$/ })).toBeDefined()
   await cut.unmount()
-  // On a narrow terminal the open row keeps the sender, the state and the option. The id and
-  // the note about ctrl+o give way.
+  // On a narrow terminal the open row keeps the sender and the option. The option says that
+  // the row still does not show all of the message. The id and the state give way.
   const tall = Array.from({ length: 70 }, (_, i) => `line ${i}`).join('\n')
   const slim = await $.ui.mount({
     plugin: 'peermesh',
@@ -947,12 +947,13 @@ test('the option in the first line of a row opens the full message, and folds it
       ],
     },
   })
-  await slim.press({ key: 'row:0' })
-  expect((await slim.find({ key: 'row:0' }))?.text).toBe('▾ collapse')
-  expect(await slim.find({ type: 'Text', text: /^a-peer-with-a-long-name$/ })).toBeDefined()
+  // Folded, the first line has room for the state and the option.
   expect(await slim.find({ type: 'Text', text: /^pending$/ })).toBeDefined()
+  expect((await slim.find({ key: 'row:0' }))?.text).toBe('▸ 67 more lines')
+  await slim.press({ key: 'row:0' })
+  expect((await slim.find({ key: 'row:0' }))?.text).toBe('▾ collapse · rest in ctrl+o')
+  expect(await slim.find({ type: 'Text', text: /^a-peer-with-a-long-name$/ })).toBeDefined()
   expect(await slim.find({ type: 'Text', text: /^bbbbbbbb$/ })).toBeUndefined()
-  expect(await slim.find({ type: 'Text', text: /more in ctrl\+o/ })).toBeUndefined()
   await slim.unmount()
   // A different block of rows keeps its own state, and a short message has no option.
   const short = await $.ui.mount({
