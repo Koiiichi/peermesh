@@ -837,11 +837,11 @@ test('a row that shows the start of a message leaves out its empty lines', async
   // Three lines of text, then the mark that the message has more.
   expect(await ui.find({ type: 'Text', text: /^- one$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^- two$/ })).toBeUndefined()
-  expect(await ui.find({ type: 'Text', text: /more of this message/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /… 1 more line · ctrl\+o shows all/ })).toBeDefined()
   await ui.unmount()
 })
 
-test('a click on the last line of a row shows the full message, and a second click folds it', async $ => {
+test('a click on the first line of a row shows the full message, and a second click folds it', async $ => {
   const body = ['First line.', '', 'Context:', '- one', '- two', '- three'].join('\n')
   const props = {
     calls: [
@@ -868,15 +868,10 @@ test('a click on the last line of a row shows the full message, and a second cli
     props,
   })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
-  expect((await ui.find({ key: 'more:0' }))?.text).toBe('… ▸ expand')
-  await ui.press({ key: 'more:0' })
-  expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeDefined()
-  expect((await ui.find({ key: 'more:0' }))?.text).toBe('▾ collapse')
-  await ui.press({ key: 'more:0' })
-  expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
-  // The option is not dim and has a color of its own, on the first line and on the last.
+  // One option, on the first line. The last line says how much the row does not show.
   expect(await ui.find({ type: 'Text', text: /▸ expand/ })).toMatchObject({ props: { color: 'suggestion' } })
-  // The first line of the row opens and folds it too, and its option shows which it is.
+  expect(await ui.findAll({ type: 'Button' })).toHaveLength(1)
+  expect(await ui.find({ type: 'Text', text: /… 2 more lines$/ })).toBeDefined()
   expect((await ui.find({ key: 'row:0' }))?.text).toMatch(/codex-x.*▸ expand/)
   await ui.press({ key: 'row:0' })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeDefined()
@@ -898,9 +893,10 @@ test('a click on the last line of a row shows the full message, and a second cli
       calls: [props.calls[0]!, { ...props.calls[0]!, tool_use_id: 'toolu_2', input: { to: ['codex-x'], body: gaps, kind: 'info' } }],
     },
   })
-  expect(await pair.find({ key: 'more:1' })).toBeUndefined()
-  await pair.press({ key: 'more:0' })
-  expect((await pair.find({ key: 'more:1' }))?.text).toMatch(/ctrl\+o shows all · ▾ collapse/)
+  expect(await pair.find({ key: 'row:1' })).toBeUndefined()
+  await pair.press({ key: 'row:0' })
+  expect((await pair.find({ key: 'row:1' }))?.text).toMatch(/▾ collapse/)
+  expect(await pair.find({ type: 'Text', text: /more lines · ctrl\+o shows all/ })).toBeDefined()
   await pair.unmount()
   // A broadcast of a long message to many peers stays small when it is open.
   const long = Array.from({ length: 20 }, () => 'y'.repeat(400)).join('\n')
@@ -922,9 +918,9 @@ test('a click on the last line of a row shows the full message, and a second cli
       ],
     },
   })
-  await broadcast.press({ key: 'more:0' })
+  await broadcast.press({ key: 'row:0' })
   expect(JSON.stringify(await broadcast.drawn()).length).toBeLessThan(50000)
-  expect(await broadcast.find({ key: 'more:12' })).toBeDefined()
+  expect(await broadcast.find({ key: 'row:12' })).toBeDefined()
   await broadcast.unmount()
   // A different block of rows keeps its own state, and a short message has no line to click.
   const short = await $.ui.mount({
@@ -935,7 +931,6 @@ test('a click on the last line of a row shows the full message, and a second cli
     viewport: { columns: 100, rows: 40, isFullscreen: true },
     props: { ...props, calls: [{ ...props.calls[0]!, input: { to: ['codex-x'], body: 'One line.', kind: 'info' } }] },
   })
-  expect(await short.find({ key: 'more:0' })).toBeUndefined()
   expect(await short.find({ key: 'row:0' })).toBeUndefined()
   await short.unmount()
   // Outside fullscreen mode a click does not reach the row, so the row names ctrl+o.
@@ -947,7 +942,7 @@ test('a click on the last line of a row shows the full message, and a second cli
     viewport: { columns: 100, rows: 40, isFullscreen: false },
     props,
   })
-  expect(await plain.find({ key: 'more:0' })).toBeUndefined()
-  expect(await plain.find({ type: 'Text', text: /ctrl\+o shows all/ })).toBeDefined()
+  expect(await plain.find({ key: 'row:0' })).toBeUndefined()
+  expect(await plain.find({ type: 'Text', text: /… 2 more lines · ctrl\+o shows all/ })).toBeDefined()
   await plain.unmount()
 })

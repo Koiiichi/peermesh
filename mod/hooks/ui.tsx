@@ -21,8 +21,8 @@ export type Row = {
   note?: string
 }
 
-// A transcript row shows this many body lines of a message. A click on its first or its last
-// line opens the row and folds it again. ctrl+o shows the message as the agent read it.
+// A transcript row shows this many body lines of a message. A click on its first line opens
+// the row and folds it again. ctrl+o shows the message as the agent read it.
 const INCOMING_ROWS = 8
 const OUTGOING_ROWS = 3
 // One block of rows shows this many body lines in all, so a broadcast to many peers and a
@@ -97,14 +97,12 @@ function messageRow(
         {lines.map(line => (
           <Text dimColor={!row.isIncoming}>{line || ' '}</Text>
         ))}
-        {toggle !== undefined && (
-          <Button key={`more:${index}`} plain onPress={toggle}>
-            {!fold.isOpen && <Text dimColor>… </Text>}
-            {fold.isOpen && more > 0 && <Text dimColor>… ctrl+o shows all · </Text>}
-            <Text color="suggestion">{option}</Text>
-          </Button>
+        {more > 0 && (
+          <Text dimColor>
+            … {more} more {more === 1 ? 'line' : 'lines'}
+            {toggle === undefined || fold.isOpen ? ' · ctrl+o shows all' : ''}
+          </Text>
         )}
-        {fold.toggle === undefined && more > 0 && <Text dimColor>… more of this message · ctrl+o shows all</Text>}
         {row.note !== undefined && (
           <Text color={row.state !== undefined && stateColor(row.state) === 'error' ? 'error' : undefined} dimColor>
             {row.note}
