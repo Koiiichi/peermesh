@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.1 — 2026-10-14
+
+The message rows of the Claude Code mod read as a conversation.
+
+### Upgrade
+
+Pull: `git pull`, then run `/reload-plugins` in each open Claude Code session. No reinstall is necessary.
+
+### Changed
+
+- **One line for the sender, the text below it.** The arrow and the name of the peer come first, in a color of their own for each peer, and the time is at the right end.
+- **A reply quotes the message that it answers.** The quote is above the reply, with a bar, dim and in italics.
+- **Less on the first line.** The id of a message shows only in an open row. A sent row shows `pending`, `delivered` or `failed`, and nothing after its reply came. `done` stays on a reply whose sender reports the work as complete.
+- **A long message folds to its first lines, with its format kept.** In fullscreen mode, `▸ 11 more lines` in the first line opens the row and `▾ collapse` folds it. Outside fullscreen mode, ctrl+o shows the full message.
+- **The line for a message in the middle of a turn is shorter:** `← shop-db · info  The orders table gets …`.
+
 ## 0.4.0 — 2026-10-13
 
 ### Upgrade
