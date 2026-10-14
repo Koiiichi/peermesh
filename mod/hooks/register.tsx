@@ -32,22 +32,32 @@ let command: string | undefined
 let written: { me: string | null; peers: string; messages: string } = { me: null, peers: '', messages: '' }
 let isReading = false
 
-/** Run `peers` as this session. Undefined means that no `peers` executable started. */
-async function runPeers(
+// A send can wait for the transport of the peer, which gives Codex 30 seconds.
+const SEND_TIMEOUT_MS = 60000
+
+async function run(
+  $: EngineInterface,
+  exe: string,
+  args: readonly string[],
+  init: { stdin?: string; timeoutMs: number },
+): Promise<ProcessRunResult> {
+  // The session id makes `peers` act as this session, not as a session that started it.
+  return $.process.run([exe, ...args], { env: { CLAUDE_CODE_SESSION_ID: await $.session.id() }, ...init })
+}
+
+/**
+ * Run a `peers` command that only reads, and remember the executable that started.
+ * Undefined means that no `peers` executable gave an answer.
+ */
+async function readPeers(
   $: EngineInterface,
   args: readonly string[],
-  stdin?: string,
 ): Promise<ProcessRunResult | undefined> {
   const home = (await $.env.get('HOME')) ?? ''
-  const session = await $.session.id()
   // `peers install` puts the command in ~/.local/bin, which the PATH of a desktop app can lack.
   for (const exe of command !== undefined ? [command] : ['peers', `${home}/.local/bin/peers`]) {
     try {
-      const ran = await $.process.run([exe, ...args], {
-        env: { CLAUDE_CODE_SESSION_ID: session },
-        stdin,
-        timeoutMs: 15000,
-      })
+      const ran = await run($, exe, args, { timeoutMs: 15000 })
       command = exe
 
       return ran
@@ -70,7 +80,7 @@ async function refresh($: EngineInterface): Promise<void> {
   }
   isReading = true
   try {
-    const ran = await runPeers($, ['--json', 'watch'])
+    const ran = await readPeers($, ['--json', 'watch'])
     if (ran === undefined || ran.exitCode !== 0) {
       return
     }
@@ -140,9 +150,25 @@ async function send($: EngineInterface, args: readonly string[], body: string): 
   if (body.trim() === '') {
     return
   }
-  const ran = await runPeers($, ['--json', ...args, '--body', '-'], body)
-  if (ran === undefined) {
+  if (command === undefined) {
+    await refresh($)
+  }
+  if (command === undefined) {
     await update($, notice, () => ({ text: 'The peers command did not start.', isError: true }))
+
+    return
+  }
+  let ran: ProcessRunResult
+  try {
+    // One attempt only. A send that ran too long can be delivered, and a second send would
+    // be a second message.
+    ran = await run($, command, ['--json', ...args, '--body', '-'], { stdin: body, timeoutMs: SEND_TIMEOUT_MS })
+  } catch {
+    await update($, notice, () => ({
+      text: 'The send gave no answer. The message can be delivered. Read the thread before you send it again.',
+      isError: true,
+    }))
+    await refresh($)
 
     return
   }
@@ -388,8 +414,8 @@ export const register: Register = on => {
         go: (target, focus) => {
           void show($, target, focus)
         },
-        send: (to, body) => {
-          void send($, ['send', to, '--kind', 'request'], body)
+        send: (peerId, body) => {
+          void send($, ['send', peerId, '--kind', 'request'], body)
         },
         reply: (msgId, body) => {
           void send($, ['reply', msgId], body)
