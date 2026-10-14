@@ -62,6 +62,9 @@ function messageRow(
   const { lines, more } = fold.isOpen ? bodyLines(row.body, Math.max(room, share)) : closed
   // A row has a fold when a click reaches it and its message is longer than its room.
   const toggle = closed.more > 0 || more > 0 ? fold.toggle : undefined
+  // The option is in a color of its own and is not dim, so it reads as a control, not as text
+  // of the message.
+  const option = fold.isOpen ? '▾ collapse' : '▸ expand'
   const head = [
     <Text color={row.isIncoming ? 'suggestion' : 'subtle'}>{row.isIncoming ? '←' : '→'} </Text>,
     <Text bold>{row.name}</Text>,
@@ -73,7 +76,7 @@ function messageRow(
       </Text>
     ),
     row.id !== undefined && <Text dimColor>  {row.id.slice(0, 8)}</Text>,
-    toggle !== undefined && <Text dimColor>  {fold.isOpen ? '▾' : '▸'}</Text>,
+    toggle !== undefined && <Text color="suggestion">  {option}</Text>,
   ]
 
   return (
@@ -95,19 +98,11 @@ function messageRow(
           <Text dimColor={!row.isIncoming}>{line || ' '}</Text>
         ))}
         {toggle !== undefined && (
-          <Button
-            key={`more:${index}`}
-            plain
-            dimColor
-            label={
-              !fold.isOpen
-                ? '… more · click to show all'
-                : more > 0
-                  ? '… more · ctrl+o shows all · click to show less'
-                  : '▴ show less'
-            }
-            onPress={toggle}
-          />
+          <Button key={`more:${index}`} plain onPress={toggle}>
+            {!fold.isOpen && <Text dimColor>… </Text>}
+            {fold.isOpen && more > 0 && <Text dimColor>… ctrl+o shows all · </Text>}
+            <Text color="suggestion">{option}</Text>
+          </Button>
         )}
         {fold.toggle === undefined && more > 0 && <Text dimColor>… more of this message · ctrl+o shows all</Text>}
         {row.note !== undefined && (

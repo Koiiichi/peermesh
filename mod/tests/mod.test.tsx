@@ -868,17 +868,19 @@ test('a click on the last line of a row shows the full message, and a second cli
     props,
   })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
-  expect((await ui.find({ key: 'more:0' }))?.props.label).toBe('… more · click to show all')
+  expect((await ui.find({ key: 'more:0' }))?.text).toBe('… ▸ expand')
   await ui.press({ key: 'more:0' })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeDefined()
-  expect((await ui.find({ key: 'more:0' }))?.props.label).toBe('▴ show less')
+  expect((await ui.find({ key: 'more:0' }))?.text).toBe('▾ collapse')
   await ui.press({ key: 'more:0' })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
-  // The first line of the row opens and folds it too, and its mark shows which it is.
-  expect((await ui.find({ key: 'row:0' }))?.text).toMatch(/codex-x.*▸/)
+  // The option is not dim and has a color of its own, on the first line and on the last.
+  expect(await ui.find({ type: 'Text', text: /▸ expand/ })).toMatchObject({ props: { color: 'suggestion' } })
+  // The first line of the row opens and folds it too, and its option shows which it is.
+  expect((await ui.find({ key: 'row:0' }))?.text).toMatch(/codex-x.*▸ expand/)
   await ui.press({ key: 'row:0' })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeDefined()
-  expect((await ui.find({ key: 'row:0' }))?.text).toMatch(/codex-x.*▾/)
+  expect((await ui.find({ key: 'row:0' }))?.text).toMatch(/codex-x.*▾ collapse/)
   await ui.press({ key: 'row:0' })
   expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
   await ui.unmount()
@@ -898,7 +900,7 @@ test('a click on the last line of a row shows the full message, and a second cli
   })
   expect(await pair.find({ key: 'more:1' })).toBeUndefined()
   await pair.press({ key: 'more:0' })
-  expect((await pair.find({ key: 'more:1' }))?.props.label).toMatch(/more · ctrl\+o shows all/)
+  expect((await pair.find({ key: 'more:1' }))?.text).toMatch(/ctrl\+o shows all · ▾ collapse/)
   await pair.unmount()
   // A broadcast of a long message to many peers stays small when it is open.
   const long = Array.from({ length: 20 }, () => 'y'.repeat(400)).join('\n')
