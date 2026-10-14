@@ -246,3 +246,22 @@ def test_a_plugin_hook_does_nothing_when_peers_install_hooks_serve_the_session()
     )
     assert out is None
     assert mesh.registry.get("codex:T1") is None
+
+
+def test_an_empty_hook_file_does_not_stop_the_plugin_hooks() -> None:
+    hooks_file = paths.codex_home() / "hooks.json"
+    hooks_file.parent.mkdir(parents=True)
+    payload = {"session_id": "T1", "cwd": os.getcwd()}
+    for content in (
+        {},
+        {"hooks": {}},
+        {"hooks": {"Stop": []}},
+        {"hooks": {"Stop": [{"hooks": []}]}},
+    ):
+        hooks_file.write_text(json.dumps(content))
+        mesh = _mesh()
+        out = hooks.handle(
+            mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid(), plugin=True
+        )
+        assert out is not None, content
+        assert mesh.registry.get("codex:T1") is not None, content
