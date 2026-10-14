@@ -98,7 +98,8 @@ export type PaneData = {
 export type PaneHandlers = {
   /** Show `view` and move the focus to the element with the key `focus`. */
   go: (view: View, focus: string) => void
-  send: (to: string, body: string) => void
+  /** Send to the session with this id. A name can pass to a different session. */
+  send: (peerId: string, body: string) => void
   reply: (msgId: string, body: string) => void
 }
 
@@ -267,7 +268,7 @@ function peerView(T: ElementTable, data: PaneData, peer: Peer, on: PaneHandlers)
             key={`to:${peer.id}`}
             placeholder={`Message ${peer.name}`}
             submitLabel="send"
-            onSubmit={value => on.send(peer.name, value)}
+            onSubmit={value => on.send(peer.id, value)}
           />
         </Box>
       )}

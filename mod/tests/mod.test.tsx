@@ -137,7 +137,8 @@ test('the pane lists the sessions, opens one and sends a message as this session
     const before = runs.length
     await ui.input({ key: `to:${PEER}`, text: 'Use main.' })
     const sent = runs.slice(before).find(run => run.argv.includes('send'))
-    expect(sent?.argv.slice(1)).toEqual(['--json', 'send', 'codex-x', '--kind', 'request', '--body', '-'])
+    // The id, not the name: a different session can take the name after the pane drew it.
+    expect(sent?.argv.slice(1)).toEqual(['--json', 'send', PEER, '--kind', 'request', '--body', '-'])
     expect(sent?.stdin).toBe('Use main.')
     expect(sent?.session).toBe('session-1')
     expect(await ui.find({ type: 'Text', text: /delivered · codex-x · bbbbbbbb/ })).toBeDefined()
@@ -179,4 +180,49 @@ test('the pane lists the sessions, opens one and sends a message as this session
   const notes = session.appended().map(row => JSON.stringify(row.message.content))
   expect(notes.filter(note => note.includes('The user sent a message')).length).toBe(4)
   expect(notes.some(note => note.includes('> Use main.'))).toBe(true)
+})
+
+test('a send that gives no answer is not sent again', async ($, on) => {
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'session-1' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  let sends = 0
+  on('process.run', (_$, e) => {
+    if (e.argv.includes('send')) {
+      sends += 1
+
+      return { deny: 'the command is still running' }
+    }
+
+    return {
+      value: { exitCode: 0, stdout: SNAPSHOT, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }
+  })
+  const session = mock.session(on)
+  await $.command.run({
+    command: 'mesh',
+    args: 'codex-x',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  const ui = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'peermesh',
+    props: {
+      title: 'peermesh',
+      isFocused: true,
+      bodyColumns: 60,
+      placement: 'dock',
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  })
+  await ui.input({ key: `to:${PEER}`, text: 'Use main.' })
+  expect(sends).toBe(1)
+  expect(await ui.find({ type: 'Text', text: /gave no answer.*can be delivered/ })).toBeDefined()
+  // No message id is known, so the agent gets no row that claims a send.
+  expect(session.appended().length).toBe(0)
+  await ui.unmount()
 })
