@@ -86,3 +86,48 @@ def test_a_codex_call_names_its_thread_in_the_request_metadata(
 def test_a_call_without_codex_metadata_uses_the_environment() -> None:
     assert mcp_server._session(cast(Any, _Ctx({"progressToken": 1}))) == (os.environ, None)
     assert mcp_server._session(None) == (os.environ, None)
+
+
+def test_no_tool_takes_an_identity_argument() -> None:
+    # The model writes the arguments. The session comes from the runtime only.
+    tools = {
+        t.name: set(t.input_schema["properties"]) for t in asyncio.run(mcp_server.mcp.list_tools())
+    }
+    assert tools == {
+        "peers_list": {"scope"},
+        "peers_send": {"to", "body", "kind", "urgency"},
+        "peers_reply": {"msg_id", "body", "done"},
+        "peers_status": {"target"},
+        "peers_track": {"msg_id"},
+    }
+
+
+def test_metadata_that_names_a_thread_of_another_process_is_refused(
+    make_peer: Callable[..., Peer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A process that starts its own server can write any metadata. It can act only as a
+    # thread whose host process is one of its ancestors.
+    import subprocess
+
+    from peermesh.registry import proc_start
+
+    mesh = Mesh(Registry(), Ledger(), {"claude": Fake(), "codex": Fake()})
+    monkeypatch.setattr(Mesh, "default", classmethod(lambda cls: mesh))
+    other = subprocess.Popen(["sleep", "30"])
+    try:
+        mesh.registry.put(
+            make_peer(
+                id="codex:T2",
+                name="codex-t2",
+                runtime="codex",
+                endpoint="T2",
+                pid=other.pid,
+                proc_start=proc_start(other.pid) or "",
+            )
+        )
+        ctx = _Ctx({"x-codex-turn-metadata": {"thread_id": "T2"}})
+        with pytest.raises(ValueError, match="not an ancestor"):
+            mcp_server.peers_send(["anyone"], "spoof", ctx=cast(Any, ctx))
+    finally:
+        other.kill()
+        other.wait()
