@@ -2,14 +2,14 @@
 // server and the `peers` command stay in charge of each message. This module reads the state
 // through `peers --json watch`, and it keeps no record of its own.
 
-import { atom, read, update } from 'claude-code'
+import { atom, memberOf, read, update } from 'claude-code'
 import type { EngineInterface, ProcessRunResult, Register } from 'claude-code'
 
 import type { Message, Peer, View } from '../types'
 import { parseFrame } from './frame'
 import { oneLine, warnsOfResend } from './text'
 import { homeFocus, messageRows, paneTree } from './ui'
-import type { Row } from './ui'
+import type { Fold, Row } from './ui'
 
 const PANE = 'peermesh'
 const COMMAND = 'mesh'
@@ -30,6 +30,7 @@ const view = atom({ plugin: 'peermesh', key: 'view' } as const, { kind: 'home' }
 const notice = atom({ plugin: 'peermesh', key: 'notice' } as const, null)
 const sending = atom({ plugin: 'peermesh', key: 'isSending' } as const, false)
 const current = atom({ plugin: 'peermesh', key: 'isCurrent' } as const, true)
+const open = atom({ plugin: 'peermesh', key: 'isOpen' } as const, false)
 
 // The executable that ran last, and the state as it was written last. A reload starts them
 // again, which costs one more read.
@@ -317,6 +318,23 @@ async function show($: EngineInterface, target: View, focus: string): Promise<vo
   await $.ui.focus({ requestId: PANE, key: focus }).catch(() => undefined)
 }
 
+/**
+ * How the block of rows that `e` draws shows a long message. A click opens and closes it only
+ * where the terminal reports clicks, which is its fullscreen mode; elsewhere the row names
+ * ctrl+o.
+ */
+async function fold(
+  $: EngineInterface,
+  e: { requestId: string; viewport?: { isFullscreen?: boolean } },
+): Promise<Fold> {
+  const member = memberOf(open, e)
+  const isOpen = await read($, member)
+
+  return e.viewport?.isFullscreen === true
+    ? { isOpen, toggle: () => void update($, member, value => !value) }
+    : { isOpen: false }
+}
+
 function known(all: readonly Message[], id: unknown): Message | undefined {
   return typeof id === 'string' && id.length >= 6 ? all.find(m => m.id.startsWith(id)) : undefined
 }
@@ -498,7 +516,7 @@ export const register: Register = on => {
         }
       })
 
-      return messageRows($.ui.resolve(e), rows)
+      return messageRows($.ui.resolve(e), rows, await fold($, e))
     },
   )
 
@@ -511,8 +529,9 @@ export const register: Register = on => {
     const rows = sends.flatMap(call => sentRows(call, all))
 
     const T = $.ui.resolve(e)
+    const folded = await fold($, e)
     if (sends.length === e.props.calls.length) {
-      return messageRows(T, rows)
+      return messageRows(T, rows, folded)
     }
     // The group has other calls. The line that Claude Code draws for the group stays, because
     // it shows which of them run and which of them failed.
@@ -520,7 +539,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        {messageRows(T, rows)}
+        {messageRows(T, rows, folded)}
         {await next(e)}
       </Box>
     )

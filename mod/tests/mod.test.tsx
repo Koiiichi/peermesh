@@ -840,3 +840,62 @@ test('a row that shows the start of a message leaves out its empty lines', async
   expect(await ui.find({ type: 'Text', text: /more of this message/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('a click on the last line of a row shows the full message, and a second click folds it', async $ => {
+  const body = ['First line.', '', 'Context:', '- one', '- two', '- three'].join('\n')
+  const props = {
+    calls: [
+      {
+        tool_use_id: 'toolu_1',
+        tool: SEND,
+        input: { to: ['codex-x'], body, kind: 'request' },
+        isRunning: false,
+        isErrored: false,
+        isInterrupted: false,
+        output: JSON.stringify({ result: [SENT] }),
+      },
+    ],
+    isActive: false,
+    isExpanded: false,
+  }
+  // The terminal reports clicks in its fullscreen mode.
+  const ui = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    requestId: 'group-1',
+    viewport: { columns: 100, rows: 40, isFullscreen: true },
+    props,
+  })
+  expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
+  expect((await ui.find({ key: 'more:0' }))?.props.label).toMatch(/click to show the full message/)
+  await ui.press({ key: 'more:0' })
+  expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeDefined()
+  expect((await ui.find({ key: 'more:0' }))?.props.label).toBe('click to show less')
+  await ui.press({ key: 'more:0' })
+  expect(await ui.find({ type: 'Text', text: /^- three$/ })).toBeUndefined()
+  await ui.unmount()
+  // A different block of rows keeps its own state, and a short message has no line to click.
+  const short = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    requestId: 'group-2',
+    viewport: { columns: 100, rows: 40, isFullscreen: true },
+    props: { ...props, calls: [{ ...props.calls[0]!, input: { to: ['codex-x'], body: 'One line.', kind: 'info' } }] },
+  })
+  expect(await short.find({ key: 'more:0' })).toBeUndefined()
+  await short.unmount()
+  // Outside fullscreen mode a click does not reach the row, so the row names ctrl+o.
+  const plain = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'ToolGroup',
+    requestId: 'group-3',
+    viewport: { columns: 100, rows: 40, isFullscreen: false },
+    props,
+  })
+  expect(await plain.find({ key: 'more:0' })).toBeUndefined()
+  expect(await plain.find({ type: 'Text', text: /ctrl\+o shows all/ })).toBeDefined()
+  await plain.unmount()
+})

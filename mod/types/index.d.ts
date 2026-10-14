@@ -45,6 +45,8 @@ declare module 'claude-code' {
       notice: Notice
       isSending: boolean
       isCurrent: boolean
+      /** One value for each block of message rows: true while it shows its messages in full. */
+      isOpen: StateFamily<boolean>
     }
   }
 }
