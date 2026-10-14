@@ -56,7 +56,9 @@ def world(make_peer: Callable[..., Peer]) -> World:
     return World(mesh, claude, codex, peers)
 
 
-def _hook(world: World, event: str, key: str, **payload: Any) -> tuple[Any, list[Any]]:
+def _hook(
+    world: World, event: str, key: str, env: dict[str, str] | None = None, **payload: Any
+) -> tuple[Any, list[Any]]:
     peer = world.peers[key]
     emitted: list[Any] = []
     out = hooks.handle(
@@ -64,7 +66,7 @@ def _hook(world: World, event: str, key: str, **payload: Any) -> tuple[Any, list
         event,
         peer.runtime,
         {"session_id": peer.id.split(":", 1)[1], "cwd": peer.cwd, **payload},
-        env={},
+        env=env or {},
         host_pid=os.getpid(),
         emit=emitted.append,
     )
@@ -333,6 +335,20 @@ def test_codex_stop_continues_the_turn_with_a_block_decision(world: World) -> No
     world.mesh.send(world.peers["a"], "codex-x", "Run the tests.", kind="request")
     out, _ = _hook(world, "stop", "x")
     assert out["decision"] == "block" and ENDINGS["stop"] in out["reason"]
+
+
+def test_hooks_write_no_notice_in_the_session_that_has_the_mod(world: World) -> None:
+    world.put("b", status="busy")
+    world.mesh.send(world.peers["a"], "claude-b", "Please rebase.", kind="request")
+    out, _ = _hook(world, "post-tool", "b", env={hooks.MOD_ENV: "B"})
+    assert "systemMessage" not in out and "Please rebase." in str(out)
+    # A session that a mod session started inherits the variable. It has no mod of its own.
+    world.mesh.send(world.peers["a"], "claude-b", "One more.", kind="request")
+    out, _ = _hook(world, "post-tool", "b", env={hooks.MOD_ENV: "A"})
+    assert out["systemMessage"] == "peermesh: gave the agent request from claude-a"
+    world.mesh.send(world.peers["a"], "claude-b", "Run the tests.", kind="request")
+    out, _ = _hook(world, "prompt", "b", env={hooks.MOD_ENV: "B"})
+    assert "systemMessage" not in out and "Run the tests." in str(out)
 
 
 def test_hooks_tell_the_user_which_messages_the_agent_got(world: World) -> None:

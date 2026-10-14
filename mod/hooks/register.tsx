@@ -1,0 +1,400 @@
+// The peermesh mod for Claude Code. It draws what peermesh already does: the hooks, the MCP
+// server and the `peers` command stay in charge of each message. This module reads the state
+// through `peers --json watch`, and it keeps no record of its own.
+
+import { atom, read, update } from 'claude-code'
+import type { EngineInterface, ProcessRunResult, Register } from 'claude-code'
+
+import type { Message, Peer, View } from '../types'
+import { parseFrame } from './frame'
+import { oneLine } from './text'
+import { homeFocus, messageRows, paneTree } from './ui'
+import type { Row } from './ui'
+
+const PANE = 'peermesh'
+const COMMAND = 'mesh'
+const SEND = 'mcp__peermesh__peers_send'
+const REPLY = 'mcp__peermesh__peers_reply'
+// The timer runs at this period. It reads the state at each tick while the pane is open, and
+// at each fifth tick while it is closed.
+const TICK_MS = 3000
+const IDLE_TICKS = 5
+
+const me = atom({ plugin: 'peermesh', key: 'me' } as const, null)
+const peers = atom({ plugin: 'peermesh', key: 'peers' } as const, [])
+const messages = atom({ plugin: 'peermesh', key: 'messages' } as const, [])
+const view = atom({ plugin: 'peermesh', key: 'view' } as const, { kind: 'home' })
+const notice = atom({ plugin: 'peermesh', key: 'notice' } as const, null)
+
+// The executable that ran last, and the state as it was written last. A reload starts them
+// again, which costs one more read.
+let command: string | undefined
+let written: { me: string | null; peers: string; messages: string } = { me: null, peers: '', messages: '' }
+let isReading = false
+
+/** Run `peers` as this session. Undefined means that no `peers` executable started. */
+async function runPeers(
+  $: EngineInterface,
+  args: readonly string[],
+  stdin?: string,
+): Promise<ProcessRunResult | undefined> {
+  const home = (await $.env.get('HOME')) ?? ''
+  const session = await $.session.id()
+  // `peers install` puts the command in ~/.local/bin, which the PATH of a desktop app can lack.
+  for (const exe of command !== undefined ? [command] : ['peers', `${home}/.local/bin/peers`]) {
+    try {
+      const ran = await $.process.run([exe, ...args], {
+        env: { CLAUDE_CODE_SESSION_ID: session },
+        stdin,
+        timeoutMs: 15000,
+      })
+      command = exe
+
+      return ran
+    } catch {
+      command = undefined
+    }
+  }
+
+  return undefined
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+/** Read the sessions and the messages, and write each list to the state if it changed. */
+async function refresh($: EngineInterface): Promise<void> {
+  if (isReading) {
+    return
+  }
+  isReading = true
+  try {
+    const ran = await runPeers($, ['--json', 'watch'])
+    if (ran === undefined || ran.exitCode !== 0) {
+      return
+    }
+    const data = JSON.parse(ran.stdout) as {
+      me: string | null
+      peers: Record<string, unknown>[]
+      messages: Record<string, unknown>[]
+    }
+    const nextPeers: Peer[] = data.peers.map(p => ({
+      id: text(p.id),
+      name: text(p.name),
+      runtime: text(p.runtime),
+      status: text(p.status),
+      branch: typeof p.branch === 'string' ? p.branch : null,
+      dir: text(p.worktree) || text(p.cwd),
+      waiting: Number(p.waiting) || 0,
+    }))
+    const nextMessages: Message[] = data.messages.map(m => ({
+      id: text(m.id),
+      from: text(m.from),
+      fromName: text(m.from_name),
+      to: text(m.to),
+      toName: text(m.to_name),
+      kind: text(m.kind),
+      body: text(m.body),
+      sentAt: Number(m.sent_at) || 0,
+      thread: text(m.thread) || text(m.id),
+      inReplyTo: typeof m.in_reply_to === 'string' ? m.in_reply_to : null,
+      state: text(m.state),
+    }))
+    // A write draws each reader again, so a list that did not change is not written.
+    const next = { me: data.me, peers: JSON.stringify(nextPeers), messages: JSON.stringify(nextMessages) }
+    if (next.me !== written.me) {
+      await update($, me, () => data.me)
+    }
+    if (next.peers !== written.peers) {
+      await update($, peers, () => nextPeers)
+    }
+    if (next.messages !== written.messages) {
+      await update($, messages, () => nextMessages)
+    }
+    written = next
+  } catch {
+    // A read that fails leaves the last state on the screen. The next read tries again.
+  } finally {
+    isReading = false
+  }
+}
+
+async function tick($: EngineInterface, count: number): Promise<void> {
+  const isOpen = (await $.ui.panes()).some(pane => pane.id === PANE)
+  if (isOpen || count % IDLE_TICKS === 0) {
+    await refresh($)
+  }
+}
+
+/**
+ * Tell the peermesh hooks of this session that the mod draws the messages they give the agent.
+ * The value is the session id, so a process that inherits the variable does not match it.
+ */
+async function mark($: EngineInterface): Promise<void> {
+  await $.env.set('PEERMESH_MOD', await $.session.id())
+}
+
+/** Send `body` with `peers send` or `peers reply`, and record the send for the agent. */
+async function send($: EngineInterface, args: readonly string[], body: string): Promise<void> {
+  if (body.trim() === '') {
+    return
+  }
+  const ran = await runPeers($, ['--json', ...args, '--body', '-'], body)
+  if (ran === undefined) {
+    await update($, notice, () => ({ text: 'The peers command did not start.', isError: true }))
+
+    return
+  }
+  let sent: { msg_id?: string; to?: string; status?: string; note?: string } | undefined
+  try {
+    sent = (JSON.parse(ran.stdout) as (typeof sent)[])[0]
+  } catch {
+    sent = undefined
+  }
+  if (sent === undefined || !sent.msg_id) {
+    const why = sent?.note ?? oneLine(ran.stderr, 200)
+    await update($, notice, () => ({ text: `not sent · ${why}`, isError: true }))
+
+    return
+  }
+  const id = sent.msg_id.slice(0, 8)
+  await update($, notice, () => ({
+    text: `${sent.status} · ${sent.to} · ${id}`,
+    isError: sent.status === 'refused',
+  }))
+  // The agent of this session did not write the message. Without this row, it cannot
+  // understand a reply to it.
+  const quoted = body.split('\n').map(line => '> ' + line)
+  await $.session
+    .append({
+      message: {
+        type: 'user',
+        content: [
+          {
+            type: 'text',
+            text: [
+              'peermesh: The user sent a message from the peermesh pane of this session.',
+              'The message has this session as its sender. A reply to it comes to this session.',
+              '',
+              `to ${sent.to} · msg ${id} · ${sent.status}`,
+              ...quoted,
+            ].join('\n'),
+          },
+        ],
+      },
+    })
+    .catch(() => undefined)
+  await refresh($)
+}
+
+/** Show a view of the pane and give the keyboard to the element with the key `focus`. */
+async function show($: EngineInterface, target: View, focus: string): Promise<void> {
+  await update($, view, () => target)
+  // The element is in the next drawing. The engine waits for it; a pane that does not hold
+  // the keyboard refuses, and nothing more is necessary.
+  await $.ui.focus({ requestId: PANE, key: focus }).catch(() => undefined)
+}
+
+function known(all: readonly Message[], id: unknown): Message | undefined {
+  return typeof id === 'string' && id.length >= 6 ? all.find(m => m.id.startsWith(id)) : undefined
+}
+
+/** The rows of one peers_send or peers_reply call, from its input and its result. */
+function sentRows(
+  call: { tool: string; input: unknown; isRunning: boolean; isErrored: boolean; output?: unknown },
+  all: readonly Message[],
+): Row[] {
+  const input = (call.input ?? {}) as Record<string, unknown>
+  const isReply = call.tool === REPLY
+  const parent = isReply ? known(all, input.msg_id) : undefined
+  const base = {
+    isIncoming: false,
+    kind: isReply ? (input.done === true ? 'reply · done' : 'reply') : text(input.kind) || 'info',
+    body: text(input.body),
+    re: parent !== undefined ? oneLine(parent.body, 60) : undefined,
+  }
+  const targets = Array.isArray(input.to) ? input.to.map(text).join(', ') : text(input.to)
+  const name = parent?.fromName ?? (targets || '…')
+  if (call.isErrored) {
+    return [{ ...base, name, state: 'refused', note: oneLine(text(call.output), 200) }]
+  }
+  if (typeof call.output !== 'string') {
+    return [{ ...base, name, state: 'sending' }]
+  }
+  try {
+    // The MCP server wraps a list in { result }. One send result comes without the wrapper.
+    const parsed = JSON.parse(call.output) as Record<string, unknown>
+    const result = parsed.result ?? parsed
+    const results = (Array.isArray(result) ? result : [result]) as Record<string, unknown>[]
+
+    return results.map(r => {
+      // The ledger knows what happened after the send. The result holds the first outcome.
+      const state = known(all, r.msg_id)?.state ?? text(r.status)
+
+      return {
+        ...base,
+        name: text(r.to) || name,
+        id: text(r.msg_id) || undefined,
+        state,
+        note: state === 'refused' ? text(r.note) : undefined,
+      }
+    })
+  } catch {
+    return [{ ...base, name }]
+  }
+}
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    await mark($)
+    let count = 0
+    $.clock.every(TICK_MS, () => {
+      count += 1
+      void tick($, count)
+    })
+    void refresh($)
+    // Claude Code has a /peers command of its own, which lists the sessions that it can message.
+    await $.command.register({
+      name: COMMAND,
+      description: 'Show the peermesh sessions and messages',
+      argumentHint: '[session]',
+      immediate: true,
+    })
+
+    return next(e)
+  })
+
+  on('prompt.submit', async ($, e, next) => {
+    // A /clear gives the session a new id and starts no session.start.
+    await mark($)
+    const submitted = await next(e)
+    void refresh($)
+
+    return submitted
+  })
+
+  on('turn.complete', ($, e, next) => {
+    void refresh($)
+
+    return next(e)
+  })
+
+  on('tool.call', { tool: SEND }, async ($, e, next) => {
+    const ran = await next(e)
+    void refresh($)
+
+    return ran
+  })
+
+  on('tool.call', { tool: REPLY }, async ($, e, next) => {
+    const ran = await next(e)
+    void refresh($)
+
+    return ran
+  })
+
+  // A hook gives the agent a message in the middle of a turn, and the transcript has no row
+  // for it. The Stop hook is not in this list: Claude Code shows its feedback in full.
+  on('session.append', { door: 'hook-context' }, async ($, e, next) => {
+    const stored = await next(e)
+    const isDelivery =
+      e.origin.kind === 'hook' &&
+      (e.origin.event === 'PostToolUse' || e.origin.event === 'UserPromptSubmit') &&
+      e.message.name === 'hook_additional_context'
+    if (isDelivery) {
+      const context = e.message.content.map(block => (block.type === 'text' ? block.text : '')).join('\n')
+      for (const item of parseFrame(context) ?? []) {
+        const kind = item.isDone ? `${item.kind} · done` : item.kind
+        $.ui.log(`← ${item.from} · ${kind} · ${item.id.slice(0, 8)} · ${oneLine(item.body, 200)}`)
+      }
+      void refresh($)
+    }
+
+    return stored
+  })
+
+  on('command.run', { command: 'mesh' }, async ($, e) => {
+    await refresh($)
+    const name = e.args.trim()
+    const found = name === '' ? undefined : (await read($, peers)).find(p => p.name === name)
+    await update($, notice, () =>
+      name !== '' && found === undefined
+        ? { text: `No live session has the name ${oneLine(name, 40)}.`, isError: true }
+        : null,
+    )
+    const opened = await $.ui.open({ id: PANE, title: 'peermesh', focus: true, columns: 62, rows: 16 })
+    const data = { me: await read($, me), peers: await read($, peers), messages: await read($, messages) }
+    await (found !== undefined
+      ? show($, { kind: 'peer', id: found.id }, `to:${found.id}`)
+      : show($, { kind: 'home' }, homeFocus(data)))
+
+    return opened.isPlaced ? {} : { text: 'The peermesh pane opens when the terminal is wider.' }
+  })
+
+  on(
+    'ui.render',
+    { component: 'UserMessage', props: { origin: { kind: 'peer' } } },
+    async ($, e, next) => {
+      // ctrl+o shows the frame as the agent read it.
+      const items = e.props.isExpanded ? null : parseFrame(e.props.text)
+      if (items === null) {
+        return next(e)
+      }
+      const all = await read($, messages)
+      const rows = items.map((item): Row => {
+        const record = known(all, item.id)
+        const parent = record?.inReplyTo ? all.find(m => m.id === record.inReplyTo) : undefined
+        const isAnswered = record?.state === 'answered' || record?.state === 'done'
+
+        return {
+          isIncoming: true,
+          name: item.from,
+          kind: item.isDone ? `${item.kind} · done` : item.kind,
+          id: item.id,
+          body: item.body,
+          re: parent !== undefined ? oneLine(parent.body, 60) : undefined,
+          note: isAnswered ? 'this session replied' : undefined,
+        }
+      })
+
+      return messageRows($.ui.resolve(e), rows, 0)
+    },
+  )
+
+  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
+    const sends = e.props.calls.filter(call => call.tool === SEND || call.tool === REPLY)
+    if (e.props.isExpanded || sends.length === 0) {
+      return next(e)
+    }
+    const all = await read($, messages)
+    const rows = sends.flatMap(call => sentRows(call, all))
+
+    return messageRows($.ui.resolve(e), rows, e.props.calls.length - sends.length)
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) =>
+    paneTree(
+      $.ui.resolve(e),
+      {
+        me: await read($, me),
+        peers: await read($, peers),
+        messages: await read($, messages),
+        view: await read($, view),
+        notice: await read($, notice),
+        columns: e.props.bodyColumns,
+      },
+      {
+        go: (target, focus) => {
+          void show($, target, focus)
+        },
+        send: (to, body) => {
+          void send($, ['send', to, '--kind', 'request'], body)
+        },
+        reply: (msgId, body) => {
+          void send($, ['reply', msgId], body)
+        },
+      },
+    ),
+  )
+}

@@ -6,3 +6,6 @@ __pycache__/
 .ruff_cache/
 dist/
 .superpowers/
+
+# Claude Code writes the API types of its build beside a mod that it loads from a folder.
+mod/.claude-plugin/types/

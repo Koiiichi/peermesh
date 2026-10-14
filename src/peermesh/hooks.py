@@ -23,6 +23,9 @@ _HOOK_NAMES = {
     "post-tool": "PostToolUse",
 }
 Emit = Callable[[dict[str, Any]], None]
+# The peermesh mod for Claude Code sets this variable to the id of its session. The mod draws
+# each message that a hook gives the agent, so the hook does not write a notice line too.
+MOD_ENV = "PEERMESH_MOD"
 
 
 def _seen_file(peer_id: str) -> Path:
@@ -65,7 +68,9 @@ def _remove_stale_state(mesh: Mesh) -> None:
             mesh.expire_inbox(name)
 
 
-def _post_tool(mesh: Mesh, peer_id: str, emit: Emit) -> dict[str, Any] | None:
+def _post_tool(
+    mesh: Mesh, peer_id: str, env: Mapping[str, str], emit: Emit
+) -> dict[str, Any] | None:
     peer = mesh.registry.get(peer_id)
     if peer is None:
         return None
@@ -77,7 +82,7 @@ def _post_tool(mesh: Mesh, peer_id: str, emit: Emit) -> dict[str, Any] | None:
             # A native wake starts a turn without a prompt hook; a tool call proves the turn.
             peer.status, peer.last_seen = "busy", mesh.clock()
             mesh.registry.put(peer)
-        out = _context("post-tool", _render(peer, items)) | {"systemMessage": _notice(items)}
+        out = _context("post-tool", _render(peer, items)) | _notice(items, peer.id, env)
         # Emit before the record, so a crash leaves the messages claimed for a retry and
         # never marks a message injected that the runtime did not get.
         emit(out)
@@ -94,10 +99,13 @@ def _render(peer: Peer, items: list[Waiting], ending: Ending | None = None) -> s
     )
 
 
-def _notice(items: list[Waiting]) -> str:
-    """The line that the user sees. The model context holds the messages themselves."""
+def _notice(items: list[Waiting], peer_id: str, env: Mapping[str, str]) -> dict[str, str]:
+    """The hook output that shows the user a line. The model context holds the messages."""
+    # A child process inherits the variable, so only the session that it names has the mod.
+    if peer_id == f"claude:{env.get(MOD_ENV)}":
+        return {}
     parts = [f"{i.message.kind.replace('_', ' ')} from {i.message.from_name}" for i in items]
-    return "peermesh: gave the agent " + ", ".join(parts)
+    return {"systemMessage": "peermesh: gave the agent " + ", ".join(parts)}
 
 
 def _continue_turn(runtime: Runtime, body: str) -> dict[str, Any]:
@@ -176,7 +184,7 @@ def handle(
         mesh.expire_inbox(peer_id)
         return None
     if event == "post-tool":
-        return _post_tool(mesh, peer_id, emit)
+        return _post_tool(mesh, peer_id, env, emit)
     if runtime == "codex" and "transcript_path" in payload and not payload["transcript_path"]:
         # Codex gives a null path for an ephemeral thread, such as a one-time review. It has
         # no rollout file, so `codex queue` cannot reach it and nothing shows when it closes.
@@ -223,7 +231,7 @@ def handle(
             return None
         out = _context(event, "\n\n".join(parts))
         if items:
-            out["systemMessage"] = _notice(items)
+            out |= _notice(items, peer.id, env)
         emit(out)
         mesh.record_injected(items, "prompt")
     return out
