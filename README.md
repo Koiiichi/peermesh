@@ -121,7 +121,7 @@ An optional mod for Claude Code 2.1.287 or later draws peermesh in the session i
   Which port does the web dev server use? The API must allow it in CORS.
 
 ← shop-web  reply  5b457c23
-  re: Which port does the web dev server use? The API must allow …
+  ▎ you  Which port does the web dev server use? The API must allow it in CORS.
   The web dev server uses port 5173. Allow http://localhost:5173 as an origin in the API's CORS config.
 ```
 
