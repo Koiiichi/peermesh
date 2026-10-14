@@ -179,7 +179,7 @@ test('the pane lists the sessions, opens one and sends a message as this session
   })
   // The host answers these calls in a session. Nothing answers them in a test.
   mock.env(on, { HOME: '/home/user' })
-  on('session.id', () => ({ value: 'session-1' }))
+  on('session.id', () => ({ value: 'me' }))
   const opened: string[] = []
   on('ui.open', (_$, e) => {
     opened.push(e.id)
@@ -220,7 +220,7 @@ test('the pane lists the sessions, opens one and sends a message as this session
     // The id, not the name: a different session can take the name after the pane drew it.
     expect(sent?.argv.slice(1)).toEqual(['--json', 'send', PEER, '--kind', 'request', '--body', '-'])
     expect(sent?.stdin).toBe('Use main.')
-    expect(sent?.session).toBe('session-1')
+    expect(sent?.session).toBe('me')
     expect(await ui.find({ type: 'Text', text: /delivered · codex-x · bbbbbbbb/ })).toBeDefined()
 
     await ui.press({ key: 'back' })
@@ -264,7 +264,7 @@ test('the pane lists the sessions, opens one and sends a message as this session
 
 test('a send that gives no answer is not sent again', async ($, on) => {
   mock.env(on, { HOME: '/home/user' })
-  on('session.id', () => ({ value: 'session-1' }))
+  on('session.id', () => ({ value: 'me' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   // The command runs too long, then it ends without a result, then it refuses the message.
   const answers = [
@@ -330,7 +330,7 @@ test('a delivered send keeps a warning against a second send', async ($, on) => 
   // peermesh sent the message and could not record it: the status is delivered, with a note.
   const note = 'submitted, not recorded, do not resend'
   mock.env(on, { HOME: '/home/user' })
-  on('session.id', () => ({ value: 'session-1' }))
+  on('session.id', () => ({ value: 'me' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('process.run', (_$, e) => {
     const stdout = e.argv.includes('send') ? JSON.stringify([{ ...SENT, note }]) : SNAPSHOT
@@ -389,7 +389,7 @@ test('a delivered send keeps a warning against a second send', async ($, on) => 
 
 test('a refused send keeps the warning of the transport', async ($, on) => {
   mock.env(on, { HOME: '/home/user' })
-  on('session.id', () => ({ value: 'session-1' }))
+  on('session.id', () => ({ value: 'me' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('process.run', (_$, e) => {
     const refused = [{ msg_id: TIMED_OUT, to: 'codex-x', status: 'refused', note: QUEUE_NOTE }]
@@ -432,7 +432,7 @@ test('a refused send keeps the warning of the transport', async ($, on) => {
 
 test('a second Enter while a send runs does not send again', async ($, on) => {
   mock.env(on, { HOME: '/home/user' })
-  on('session.id', () => ({ value: 'session-1' }))
+  on('session.id', () => ({ value: 'me' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   let sends = 0
   let finish = () => {}
@@ -486,7 +486,7 @@ test('a second Enter while a send runs does not send again', async ($, on) => {
 
 test('an event during a read makes one more read', async ($, on) => {
   mock.env(on, { HOME: '/home/user' })
-  on('session.id', () => ({ value: 'session-1' }))
+  on('session.id', () => ({ value: 'me' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   let reads = 0
   let finish = () => {}
@@ -521,7 +521,7 @@ test('an event during a read makes one more read', async ($, on) => {
 
 test('a sent message that the conversation refused is still reported as sent', async ($, on) => {
   mock.env(on, { HOME: '/home/user' })
-  on('session.id', () => ({ value: 'session-1' }))
+  on('session.id', () => ({ value: 'me' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('process.run', (_$, e) => {
     const stdout = e.argv.includes('send') ? JSON.stringify([SENT]) : SNAPSHOT
@@ -556,7 +556,7 @@ test('a sent message that the conversation refused is still reported as sent', a
 
 test('the hooks keep their notice where the mod draws nothing, and the timer waits for a read', async ($, on) => {
   mock.env(on, { HOME: '/home/user' })
-  on('session.id', () => ({ value: 'session-1' }))
+  on('session.id', () => ({ value: 'me' }))
   // The marker for the hooks is set only where the mod draws the deliveries.
   const marks: (string | undefined)[] = []
   let surface: 'terminal' | null = null
@@ -587,7 +587,7 @@ test('the hooks keep their notice where the mod draws nothing, and the timer wai
   await $.prompt.submit({ text: 'hello', wait: false, origin: { kind: 'sdk' } })
   surface = 'terminal'
   await $.session.start({ cwd: '/w/rotom', surface: 'terminal', isInteractive: true })
-  expect(marks).toEqual([undefined, 'session-1'])
+  expect(marks).toEqual([undefined, 'me'])
   // The pane is open and the first read is slow: five ticks pass during it.
   await clock.advance(15000)
   expect(reads).toBe(1)
@@ -638,5 +638,49 @@ test('a send that ends after a /clear adds no row to the new conversation', asyn
   await ui.input({ key: `to:${PEER}`, text: 'Use main.' })
   expect(session.appended().length).toBe(0)
   expect(await ui.find({ type: 'Text', text: /delivered · codex-x · bbbbbbbb · Sent before this conversation changed/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the ledger says which conversation sent a message from the pane', async ($, on) => {
+  // The conversation changed before `peers` read its session, so the new one is the sender.
+  const record = { id: SENT.msg_id, from: 'claude:session-2', to: PEER, kind: 'request', thread: SENT.msg_id, state: 'delivered' }
+  const after = JSON.stringify({ ...JSON.parse(SNAPSHOT), messages: [record] })
+  mock.env(on, { HOME: '/home/user' })
+  let id = 'session-1'
+  on('session.id', () => ({ value: id }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', (_$, e) => {
+    const isSend = e.argv.includes('send')
+    const stdout = isSend ? JSON.stringify([SENT]) : id === 'session-2' ? after : SNAPSHOT
+    if (isSend) {
+      id = 'session-2'
+    }
+
+    return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  const session = mock.session(on)
+  await $.command.run({
+    command: 'mesh',
+    args: 'codex-x',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  const ui = await $.ui.mount({
+    plugin: 'peermesh',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'peermesh',
+    props: {
+      title: 'peermesh',
+      isFocused: true,
+      bodyColumns: 60,
+      placement: 'dock',
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  })
+  await ui.input({ key: `to:${PEER}`, text: 'Use main.' })
+  // The new conversation is the sender, so its agent gets the record.
+  expect(session.appended().length).toBe(1)
   await ui.unmount()
 })

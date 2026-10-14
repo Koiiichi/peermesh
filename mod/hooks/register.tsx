@@ -244,14 +244,19 @@ async function deliver($: EngineInterface, args: readonly string[], body: string
   const status = hasWarning && sent.note ? `${sent.status} · ${sent.note}` : `${sent.status}`
   const outcome = `${sent.status} · ${sent.to} · ${id}` + (hasWarning && sent.note ? ` · ${sent.note}` : '')
   await update($, notice, () => ({ text: outcome, isError: hasWarning }))
-  if ((await $.session.id()) !== session) {
-    // The message went out as the earlier conversation, and a reply goes to that one. A row
-    // here would tell the wrong agent that the message is its own.
+  // The ledger has the session that `peers` sent the message as. That is the one fact about the
+  // sender; without it, a changed id says that the conversation changed during the send.
+  await refresh($)
+  const now = await $.session.id()
+  const record = (await read($, messages)).find(m => m.id === sent.msg_id)
+  const isOfThisConversation = record !== undefined ? record.from === `claude:${now}` : now === session
+  if (!isOfThisConversation) {
+    // A reply goes to the conversation that sent the message. A row here would tell the
+    // wrong agent that the message is its own.
     await update($, notice, () => ({
       text: `${outcome} · Sent before this conversation changed. A reply goes to the earlier one.`,
       isError: true,
     }))
-    void refresh($)
 
     return
   }
