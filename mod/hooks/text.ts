@@ -10,14 +10,21 @@ export function oneLine(text: string, width: number): string {
   return flat.length > width ? flat.slice(0, Math.max(1, width - 1)) + '…' : flat
 }
 
-/** The lines of a body, with no control character, cut after `rows` lines. */
+// A body line is cut after this many characters. One line of 8192 bytes is a valid body.
+const LINE_CHARS = 400
+
+/**
+ * The lines of a body, with no control character, cut after `rows` lines. `more` is the
+ * number of lines that are cut in full or in part.
+ */
 export function bodyLines(text: string, rows: number): { lines: string[]; more: number } {
   const all = text
     .split('\n')
     .map(line => line.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '').replace(/\t/g, '  '))
-  const lines = all.slice(0, rows)
+  const lines = all.slice(0, rows).map(line => (line.length > LINE_CHARS ? line.slice(0, LINE_CHARS) + '…' : line))
+  const long = all.slice(0, rows).filter(line => line.length > LINE_CHARS).length
 
-  return { lines, more: all.length - lines.length }
+  return { lines, more: all.length - lines.length + long }
 }
 
 export function pad(text: string, width: number): string {

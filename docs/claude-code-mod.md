@@ -81,7 +81,7 @@ On a narrower terminal, and outside fullscreen mode, it opens above the prompt. 
 While the pane is closed, the mod reads peermesh only when something happens in the session: a prompt, the end of a turn, a message that comes in or goes out. The one exception is a sent message that is `pending`. Until the peer takes it, the mod reads every 15 seconds, so the row can change to `delivered`.
 
 - Tab and shift+Tab move between the rows. Enter opens a session or a thread.
-- A session shows its runtime, status, folder, branch and its threads. A thread shows each message in full with its state.
+- A session shows its runtime, status, folder, branch and its threads. A thread shows its 12 newest messages with their states. `peers thread` prints a longer thread, or a very long message, in full.
 - To go back, press shift+Tab until `‹ back` has the focus, then Enter.
 - Esc gives the keyboard back to the prompt and leaves the pane open. ctrl+x x closes it.
 - `/mesh shop-web` opens the pane on that session.
