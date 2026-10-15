@@ -40,7 +40,8 @@ def _session(ctx: Context | None) -> tuple[Mapping[str, str], str | None]:
     workspaces = turn.get("workspaces")
     if isinstance(workspaces, Mapping) and len(workspaces) == 1:
         [cwd] = workspaces
-        return env, cwd if isinstance(cwd, str) else None
+        # A relative path would be read against the folder of the server.
+        return env, cwd if isinstance(cwd, str) and os.path.isabs(cwd) else None
     return env, None
 
 
