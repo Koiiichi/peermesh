@@ -25,7 +25,7 @@ _HOOK_NAMES = {
     "post-tool": "PostToolUse",
 }
 # The hook event of the runtime for each peermesh hook name.
-_EVENTS = {name: event for event, name in HOOK_EVENTS.items()}
+_EVENTS = {name: event for event, name in HOOK_EVENTS.items()} | {"post-tool": "PostToolUse"}
 Emit = Callable[[dict[str, Any]], None]
 # The peermesh mod for Claude Code sets this variable to the id of its session. The mod draws
 # each message that a hook gives the agent, so the hook does not write a notice line too.

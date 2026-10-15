@@ -6,6 +6,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from peermesh import hooks, install, paths
 from peermesh.ledger import Ledger
@@ -280,3 +281,39 @@ def test_a_plugin_hook_steps_aside_only_for_its_own_event() -> None:
     assert out is not None and mesh.registry.get("codex:T1") is not None
     hooks.handle(mesh, "session-end", "codex", payload, env={}, host_pid=os.getpid(), plugin=True)
     assert mesh.registry.get("codex:T1") is not None
+
+
+def test_the_plugin_post_tool_hook_leaves_a_message_to_the_peers_install_hook(
+    make_peer: Callable[..., Peer],
+) -> None:
+    legacy = install.merge_hooks({}, "/bin/peers", "codex")["hooks"]
+    hooks_file = paths.codex_home() / "hooks.json"
+    hooks_file.parent.mkdir(parents=True)
+    hooks_file.write_text(json.dumps({"hooks": {"PostToolUse": legacy["PostToolUse"]}}))
+    mesh = _mesh()
+    mesh.registry.put(
+        make_peer(
+            id="codex:T1",
+            name="codex-t1",
+            runtime="codex",
+            endpoint="T1",
+            status="busy",
+            capabilities=["inbox"],
+        )
+    )
+    sender = make_peer(id="claude:A", name="claude-a")
+    mesh.registry.put(sender)
+    mesh.send(sender, "codex-t1", "Schema v2 at abc123.")
+    payload = {"session_id": "T1", "cwd": os.getcwd()}
+
+    def run(plugin: bool) -> dict[str, Any] | None:
+        return hooks.handle(
+            mesh, "post-tool", "codex", payload, env={}, host_pid=os.getpid(), plugin=plugin
+        )
+
+    assert run(True) is None
+    # With the `peers install` hook of another event only, the plugin post-tool hook delivers.
+    hooks_file.write_text(json.dumps({"hooks": {"SessionEnd": legacy["SessionEnd"]}}))
+    out = run(True)
+    assert out is not None
+    assert "Schema v2 at abc123." in out["hookSpecificOutput"]["additionalContext"]

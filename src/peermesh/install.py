@@ -97,7 +97,7 @@ def _hook_groups(exe: str, runtime: str, *, plugin: bool = False) -> dict[str, A
         timeout = {"Stop": 45, "SessionEnd": 3}.get(event, 10)
         groups[event] = [{"hooks": [{"type": "command", "command": command, "timeout": timeout}]}]
     groups["PostToolUse"] = [
-        {"hooks": [{"type": "command", "command": _post_tool(exe, runtime), "timeout": 10}]}
+        {"hooks": [{"type": "command", "command": _post_tool(exe, runtime, plugin), "timeout": 10}]}
     ]
     return groups
 
@@ -106,8 +106,15 @@ def post_tool_command(exe: str, runtime: str) -> str:
     return _post_tool(shlex.quote(exe), runtime)
 
 
-def _post_tool(exe: str, runtime: str) -> str:
-    return f"/bin/sh -c {shlex.quote(POST_TOOL_GUARD)} peermesh {exe} {runtime} {MARK}"
+def _post_tool(exe: str, runtime: str, plugin: bool = False) -> str:
+    # The plugin has its own copy of the guard: a change to the guard of `peers install`
+    # changes its command, and Codex then asks every user to trust the hook again.
+    guard = (
+        POST_TOOL_GUARD.replace('--runtime "$2"', '--runtime "$2" --plugin')
+        if plugin
+        else POST_TOOL_GUARD
+    )
+    return f"/bin/sh -c {shlex.quote(guard)} peermesh {exe} {runtime} {MARK}"
 
 
 def _hook_config(runtime: str) -> dict[str, Any]:
