@@ -234,15 +234,55 @@ def _doctor() -> dict[str, tuple[bool, str]]:
 def test_doctor_accepts_the_codex_plugin_in_place_of_peers_install() -> None:
     _codex_config('[plugins."peermesh@peermesh"]\nenabled = true\n\n' + _trust(EVENTS))
     details = _doctor()
-    assert details["codex hooks"] == (True, "plugin peermesh@peermesh, 5 of 5 hooks trusted")
+    assert details["codex hooks"] == (True, "plugin peermesh@peermesh")
     assert details["codex post-tool hook"] == (True, "installed")
     assert details["codex rule"][0] is True
 
 
-def test_doctor_names_untrusted_plugin_hooks() -> None:
+def test_doctor_names_the_events_with_no_trusted_hook() -> None:
     _codex_config('[plugins."peermesh@peermesh"]\nenabled = true\n\n' + _trust(EVENTS[:2]))
     ok, detail = _doctor()["codex hooks"]
-    assert not ok and detail.startswith("plugin peermesh@peermesh, 2 of 5 hooks trusted (trust")
+    assert not ok
+    assert "no trusted hook for Stop, SessionEnd, PostToolUse (trust them" in detail
+
+
+def test_doctor_does_not_count_stale_or_empty_trust_records() -> None:
+    stale = "".join(
+        f'[hooks.state."peermesh@peermesh:hooks.json:{event}:0:0"]\ntrusted_hash = "sha256:0"\n'
+        for event in EVENTS
+    )
+    empty = "".join(
+        f'[hooks.state."peermesh@peermesh:plugin.json#hooks[0]:{event}:0:0"]\n' for event in EVENTS
+    )
+    for records in (stale, empty):
+        _codex_config('[plugins."peermesh@peermesh"]\nenabled = true\n\n' + records)
+        details = _doctor()
+        assert details["codex hooks"][0] is False
+        assert details["codex post-tool hook"][0] is False
+
+
+def test_doctor_needs_a_hook_for_each_event_across_both_setups() -> None:
+    legacy = install.merge_hooks({}, "/bin/peers", "codex")["hooks"]
+    _codex_config('[plugins."peermesh@peermesh"]\nenabled = true\n')
+    (paths.codex_home() / "hooks.json").write_text(
+        json.dumps({"hooks": {"SessionStart": legacy["SessionStart"]}})
+    )
+    details = _doctor()
+    assert details["codex hooks"][0] is False
+    assert (
+        "no trusted hook for UserPromptSubmit, Stop, SessionEnd, PostToolUse"
+        in (details["codex hooks"][1])
+    )
+    assert details["codex post-tool hook"][0] is False
+
+
+def test_doctor_needs_the_rule_while_a_peers_install_hook_serves_codex() -> None:
+    _codex_config('[plugins."peermesh@peermesh"]\nenabled = true\n\n' + _trust(EVENTS))
+    hooks = install.merge_hooks({}, "/bin/peers", "codex")
+    (paths.codex_home() / "hooks.json").write_text(json.dumps(hooks))
+    details = _doctor()
+    assert details["codex hooks"][0] is True
+    assert details["codex rule"] == (False, str(paths.codex_home() / "rules" / "peermesh.rules"))
 
 
 def test_doctor_ignores_a_disabled_plugin_and_an_empty_hook_file() -> None:
@@ -255,11 +295,10 @@ def test_doctor_ignores_a_disabled_plugin_and_an_empty_hook_file() -> None:
 
 
 def test_doctor_runs_with_a_config_that_it_cannot_read() -> None:
-    _codex_config("[plugins\nnot toml")
-    assert _doctor()["codex hooks"][0] is False
+    for content in (b"[plugins\nnot toml", b"\xff\xfe not utf-8"):
+        _codex_config("")
+        (paths.codex_home() / "config.toml").write_bytes(content)
+        assert _doctor()["codex hooks"][0] is False
     _codex_config('hooks = "x"\n[plugins."peermesh@peermesh"]\nenabled = true\n')
-    assert _doctor()["codex hooks"] == (
-        False,
-        "plugin peermesh@peermesh, 0 of 5 hooks trusted "
-        "(trust them in the hook review of a new Codex session)",
-    )
+    ok, detail = _doctor()["codex hooks"]
+    assert not ok and "no trusted hook for SessionStart" in detail

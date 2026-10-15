@@ -344,12 +344,16 @@ def _run_text(runner: Runner, cmd: list[str]) -> tuple[int, str]:
     return result.returncode, result.stdout
 
 
-def codex_plugin() -> tuple[str, int] | None:
+def codex_plugin() -> tuple[str, set[str]] | None:
     """The id of the enabled peermesh plugin in the Codex config, such as "peermesh@peermesh",
-    and the number of its hooks that have a trust record; None when no such plugin is enabled."""
+    and the hook events, such as "PostToolUse", whose plugin hook has a trust record.
+
+    None when no such plugin is enabled. Codex asks for trust again after a hook changes, and
+    a record does not show that.
+    """
     try:
-        config = tomllib.loads((paths.codex_home() / "config.toml").read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+        config = tomllib.loads((paths.codex_home() / "config.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return None
     plugins = config.get("plugins")
     if not isinstance(plugins, dict):
@@ -359,9 +363,22 @@ def codex_plugin() -> tuple[str, int] | None:
             if entry.get("enabled") is True:
                 hooks = config.get("hooks")
                 state = hooks.get("state") if isinstance(hooks, dict) else None
-                keys = state if isinstance(state, dict) else {}
-                return plugin, sum(1 for key in keys if key.startswith(f"{plugin}:"))
+                records = state if isinstance(state, dict) else {}
+                return plugin, {
+                    event
+                    for event in plugin_hooks()["hooks"]
+                    if _trusted(records.get(f"{plugin}:plugin.json#hooks[0]:{_snake(event)}:0:0"))
+                }
     return None
+
+
+def _trusted(record: Any) -> bool:
+    return isinstance(record, dict) and bool(record.get("trusted_hash"))
+
+
+def _snake(event: str) -> str:
+    """The event name in a Codex trust record: "PostToolUse" is "post_tool_use"."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", event).lower()
 
 
 def doctor(runner: Runner = subprocess.run) -> list[tuple[str, bool, str]]:
@@ -377,26 +394,39 @@ def doctor(runner: Runner = subprocess.run) -> list[tuple[str, bool, str]]:
     settings_path = paths.claude_dir() / "settings.json"
     checks.append(("claude hooks", hooks_installed("claude"), str(settings_path)))
     plugin = codex_plugin()
-    if hooks_installed("codex") or plugin is None:
-        codex_hooks = paths.codex_home() / "hooks.json"
+    codex_hooks = paths.codex_home() / "hooks.json"
+    if plugin is None:
         detail = f"{codex_hooks} (approve hook trust in Codex once)"
         checks.append(("codex hooks", hooks_installed("codex"), detail))
     else:
         name, trusted = plugin
-        expected = len(plugin_hooks()["hooks"])
-        detail = f"plugin {name}, {trusted} of {expected} hooks trusted"
-        if trusted < expected:
-            detail += " (trust them in the hook review of a new Codex session)"
-        checks.append(("codex hooks", trusted >= expected, detail))
+        events = list(plugin_hooks()["hooks"])
+        # Each event needs one hook: a plugin hook does nothing for an event that a hook of
+        # `peers install` serves.
+        legacy = {event for event in events if hooks_installed("codex", event)}
+        missing = [event for event in events if event not in legacy | trusted]
+        detail = f"plugin {name}"
+        if legacy:
+            detail += f", and {len(legacy)} events from `peers install` in {codex_hooks}"
+        if missing:
+            detail += (
+                f"; no trusted hook for {', '.join(missing)}"
+                " (trust them in the hook review of a new Codex session)"
+            )
+        checks.append(("codex hooks", not missing, detail))
     for runtime in ("claude", "codex"):
-        ok = post_tool_installed(runtime) or (runtime == "codex" and plugin is not None)
+        ok = post_tool_installed(runtime)
+        if runtime == "codex" and plugin is not None:
+            ok = ok or "PostToolUse" in plugin[1]
         detail = "installed" if ok else "run `peers install` again"
         checks.append((f"{runtime} post-tool hook", ok, detail))
     rule = paths.codex_home() / "rules" / "peermesh.rules"
-    if rule.exists() or plugin is None:
-        checks.append(("codex rule", rule.exists(), str(rule)))
-    else:
+    # A session that a hook of `peers install` serves is told to use the shell commands, which
+    # need the rule.
+    if plugin is not None and not hooks_installed("codex") and not rule.exists():
         checks.append(("codex rule", True, "not needed: the plugin gives Codex the MCP tools"))
+    else:
+        checks.append(("codex rule", rule.exists(), str(rule)))
     code, _ = _run_text(runner, ["claude", "mcp", "get", "peermesh"])
     checks.append(("claude mcp server", code == 0, "claude mcp get peermesh"))
     return checks
