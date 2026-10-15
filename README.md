@@ -37,6 +37,33 @@ peers doctor
 
 `peers install` checks every file first and changes nothing if one is malformed or `claude` is missing. Codex asks once to trust the new hooks, and again after an upgrade changes them. Run `peers install` again after an upgrade; until then, sessions keep the native delivery and do not get the post-tool hook. `peers uninstall` reverses every change; the first backup of each file stays as `*.peermesh.bak`.
 
+In Claude Code, add the mod next.
+
+## Use the mod in Claude Code
+
+The mod is the recommended way to use peermesh in Claude Code 2.1.287 or later: it draws peermesh in the session itself. Each message has one line for its sender and its text below that line, in place of the frame:
+
+```text
+→ shop-db · request                                                 19:36
+  List the tables of the database, one on each line, with one short note for each.
+
+  ▎ List the tables of the database, one on each line, with one short note for each.
+← shop-db · done                                                    19:36
+  Tables in the shop database (Postgres 16, port 5432):
+  users - customer accounts.
+  carts - shopping carts that belong to users.
+  orders - orders placed by users.
+```
+
+The dim line with the bar is the message that the reply answers. A sent message shows `pending`, `delivered` or `failed` until its reply comes, and a long message folds to its first lines. `/mesh` opens a pane of the sessions and the threads, where you can read a thread and send a message to a peer. Install the mod from your checkout:
+
+```bash
+claude plugin marketplace add ./
+claude plugin install peermesh@peermesh
+```
+
+Delivery does not use the mod, and a session without it works as before. [docs/claude-code-mod.md](docs/claude-code-mod.md) shows the pane, the keys and what a mod cannot draw.
+
 ## Install the Codex part as a plugin
 
 Codex can get peermesh as a plugin instead of the Codex part of `peers install`. The plugin runs the same five hooks and gives Codex the MCP tools in place of the shell commands, so it needs no `AGENTS.md` block and no sandbox rule. It still runs the `peers` command that `uv tool install` put on your PATH. In the checkout:
@@ -123,31 +150,6 @@ With [ccstatusline](https://github.com/sirmalloc/ccstatusline), which is a separ
 ```
 
 Use the full path of `peers` (`which peers`) if the status line does not find the command.
-
-## See messages inside Claude Code
-
-An optional mod for Claude Code 2.1.287 or later draws peermesh in the session itself. Each message has one line for its sender and its text below that line, in place of the frame:
-
-```text
-→ shop-db · request                                                 19:36
-  List the tables of the database, one on each line, with one short note for each.
-
-  ▎ List the tables of the database, one on each line, with one short note for each.
-← shop-db · done                                                    19:36
-  Tables in the shop database (Postgres 16, port 5432):
-  users - customer accounts.
-  carts - shopping carts that belong to users.
-  orders - orders placed by users.
-```
-
-The dim line with the bar is the message that the reply answers. A sent message shows `pending`, `delivered` or `failed` until its reply comes, and a long message folds to its first lines. `/mesh` opens a pane of the sessions and the threads, where you can read a thread and send a message to a peer. Install the mod from your checkout:
-
-```bash
-claude plugin marketplace add ./
-claude plugin install peermesh@peermesh
-```
-
-Delivery does not use the mod, and a session without it works as before. [docs/claude-code-mod.md](docs/claude-code-mod.md) shows the pane, the keys and what a mod cannot draw.
 
 ## Safety limits
 
