@@ -524,3 +524,14 @@ def test_one_sender_cannot_flood_a_thread(world: World) -> None:
     assert world.mesh.reply(world.peers["xa"], str(first.msg_id), "late finding").status == (
         "delivered"
     )
+
+
+def test_whoami_does_not_register_when_asked_not_to(world: World) -> None:
+    # The check and the use are one registry read, so a record that goes away in between
+    # cannot make whoami register the session in the folder of the caller.
+    world.mesh.registry.remove("codex:A")
+    with pytest.raises(PeerError, match="no folder"):
+        world.mesh.whoami(env={"CODEX_THREAD_ID": "A"}, unregistered="no folder")
+    assert world.mesh.registry.get("codex:A") is None
+    world.mesh.registry.put(world.peers["xa"])
+    assert world.mesh.whoami(env={"CODEX_THREAD_ID": "A"}, unregistered="no folder").id == "codex:A"

@@ -105,7 +105,11 @@ class Mesh:
         env: Mapping[str, str] | None = None,
         cwd: str | None = None,
         host_pid: int | None = None,
+        *,
+        unregistered: str | None = None,
     ) -> Peer:
+        """The live session of this process. A session with no live record is registered,
+        unless `unregistered` is given: then whoami raises a PeerError with that text."""
         env = os.environ if env is None else env
         runtime, session_id = identity.session_from_env(env)
         existing = self.registry.get(f"{runtime}:{session_id}")
@@ -116,6 +120,8 @@ class Mesh:
                     "Run peers from the shell of your own agent session."
                 )
             return existing
+        if unregistered is not None:
+            raise PeerError(unregistered)
         peer = identity.detect(runtime, session_id, cwd or os.getcwd(), env, host_pid)
         return self.register(peer)
 
