@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tomllib
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -343,6 +344,26 @@ def _run_text(runner: Runner, cmd: list[str]) -> tuple[int, str]:
     return result.returncode, result.stdout
 
 
+def codex_plugin() -> tuple[str, int] | None:
+    """The id of the enabled peermesh plugin in the Codex config, such as "peermesh@peermesh",
+    and the number of its hooks that have a trust record; None when no such plugin is enabled."""
+    try:
+        config = tomllib.loads((paths.codex_home() / "config.toml").read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    plugins = config.get("plugins")
+    if not isinstance(plugins, dict):
+        return None
+    for plugin, entry in plugins.items():
+        if plugin.partition("@")[0] == "peermesh" and isinstance(entry, dict):
+            if entry.get("enabled") is True:
+                hooks = config.get("hooks")
+                state = hooks.get("state") if isinstance(hooks, dict) else None
+                keys = state if isinstance(state, dict) else {}
+                return plugin, sum(1 for key in keys if key.startswith(f"{plugin}:"))
+    return None
+
+
 def doctor(runner: Runner = subprocess.run) -> list[tuple[str, bool, str]]:
     checks: list[tuple[str, bool, str]] = []
     peers = shutil.which("peers")
@@ -354,23 +375,28 @@ def doctor(runner: Runner = subprocess.run) -> list[tuple[str, bool, str]]:
     exe = codex_bin()
     checks.append(("codex binary", exe is not None, exe or "not found"))
     settings_path = paths.claude_dir() / "settings.json"
-    settings = _read_json(settings_path)
-    checks.append(("claude hooks", settings != strip_hooks(settings), str(settings_path)))
-    codex_hooks = paths.codex_home() / "hooks.json"
-    codex_cfg = _read_json(codex_hooks)
-    checks.append(
-        (
-            "codex hooks",
-            codex_cfg != strip_hooks(codex_cfg),
-            f"{codex_hooks} (approve hook trust in Codex once)",
-        )
-    )
+    checks.append(("claude hooks", hooks_installed("claude"), str(settings_path)))
+    plugin = codex_plugin()
+    if hooks_installed("codex") or plugin is None:
+        codex_hooks = paths.codex_home() / "hooks.json"
+        detail = f"{codex_hooks} (approve hook trust in Codex once)"
+        checks.append(("codex hooks", hooks_installed("codex"), detail))
+    else:
+        name, trusted = plugin
+        expected = len(plugin_hooks()["hooks"])
+        detail = f"plugin {name}, {trusted} of {expected} hooks trusted"
+        if trusted < expected:
+            detail += " (trust them in the hook review of a new Codex session)"
+        checks.append(("codex hooks", trusted >= expected, detail))
     for runtime in ("claude", "codex"):
-        ok = post_tool_installed(runtime)
+        ok = post_tool_installed(runtime) or (runtime == "codex" and plugin is not None)
         detail = "installed" if ok else "run `peers install` again"
         checks.append((f"{runtime} post-tool hook", ok, detail))
     rule = paths.codex_home() / "rules" / "peermesh.rules"
-    checks.append(("codex rule", rule.exists(), str(rule)))
+    if rule.exists() or plugin is None:
+        checks.append(("codex rule", rule.exists(), str(rule)))
+    else:
+        checks.append(("codex rule", True, "not needed: the plugin gives Codex the MCP tools"))
     code, _ = _run_text(runner, ["claude", "mcp", "get", "peermesh"])
     checks.append(("claude mcp server", code == 0, "claude mcp get peermesh"))
     return checks

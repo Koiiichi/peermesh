@@ -208,3 +208,58 @@ def test_session_end_timeout_fits_the_codex_cap() -> None:
     config = install.merge_hooks({}, "/bin/peers", "codex")
     [end] = config["hooks"]["SessionEnd"]
     assert end["hooks"][0]["timeout"] == 3
+
+
+def _codex_config(text: str) -> None:
+    config = paths.codex_home() / "config.toml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(text)
+
+
+def _trust(events: list[str]) -> str:
+    return "".join(
+        f'[hooks.state."peermesh@peermesh:plugin.json#hooks[0]:{event}:0:0"]\n'
+        'trusted_hash = "sha256:0"\n'
+        for event in events
+    )
+
+
+EVENTS = ["session_start", "user_prompt_submit", "stop", "session_end", "post_tool_use"]
+
+
+def _doctor() -> dict[str, tuple[bool, str]]:
+    return {name: (ok, detail) for name, ok, detail in install.doctor(runner=Runner())}
+
+
+def test_doctor_accepts_the_codex_plugin_in_place_of_peers_install() -> None:
+    _codex_config('[plugins."peermesh@peermesh"]\nenabled = true\n\n' + _trust(EVENTS))
+    details = _doctor()
+    assert details["codex hooks"] == (True, "plugin peermesh@peermesh, 5 of 5 hooks trusted")
+    assert details["codex post-tool hook"] == (True, "installed")
+    assert details["codex rule"][0] is True
+
+
+def test_doctor_names_untrusted_plugin_hooks() -> None:
+    _codex_config('[plugins."peermesh@peermesh"]\nenabled = true\n\n' + _trust(EVENTS[:2]))
+    ok, detail = _doctor()["codex hooks"]
+    assert not ok and detail.startswith("plugin peermesh@peermesh, 2 of 5 hooks trusted (trust")
+
+
+def test_doctor_ignores_a_disabled_plugin_and_an_empty_hook_file() -> None:
+    _codex_config('[plugins."peermesh@peermesh"]\nenabled = false\n')
+    (paths.codex_home() / "hooks.json").write_text('{"hooks": {}}')
+    details = _doctor()
+    assert details["codex hooks"][0] is False
+    assert details["codex post-tool hook"] == (False, "run `peers install` again")
+    assert details["codex rule"][0] is False
+
+
+def test_doctor_runs_with_a_config_that_it_cannot_read() -> None:
+    _codex_config("[plugins\nnot toml")
+    assert _doctor()["codex hooks"][0] is False
+    _codex_config('hooks = "x"\n[plugins."peermesh@peermesh"]\nenabled = true\n')
+    assert _doctor()["codex hooks"] == (
+        False,
+        "plugin peermesh@peermesh, 0 of 5 hooks trusted "
+        "(trust them in the hook review of a new Codex session)",
+    )
