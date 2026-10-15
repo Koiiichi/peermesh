@@ -38,7 +38,32 @@ def test_the_plugin_hook_commands_do_not_hold_the_plugin_path() -> None:
         h["command"] for g in install.plugin_hooks()["hooks"].values() for h in g[0]["hooks"]
     ]
     assert all('"$PLUGIN_ROOT/bin/peers"' in c and "${PLUGIN_ROOT}" not in c for c in commands)
-    assert all("--plugin" in c for c in commands if "post-tool" not in c)
+    assert all("--plugin" in c for c in commands)
+
+
+def test_the_plugin_post_tool_hook_runs_the_hook_in_plugin_mode(tmp_path: Path) -> None:
+    # The guard runs the hook only when the inbox of the session holds a message.
+    box = tmp_path / "pm" / "inbox" / "codex_T1"
+    box.mkdir(parents=True)
+    (box / "m.json").write_text("{}")
+    _fake(tmp_path / "plugin" / "bin", "peers")
+    [group] = install.plugin_hooks()["hooks"]["PostToolUse"]
+    env = {
+        "PLUGIN_ROOT": str(tmp_path / "plugin"),
+        "PEERMESH_HOME": str(tmp_path / "pm"),
+        "PATH": "/usr/bin:/bin",
+    }
+    result = subprocess.run(
+        ["/bin/sh", "-c", group["hooks"][0]["command"]],
+        input='{"session_id": "T1"}',
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.stdout == "bin peers hook post-tool --runtime codex --plugin\n"
+    # The command of `peers install` does not change, so its users keep their hook trust.
+    assert "--plugin" not in install.post_tool_command("/bin/peers", "codex")
 
 
 def test_the_marketplace_and_the_server_point_to_the_plugin_files() -> None:

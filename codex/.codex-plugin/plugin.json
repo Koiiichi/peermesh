@@ -60,7 +60,7 @@
           "hooks": [
             {
               "type": "command",
-              "command": "/bin/sh -c 'p=$(cat); id=$(printf \"%s\" \"$p\" | grep -o \"\\\"session_id\\\": *\\\"[^\\\"]*\\\"\" | head -n 1 | sed \"s/.*\\\"\\([^\\\"]*\\)\\\"$/\\1/\"); box=\"${PEERMESH_HOME:-$HOME/.peermesh}/inbox/${2}_${id}\"; if [ -n \"$id\" ] && [ -z \"$(ls -A \"$box\" 2>/dev/null)\" ]; then exit 0; fi; printf \"%s\" \"$p\" | exec \"$1\" hook post-tool --runtime \"$2\"' peermesh \"$PLUGIN_ROOT/bin/peers\" codex # peermesh",
+              "command": "/bin/sh -c 'p=$(cat); id=$(printf \"%s\" \"$p\" | grep -o \"\\\"session_id\\\": *\\\"[^\\\"]*\\\"\" | head -n 1 | sed \"s/.*\\\"\\([^\\\"]*\\)\\\"$/\\1/\"); box=\"${PEERMESH_HOME:-$HOME/.peermesh}/inbox/${2}_${id}\"; if [ -n \"$id\" ] && [ -z \"$(ls -A \"$box\" 2>/dev/null)\" ]; then exit 0; fi; printf \"%s\" \"$p\" | exec \"$1\" hook post-tool --runtime \"$2\" --plugin' peermesh \"$PLUGIN_ROOT/bin/peers\" codex # peermesh",
               "timeout": 10
             }
           ]
