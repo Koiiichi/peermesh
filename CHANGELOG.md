@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-10-14
+
+Codex can get peermesh as a plugin, with the MCP tools that Claude Code uses, and the line for a message in the middle of a turn shows its text.
+
+### Upgrade
+
+1. Pull: `git pull`. No reinstall is necessary. The hooks, the Codex rule and the instruction blocks of `peers install` are the same as in 0.4.1, so Codex does not ask you to trust the hooks again.
+2. A Claude Code session that started before the pull keeps the old MCP server until it restarts. Hooks run the new code at once.
+3. To use the Codex plugin, which is optional, follow "Install the Codex part as a plugin" in the README.
 
 ### Added
 

@@ -178,4 +178,4 @@ claude plugin test mod                  # the tests of the Claude Code mod
 
 ## Status and license
 
-Early. Version 0.4.1 is tested on macOS with Claude Code 2.1.296 and codex-cli 0.162.1; [CHANGELOG.md](CHANGELOG.md) lists the changes in each version. The delivery approach builds on ideas from [Postbag](https://github.com/parasxos/postbag) and [AgentBridge](https://github.com/raysonmeng/agent-bridge). Licensed under [Apache-2.0](LICENSE).
+Early. Version 0.5.0 is tested on macOS with Claude Code 2.1.300, codex-cli 0.162.1 and the Codex app; [CHANGELOG.md](CHANGELOG.md) lists the changes in each version. The delivery approach builds on ideas from [Postbag](https://github.com/parasxos/postbag) and [AgentBridge](https://github.com/raysonmeng/agent-bridge). Licensed under [Apache-2.0](LICENSE).
