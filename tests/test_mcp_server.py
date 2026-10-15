@@ -83,6 +83,12 @@ def test_a_codex_call_names_its_thread_in_the_request_metadata(
     assert cwd == "/repo"
 
 
+def test_several_workspaces_give_no_folder() -> None:
+    turn = {"thread_id": "T1", "workspaces": {"/a": {}, "/b": {}}}
+    env, cwd = mcp_server._session(cast(Any, _Ctx({"x-codex-turn-metadata": turn})))
+    assert env["CODEX_THREAD_ID"] == "T1" and cwd is None
+
+
 def test_a_call_without_codex_metadata_uses_the_environment() -> None:
     assert mcp_server._session(cast(Any, _Ctx({"progressToken": 1}))) == (os.environ, None)
     assert mcp_server._session(None) == (os.environ, None)
