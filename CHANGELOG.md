@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- `peers doctor` knows the Codex plugin. With the plugin enabled, it checks that each Codex hook event has a hook: a plugin hook with a trust record, or a hook of `peers install`. It names each event that has neither. It asks for the Codex rule only while a hook of `peers install` serves Codex, because such a session is told to use the shell commands. A `hooks.json` with no hooks, such as `{"hooks": {}}`, no longer counts as installed hooks.
+- `peers doctor` knows the Codex plugin. With the plugin enabled, it checks that each Codex hook event has a hook that runs: the hook of `peers install` for an event that it serves, because the plugin hook then does nothing, and the plugin hook for every other event. A hook runs when its trust record exists and is not disabled. It names each event with no such hook. It asks for the Codex rule only while the session-start or prompt hook of `peers install` serves Codex, because such a session is told to use the shell commands. A `hooks.json` with no hooks, such as `{"hooks": {}}`, no longer counts as installed hooks.
 
 ## 0.5.0 — 2026-10-14
 
