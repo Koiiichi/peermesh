@@ -1,10 +1,20 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 — 2026-10-15
+
+`peers doctor` knows the Codex plugin.
+
+### Upgrade
+
+Pull: `git pull`. No reinstall is necessary. The hooks of `peers install` and of the plugin, and the Codex rule, are the same as in 0.5.0, so Codex does not ask you to trust the hooks again. If you use the Codex plugin, run `codex plugin add peermesh@peermesh` to show the new version; its hooks and tools are unchanged.
 
 ### Fixed
 
 - `peers doctor` knows the Codex plugin. With the plugin enabled, it checks that each Codex hook event has a hook that runs: the hook of `peers install` for an event that it serves, because the plugin hook then does nothing, and the plugin hook for every other event. A hook runs when its trust record exists and is not disabled. It names each event with no such hook. It asks for the Codex rule only while the session-start or prompt hook of `peers install` serves Codex, because such a session is told to use the shell commands. A `hooks.json` with no hooks, such as `{"hooks": {}}`, no longer counts as installed hooks.
+
+### Changed
+
+- The README recommends the Claude Code mod right after the install, in "Use the mod in Claude Code".
 
 ## 0.5.0 — 2026-10-14
 

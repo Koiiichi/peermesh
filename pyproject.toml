@@ -1,6 +1,6 @@
 [project]
 name = "peermesh"
-version = "0.5.0"
+version = "0.5.1"
 description = "Local peer messaging between Claude Code and Codex sessions"
 readme = "README.md"
 license = "Apache-2.0"
