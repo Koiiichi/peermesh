@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `peers doctor` knows the Codex plugin. With the plugin enabled, it reports the number of plugin hooks that have a trust record, and it does not ask you to run `peers install` or to add the Codex rule. A `hooks.json` with no hooks, such as `{"hooks": {}}`, no longer counts as installed hooks.
+
 ## 0.5.0 — 2026-10-14
 
 Codex can get peermesh as a plugin, with the MCP tools that Claude Code uses, and the line for a message in the middle of a turn shows its text.
