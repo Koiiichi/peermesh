@@ -35,10 +35,13 @@ def _session(ctx: Context | None) -> tuple[Mapping[str, str], str | None]:
         if k not in ("CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID")
     }
     env["CODEX_THREAD_ID"] = thread
-    # The folder matters only when no hook registered the thread before this call.
+    # The folder matters only when no hook registered the thread before this call. The
+    # metadata does not say which of several workspaces is the folder of the session.
     workspaces = turn.get("workspaces")
-    cwd = next(iter(workspaces), None) if isinstance(workspaces, Mapping) else None
-    return env, cwd if isinstance(cwd, str) else None
+    if isinstance(workspaces, Mapping) and len(workspaces) == 1:
+        [cwd] = workspaces
+        return env, cwd if isinstance(cwd, str) else None
+    return env, None
 
 
 def _context(ctx: Context | None = None) -> tuple[Mesh, Peer]:
