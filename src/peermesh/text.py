@@ -69,6 +69,11 @@ ONE_CHANNEL = (
     "Use SendMessage only for an agent that this session started."
 )
 
+UNKNOWN_FOLDER = (
+    "peermesh did not register this Codex thread, and the call does not give its folder. "
+    "Make sure that the user trusts the peermesh hooks. "
+    "Then use the tool again after the next prompt."
+)
 MCP_INSTRUCTIONS = (
     "peermesh connects this session to other Claude Code and Codex sessions on this machine. "
     + ONE_CHANNEL

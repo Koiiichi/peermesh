@@ -137,3 +137,18 @@ def test_metadata_that_names_a_thread_of_another_process_is_refused(
     finally:
         other.kill()
         other.wait()
+
+
+def test_a_codex_thread_with_an_unknown_folder_is_not_registered_by_a_call(
+    make_peer: Callable[..., Peer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The folder of the server can be a repository that is not the folder of the thread.
+    mesh = Mesh(Registry(), Ledger(), {"claude": Fake(), "codex": Fake()})
+    monkeypatch.setattr(Mesh, "default", classmethod(lambda cls: mesh))
+    turn = {"thread_id": "T9", "workspaces": {"/a": {}, "/b": {}}}
+    with pytest.raises(ValueError, match="does not give its folder"):
+        mcp_server.peers_list(ctx=cast(Any, _Ctx({"x-codex-turn-metadata": turn})))
+    assert mesh.registry.get("codex:T9") is None
+    # A thread that a hook registered does not need the folder.
+    mesh.registry.put(make_peer(id="codex:T9", name="codex-t9", runtime="codex", endpoint="T9"))
+    assert mcp_server.peers_list(ctx=cast(Any, _Ctx({"x-codex-turn-metadata": turn}))) == []

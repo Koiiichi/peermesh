@@ -10,7 +10,7 @@ from mcp.server.mcpserver import Context, MCPServer
 
 from peermesh import text
 from peermesh.errors import PeerError
-from peermesh.registry import Peer, Scope
+from peermesh.registry import Peer, Scope, is_alive
 from peermesh.service import Mesh, announce_short_ids
 
 mcp = MCPServer("peermesh", instructions=text.MCP_INSTRUCTIONS)
@@ -47,6 +47,12 @@ def _session(ctx: Context | None) -> tuple[Mapping[str, str], str | None]:
 def _context(ctx: Context | None = None) -> tuple[Mesh, Peer]:
     mesh = Mesh.default()
     env, cwd = _session(ctx)
+    thread = env.get("CODEX_THREAD_ID") if env is not os.environ else None
+    if thread and cwd is None:
+        # The folder of the server is not the folder of the thread, so it cannot register it.
+        known = mesh.registry.get(f"codex:{thread}")
+        if known is None or not is_alive(known):
+            raise ValueError(text.UNKNOWN_FOLDER)
     try:
         me = mesh.whoami(env, cwd)
     except PeerError as exc:
