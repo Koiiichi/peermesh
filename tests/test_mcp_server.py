@@ -54,7 +54,7 @@ def test_the_server_states_that_it_resolves_short_ids(
     me = make_peer(id="claude:ME", name="claude-me")
     mesh.registry.put(me)
     monkeypatch.setattr(Mesh, "default", classmethod(lambda cls: mesh))
-    monkeypatch.setattr(Mesh, "whoami", lambda self, *a: mesh.registry.get("claude:ME"))
+    monkeypatch.setattr(Mesh, "whoami", lambda self, *a, **k: mesh.registry.get("claude:ME"))
     before = mesh.registry._file("claude:ME").read_text()
     assert not accepts_short_ids(me)
     mcp_server._context()
