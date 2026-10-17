@@ -181,14 +181,18 @@ def test_user_rename_replaces_name_and_keeps_given_name(make_peer: Callable[...,
     assert (got.to_json()["name"], got.to_json()["auto_name"]) == ("rotom-infra", "claude-a-aa")
 
 
-def test_user_rename_in_use_gets_suffix(make_peer: Callable[..., Peer]) -> None:
+def test_a_name_that_two_sessions_want_names_neither(make_peer: Callable[..., Peer]) -> None:
+    # The two peers share one process, so both want the name in its session record.
     reg = Registry()
     reg.put(make_peer(id="claude:one", name="claude-a-01"))
     reg.put(make_peer(id="claude:two", name="claude-a-02"))
     rename(make_peer().pid, "rotom-infra")
-    names = {p.id: p.name for p in reg.live()}
-    suffix = hashlib.sha1(b"claude:two").hexdigest()[:4]
-    assert names == {"claude:one": "rotom-infra", "claude:two": f"rotom-infra-{suffix}"}
+    assert {p.id: p.name for p in reg.live()} == {
+        "claude:one": "claude-a-01",
+        "claude:two": "claude-a-02",
+    }
+    assert reg.resolve("rotom-infra") is None
+    assert {p.id for p in reg.claimants("rotom-infra")} == {"claude:one", "claude:two"}
 
 
 def test_liveness_ignores_locale_and_timezone(
@@ -268,20 +272,61 @@ def test_a_new_name_does_not_take_the_given_name_of_a_renamed_peer(
         assert found is not None and found.id == peer.id
 
 
-def test_a_session_keeps_its_name_when_another_session_takes_the_same_name_later(
+def test_a_listed_name_never_reaches_another_live_session(
     make_peer: Callable[..., Peer],
 ) -> None:
     reg = Registry()
-    older = make_peer(id="claude:z", name="claude-demo-11")
-    reg.put(older)
-    _name_record(older.pid, "review", since=1000)
+    first = make_peer(id="claude:z", name="claude-demo-11")
+    reg.put(first)
+    _name_record(first.pid, "review", since=1000)
     found = reg.resolve("review")
     assert found is not None and found.id == "claude:z"
-    # A session with a lower id takes the same name later.
-    newer = _other_process(make_peer, id="claude:a", name="claude-demo-22")
-    reg.put(newer)
-    _name_record(newer.pid, "review", since=2000)
-    found = reg.resolve("review")
-    assert found is not None and found.id == "claude:z"
-    names = {p.id: p.name for p in reg.live()}
-    assert names["claude:a"] == "review-" + hashlib.sha1(b"claude:a").hexdigest()[:4]
+    # Another session wants the same name: the name stops working, and no address moves.
+    second = _other_process(make_peer, id="claude:a", name="claude-demo-22")
+    reg.put(second)
+    _name_record(second.pid, "review", since=2000)
+    assert reg.resolve("review") is None
+    for peer in (first, second):
+        found = reg.resolve(peer.name)
+        assert found is not None and found.id == peer.id
+
+
+def test_no_address_moves_when_a_session_that_wants_the_same_name_ends(
+    make_peer: Callable[..., Peer],
+) -> None:
+    sleepers = [subprocess.Popen(["sleep", "30"]) for _ in range(2)]
+    try:
+        reg = Registry()
+        a, b = (
+            make_peer(
+                id=f"claude:{key}",
+                name=f"claude-x-{key}{key}",
+                pid=proc.pid,
+                proc_start=proc_start(proc.pid) or "",
+            )
+            for key, proc in zip("ab", sleepers, strict=True)
+        )
+        c = make_peer(id="claude:c", name="claude-x-cc")
+        for peer in (a, b, c):
+            reg.put(peer)
+        _name_record(a.pid, "review", since=1000)
+        _name_record(b.pid, "review", since=2000)
+        _name_record(c.pid, "review-46f4", since=3000)
+        listed = {p.id: p.name for p in reg.live()}
+        assert listed == {
+            "claude:a": "claude-x-aa",
+            "claude:b": "claude-x-bb",
+            "claude:c": "review-46f4",
+        }
+        sleepers[0].kill()
+        sleepers[0].wait()
+        for peer_id in ("claude:b", "claude:c"):
+            found = reg.resolve(listed[peer_id])
+            assert found is not None and found.id == peer_id
+        # The one session that still wants the name now has it.
+        found = reg.resolve("review")
+        assert found is not None and found.id == "claude:b"
+    finally:
+        for proc in sleepers:
+            proc.kill()
+            proc.wait()

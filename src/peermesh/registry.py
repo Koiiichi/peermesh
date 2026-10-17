@@ -220,20 +220,12 @@ def claude_user_name(pid: int) -> str | None:
     session. A name from the folder, the first prompt, a hook or a name collision ("derived",
     "auto", "hook", "collision") is ignored.
     """
-    claim = _user_name(pid)
-    return claim[0] if claim else None
-
-
-def _user_name(pid: int) -> tuple[str, float] | None:
-    """The user's name of the Claude session and the time when the session took it."""
     data = _claude_session(pid)
     if data is None or data.get("nameSource") not in (None, "user", "peer"):
         return None
     if not isinstance(data.get("name"), str):
         return None
-    name = re.sub(r"[^A-Za-z0-9_.-]+", "-", data["name"]).strip("-")[:40]
-    since = data.get("nameSince")
-    return (name, since if isinstance(since, int | float) else float("inf")) if name else None
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", data["name"]).strip("-")[:40] or None
 
 
 class Registry:
@@ -285,6 +277,12 @@ class Registry:
         _apply_user_names(peers)
         return peers
 
+    def claimants(self, name: str) -> list[Peer]:
+        """The live peers whose user names are `name`, when more than one wants it."""
+        peers = [p for p in self.live() if p.runtime == "claude" and p.name != name]
+        found = [p for p in peers if claude_user_name(p.pid) == name]
+        return found if len(found) > 1 else []
+
     def resolve(self, target: str) -> Peer | None:
         for peer in self.live():
             if target in (peer.id, peer.name, peer.auto_name):
@@ -304,25 +302,18 @@ class Registry:
 
 
 def _apply_user_names(peers: list[Peer]) -> None:
-    """Replace the name of each renamed Claude session with the name that the user gave it.
+    """Replace the name of each named Claude session with the name that the user gave it.
 
-    A rename that another peer already uses gets a suffix from the session id. Sessions that
-    want the same name are taken in the order in which they took it, then in id order. So every
-    caller gives the same name to the same session, and a session keeps its name when another
-    session takes the same one later.
+    The user's name replaces the automatic name only when no other live peer wants that name or
+    has it as an automatic name. So an address never moves from one live session to another:
+    an automatic name belongs to one session, and a user name names only its one claimant.
     """
-    taken = {p.name for p in peers}
-    claims = []
+    automatic = {p.name for p in peers}
+    claims: dict[str, list[Peer]] = {}
     for peer in peers:
-        claim = _user_name(peer.pid) if peer.runtime == "claude" else None
-        if claim is not None:
-            claims.append((claim[1], peer.id, claim[0], peer))
-    for _, _, wanted, peer in sorted(claims, key=lambda c: (c[0], c[1])):
-        if wanted == peer.name:
-            continue
-        if wanted in taken:
-            wanted = f"{wanted}-{hashlib.sha1(peer.id.encode()).hexdigest()[:4]}"
-            if wanted in taken:
-                continue
-        taken.add(wanted)
-        peer.auto_name, peer.name = peer.name, wanted
+        wanted = claude_user_name(peer.pid) if peer.runtime == "claude" else None
+        if wanted is not None and wanted != peer.name:
+            claims.setdefault(wanted, []).append(peer)
+    for wanted, owners in claims.items():
+        if len(owners) == 1 and wanted not in automatic:
+            owners[0].auto_name, owners[0].name = owners[0].name, wanted
