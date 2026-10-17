@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
 
-from peermesh import mcp_server, text
+from peermesh import mcp_server, paths, text
 from peermesh.ledger import Ledger
-from peermesh.registry import Peer, Registry
+from peermesh.registry import Peer, Registry, proc_start
 from peermesh.service import Mesh, accepts_short_ids
 from peermesh.transports import Outcome
 
@@ -153,3 +154,24 @@ def test_a_codex_thread_with_an_unknown_folder_is_not_registered_by_a_call(
     # A thread that a hook registered does not need the folder.
     mesh.registry.put(make_peer(id="codex:T9", name="codex-t9", runtime="codex", endpoint="T9"))
     assert mcp_server.peers_list(ctx=cast(Any, _Ctx({"x-codex-turn-metadata": turn}))) == []
+
+
+def test_peers_list_shows_the_name_that_the_user_gave(
+    make_peer: Callable[..., Peer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mesh = Mesh(Registry(), Ledger(), {"claude": Fake(), "codex": Fake()})
+    me = make_peer(id="claude:ME", name="claude-me")
+    other = make_peer(
+        id="claude:OTHER",
+        name="claude-other",
+        pid=os.getppid(),
+        proc_start=proc_start(os.getppid()) or "",
+    )
+    for peer in (me, other):
+        mesh.registry.put(peer)
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{os.getppid()}.json").write_text(json.dumps({"name": "rotom-arch"}))
+    monkeypatch.setattr(mcp_server, "_context", lambda ctx=None: (mesh, me))
+    [row] = [p for p in mcp_server.peers_list("all") if p["id"] == "claude:OTHER"]
+    assert (row["name"], row["auto_name"]) == ("rotom-arch", "claude-other")

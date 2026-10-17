@@ -133,10 +133,11 @@ def test_claude_native_status_mapping() -> None:
     assert claude_native_status(14) is None
 
 
-def rename(pid: int, name: str, source: str = "user") -> None:
+def rename(pid: int, name: str, source: str | None = "user") -> None:
     sessions = paths.claude_dir() / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
-    (sessions / f"{pid}.json").write_text(json.dumps({"name": name, "nameSource": source}))
+    record = {"name": name} if source is None else {"name": name, "nameSource": source}
+    (sessions / f"{pid}.json").write_text(json.dumps(record))
 
 
 def test_claude_user_name_reads_only_user_renames() -> None:
@@ -147,6 +148,17 @@ def test_claude_user_name_reads_only_user_renames() -> None:
     assert claude_user_name(22) is None
     assert claude_user_name(23) == "Task-gen-beta"
     assert claude_user_name(24) is None
+
+
+def test_claude_user_name_reads_a_name_given_at_start_and_a_peer_rename() -> None:
+    # The Claude desktop app records a name given when the session starts with no source.
+    rename(31, "rotom-arch", source=None)
+    rename(32, "rotom-review", source="peer")
+    assert claude_user_name(31) == "rotom-arch"
+    assert claude_user_name(32) == "rotom-review"
+    for pid, source in enumerate(("auto", "hook", "collision", "derived"), start=33):
+        rename(pid, "not-a-user-name", source=source)
+        assert claude_user_name(pid) is None, source
 
 
 def test_user_rename_replaces_name_and_keeps_given_name(make_peer: Callable[..., Peer]) -> None:
@@ -163,6 +175,8 @@ def test_user_rename_replaces_name_and_keeps_given_name(make_peer: Callable[...,
         assert found is not None and found.id == peer.id
     reg.put(got)
     assert json.loads(reg._file(peer.id).read_text())["name"] == "claude-a-aa"
+    # Callers see the name that the user gave; the record keeps the name that peermesh gave.
+    assert (got.to_json()["name"], got.to_json()["auto_name"]) == ("rotom-infra", "claude-a-aa")
 
 
 def test_user_rename_in_use_gets_suffix(make_peer: Callable[..., Peer]) -> None:

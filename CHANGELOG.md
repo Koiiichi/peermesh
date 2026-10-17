@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A Claude Code session that you named when it started, as the Claude desktop app does, now uses that name in peermesh. peermesh read only a name that Claude Code marked as a rename, so such a session kept a name like `claude-rotom-d5`, and other sessions could not find it by the name you gave it.
+- `peers_list` and `peers --json list` show the name that you gave a session, with the name that peermesh gave it as `auto_name`. They showed only the name from peermesh, so an agent did not see a rename. Both names still work as an address.
+
 ## 0.5.1 — 2026-10-15
 
 `peers doctor` knows the Codex plugin.

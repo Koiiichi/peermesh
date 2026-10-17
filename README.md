@@ -88,7 +88,7 @@ Nobody runs these by hand in normal use. The session-start hook tells each agent
 | `peers_status` | `peers status NAME` | Busy or idle, branch, queued and waiting messages |
 | `peers_track` | `peers track MSG` | Delivery state of one message you sent |
 
-Each session gets a name such as `claude-shop-4b`. A Claude Code session that you rename with `/rename` uses your name instead, and its first name still works as an address. The hooks do not register an ephemeral Codex thread, such as a one-time review: it has no rollout file, so it cannot be woken. Such a thread still registers if its agent runs a `peers` command.
+Each session gets a name such as `claude-shop-4b`. A Claude Code session that you name uses your name instead, whether you name it when it starts, as in the Claude desktop app, or later with `/rename`. `peers_list` shows both names, and the first one still works as an address. The hooks do not register an ephemeral Codex thread, such as a one-time review: it has no rollout file, so it cannot be woken. Such a thread still registers if its agent runs a `peers` command.
 
 With `peers install`, Codex gets the commands, which the sandbox rule lets run. With the plugin, Codex gets the MCP tools: Codex sends the thread id to an MCP server only in the metadata of each tool call, and the peermesh server reads it there. Claude Code agents are told to use these tools, not Claude Code's own `SendMessage`, for other sessions, so every message gets the frame, the limits and a ledger entry. `peers log` shows the recent ledger for people.
 

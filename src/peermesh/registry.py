@@ -48,6 +48,12 @@ class Peer:
         return self.runtime == "claude" or "mcp_tools" in self.capabilities
 
     def to_json(self) -> dict[str, Any]:
+        """The peer as callers see it: `name` is the name that the user gave the session, and
+        `auto_name` is the name that peermesh gave it, or None when the user gave none."""
+        return asdict(self)
+
+    def to_record(self) -> dict[str, Any]:
+        """The peer as the registry stores it, under the name that peermesh gave it."""
         data = asdict(self)
         data["name"] = data.pop("auto_name") or self.name
         return data
@@ -207,12 +213,17 @@ def claude_native_state(pid: int) -> tuple[Status, float] | None:
 
 
 def claude_user_name(pid: int) -> str | None:
-    """The name that the user gave the Claude session with `/rename`, made safe to type, or None.
+    """The name that the user gave the Claude session, made safe to type, or None.
 
-    A name that Claude Code derived from the directory has nameSource "derived" and is ignored.
+    Claude Code records the source of a name. A name given when the session starts has no
+    source, and a rename has "user" or "peer"; Claude Code treats these three as the name of the
+    session. A name from the folder, the first prompt, a hook or a name collision ("derived",
+    "auto", "hook", "collision") is ignored.
     """
     data = _claude_session(pid)
-    if data is None or data.get("nameSource") != "user" or not isinstance(data.get("name"), str):
+    if data is None or data.get("nameSource") not in (None, "user", "peer"):
+        return None
+    if not isinstance(data.get("name"), str):
         return None
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", data["name"]).strip("-")[:40] or None
 
@@ -230,7 +241,7 @@ class Registry:
         tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as fh:
-            json.dump(peer.to_json(), fh)
+            json.dump(peer.to_record(), fh)
         os.replace(tmp, target)
 
     def get(self, peer_id: str) -> Peer | None:
