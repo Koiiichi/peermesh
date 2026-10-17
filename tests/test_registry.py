@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 import subprocess
 from collections.abc import Callable
@@ -17,6 +18,7 @@ from peermesh.registry import (
     claude_native_status,
     claude_user_name,
     normalize_remote,
+    proc_start,
     repo_info,
     scoped,
 )
@@ -234,3 +236,52 @@ def test_codex_record_without_rollout_is_pruned(
 def test_record_from_newer_version_loads(make_peer: Callable[..., Peer]) -> None:
     data = make_peer().to_json() | {"field_from_the_future": 1}
     assert Peer.from_json(data).id == "claude:s1"
+
+
+def _other_process(make_peer: Callable[..., Peer], **fields: Any) -> Peer:
+    # A second live process, so that the two peers have Claude session records of their own.
+    pid = os.getppid()
+    return make_peer(pid=pid, proc_start=proc_start(pid) or "", **fields)
+
+
+def _name_record(pid: int, name: str, since: int) -> None:
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / f"{pid}.json").write_text(json.dumps({"name": name, "nameSince": since}))
+
+
+def test_a_new_name_does_not_take_the_given_name_of_a_renamed_peer(
+    make_peer: Callable[..., Peer],
+) -> None:
+    # The ids claude:0001 and claude:0012 have the same first two hex digits of their sha1.
+    reg = Registry()
+    first = make_peer(id="claude:0001", name="", git_root="/r/demo")
+    first.name = reg.unique_name(first)
+    reg.put(first)
+    rename(first.pid, "review", source=None)
+    second = _other_process(make_peer, id="claude:0012", name="", git_root="/r/demo")
+    second.name = reg.unique_name(second)
+    assert second.name != first.name
+    reg.put(second)
+    for peer in (first, second):
+        found = reg.resolve(peer.name)
+        assert found is not None and found.id == peer.id
+
+
+def test_a_session_keeps_its_name_when_another_session_takes_the_same_name_later(
+    make_peer: Callable[..., Peer],
+) -> None:
+    reg = Registry()
+    older = make_peer(id="claude:z", name="claude-demo-11")
+    reg.put(older)
+    _name_record(older.pid, "review", since=1000)
+    found = reg.resolve("review")
+    assert found is not None and found.id == "claude:z"
+    # A session with a lower id takes the same name later.
+    newer = _other_process(make_peer, id="claude:a", name="claude-demo-22")
+    reg.put(newer)
+    _name_record(newer.pid, "review", since=2000)
+    found = reg.resolve("review")
+    assert found is not None and found.id == "claude:z"
+    names = {p.id: p.name for p in reg.live()}
+    assert names["claude:a"] == "review-" + hashlib.sha1(b"claude:a").hexdigest()[:4]

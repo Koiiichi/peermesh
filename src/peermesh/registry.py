@@ -220,12 +220,20 @@ def claude_user_name(pid: int) -> str | None:
     session. A name from the folder, the first prompt, a hook or a name collision ("derived",
     "auto", "hook", "collision") is ignored.
     """
+    claim = _user_name(pid)
+    return claim[0] if claim else None
+
+
+def _user_name(pid: int) -> tuple[str, float] | None:
+    """The user's name of the Claude session and the time when the session took it."""
     data = _claude_session(pid)
     if data is None or data.get("nameSource") not in (None, "user", "peer"):
         return None
     if not isinstance(data.get("name"), str):
         return None
-    return re.sub(r"[^A-Za-z0-9_.-]+", "-", data["name"]).strip("-")[:40] or None
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "-", data["name"]).strip("-")[:40]
+    since = data.get("nameSince")
+    return (name, since if isinstance(since, int | float) else float("inf")) if name else None
 
 
 class Registry:
@@ -284,7 +292,9 @@ class Registry:
         return None
 
     def unique_name(self, peer: Peer) -> str:
-        taken = {p.name for p in self.live() if p.id != peer.id}
+        # A renamed peer keeps its given name as an address, so that name stays taken.
+        others = [p for p in self.live() if p.id != peer.id]
+        taken = {p.name for p in others} | {p.auto_name for p in others if p.auto_name}
         digest = hashlib.sha1(peer.id.encode()).hexdigest()
         for width in (2, 4, 8, 40):
             name = f"{peer.runtime}-{_label(peer)}-{digest[:width]}"
@@ -296,13 +306,19 @@ class Registry:
 def _apply_user_names(peers: list[Peer]) -> None:
     """Replace the name of each renamed Claude session with the name that the user gave it.
 
-    A rename that another peer already uses gets a suffix from the session id. Sessions are
-    taken in id order, so every caller gives the same name to the same session.
+    A rename that another peer already uses gets a suffix from the session id. Sessions that
+    want the same name are taken in the order in which they took it, then in id order. So every
+    caller gives the same name to the same session, and a session keeps its name when another
+    session takes the same one later.
     """
     taken = {p.name for p in peers}
-    for peer in sorted(peers, key=lambda p: p.id):
-        wanted = claude_user_name(peer.pid) if peer.runtime == "claude" else None
-        if wanted is None or wanted == peer.name:
+    claims = []
+    for peer in peers:
+        claim = _user_name(peer.pid) if peer.runtime == "claude" else None
+        if claim is not None:
+            claims.append((claim[1], peer.id, claim[0], peer))
+    for _, _, wanted, peer in sorted(claims, key=lambda c: (c[0], c[1])):
+        if wanted == peer.name:
             continue
         if wanted in taken:
             wanted = f"{wanted}-{hashlib.sha1(peer.id.encode()).hexdigest()[:4]}"
