@@ -300,6 +300,13 @@ class Mesh:
         return SendResult(None, to_name, "refused", note)
 
     def _unknown(self, target_ref: str, me: Peer | None) -> str:
+        contested = self.registry.claimants(target_ref)
+        if contested:
+            return (
+                f"More than one live session has the name {target_ref!r}: "
+                f"{', '.join(sorted(p.name for p in contested))}. "
+                "Send the message to one of these names."
+            )
         names = sorted(p.name for p in self.registry.live() if me is None or p.id != me.id)
         return (
             f"No live peer has the name or id {target_ref!r}. "

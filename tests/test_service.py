@@ -319,6 +319,8 @@ def test_register_keeps_existing_name(world: World, make_peer: Callable[..., Pee
 def test_user_rename_names_the_sender_and_keeps_the_record(
     world: World, make_peer: Callable[..., Peer]
 ) -> None:
+    # The test peers share one process and so one Claude session record; only one may claim.
+    world.mesh.registry.remove("claude:B")
     sessions = paths.claude_dir() / "sessions"
     sessions.mkdir(parents=True)
     (sessions / f"{world.peers['ca'].pid}.json").write_text(
@@ -535,3 +537,13 @@ def test_whoami_does_not_register_when_asked_not_to(world: World) -> None:
     assert world.mesh.registry.get("codex:A") is None
     world.mesh.registry.put(world.peers["xa"])
     assert world.mesh.whoami(env={"CODEX_THREAD_ID": "A"}, unregistered="no folder").id == "codex:A"
+
+
+def test_a_send_to_a_name_that_two_sessions_want_names_both(world: World) -> None:
+    # Both Claude test peers share one session record, so both want the name.
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{world.peers['ca'].pid}.json").write_text(json.dumps({"name": "review"}))
+    [res] = world.mesh.send(world.peers["xa"], "review", "who is review?")
+    assert res.status == "refused"
+    assert "More than one live session has the name 'review': claude-a, claude-b." in res.note
