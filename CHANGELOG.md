@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.5.2 — 2026-10-17
+
+Sessions find each other by the names that you gave them.
+
+### Upgrade
+
+1. Pull: `git pull`. No reinstall is necessary. The hooks of `peers install` and of the plugin, and the Codex rule, are the same as in 0.5.1, so Codex does not ask you to trust the hooks again.
+2. A Claude Code session keeps its old MCP server, and so its old `peers_list`, until it restarts. To update it without a restart, run `/mcp` in the session, select `peermesh` and choose Reconnect. Hooks run the new code at once.
+3. If you use the Codex plugin, run `codex plugin add peermesh@peermesh` to show the new version; its hooks and tools are unchanged.
 
 ### Fixed
 

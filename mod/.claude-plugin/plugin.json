@@ -1,6 +1,6 @@
 {
   "name": "peermesh",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Shows peermesh messages and peers in Claude Code: compact message rows and a /mesh pane",
   "author": { "name": "Koiiichi", "url": "https://github.com/Koiiichi" },
   "repository": "https://github.com/Koiiichi/peermesh",
