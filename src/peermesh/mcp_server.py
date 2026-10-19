@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from mcp.server.mcpserver import Context, MCPServer
-from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, InputRequiredResult, TextContent
 
 import peermesh
@@ -31,14 +31,13 @@ class _Server(MCPServer):
     ) -> CallToolResult | InputRequiredResult:
         try:
             result = await super().call_tool(name, arguments, context)
-        except UnexpectedToolError:
-            # A crash keeps the generic text of the library; a note would only repeat it.
-            raise
         except ToolError as exc:
             notice = _stale_notice()
             if notice is None:
                 raise
-            raise ToolError(f"{exc} {notice}") from exc
+            # The library shows the agent the text of the error. The same type keeps a crash
+            # (UnexpectedToolError) logged with its traceback, and older code can cause one.
+            raise type(exc)(f"{exc} {notice}") from exc
         notice = _stale_notice()
         if notice is not None and isinstance(result, CallToolResult):
             # Claude Code gives the agent only the structured result when one exists, and

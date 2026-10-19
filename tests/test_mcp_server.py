@@ -207,10 +207,23 @@ def test_a_failed_tool_call_says_when_a_newer_peermesh_is_installed(
 ) -> None:
     monkeypatch.setattr(mcp_server, "_installed_version", lambda: "9.9.9")
     notice = text.STALE_SERVER.format(running=peermesh.__version__, installed="9.9.9")
-    for name, arguments in (("peers_list", {"scope": "galaxy"}), ("peers_status", {})):
+
+    def crash(msg_id: str) -> dict[str, Any]:
+        raise PermissionError("the ledger cannot be read")
+
+    monkeypatch.setattr(ctx, "track", crash)
+    calls = (
+        ("peers_list", {"scope": "galaxy"}),  # an error of peermesh
+        ("peers_status", {}),  # an argument that is missing
+        ("peers_track", {"msg_id": "a" * 32}),  # a crash
+    )
+    for name, arguments in calls:
         result = _call(name, arguments)
         assert result.is_error, name
         assert result.content[0].text.endswith(notice), name
+    # A crash keeps the generic text of the library and does not show the exception.
+    crashed = _call("peers_track", {"msg_id": "a" * 32}).content[0].text
+    assert crashed.startswith("Error executing tool peers_track") and "ledger" not in crashed
 
 
 def test_a_tool_result_has_no_note_while_the_installed_peermesh_is_the_same(
