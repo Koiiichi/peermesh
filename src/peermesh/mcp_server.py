@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, InputRequiredResult, TextContent
 
 import peermesh
@@ -91,7 +92,7 @@ def _context(ctx: Context | None = None) -> tuple[Mesh, Peer]:
     try:
         me = mesh.whoami(env, cwd, unregistered=text.UNKNOWN_FOLDER if unknown else None)
     except PeerError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ToolError(str(exc)) from exc
     # This process stays for the whole session, so it states what its version can do.
     announce_short_ids(me)
     return mesh, me
@@ -100,7 +101,7 @@ def _context(ctx: Context | None = None) -> tuple[Mesh, Peer]:
 @mcp.tool(description=text.TOOL_LIST)
 def peers_list(scope: str = "repo", ctx: Context | None = None) -> list[dict[str, Any]]:
     if scope not in ("repo", "worktree", "all"):
-        raise ValueError("The scope is not valid. Use 'repo', 'worktree' or 'all'.")
+        raise ToolError("The scope is not valid. Use 'repo', 'worktree' or 'all'.")
     mesh, me = _context(ctx)
     return [p.to_json() for p in mesh.list_peers(me, cast(Scope, scope))]
 
@@ -117,7 +118,7 @@ def peers_send(
     try:
         return [r.to_json() for r in mesh.send(me, to, body, kind, urgency)]
     except PeerError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(description=text.TOOL_REPLY)
@@ -128,7 +129,7 @@ def peers_reply(
     try:
         return mesh.reply(me, msg_id, body, done=done).to_json()
     except PeerError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(description=text.TOOL_TRACK)
@@ -137,7 +138,7 @@ def peers_track(msg_id: str, ctx: Context | None = None) -> dict[str, Any]:
     try:
         return mesh.track(msg_id)
     except PeerError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(description=text.TOOL_STATUS)
