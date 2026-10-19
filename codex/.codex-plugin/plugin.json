@@ -1,6 +1,6 @@
 {
   "name": "peermesh",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Messages between the Claude Code and Codex sessions on this machine: the peermesh hooks, MCP tools and skill",
   "author": {
     "name": "Koiiichi",
