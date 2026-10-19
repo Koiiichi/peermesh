@@ -4,13 +4,15 @@ import asyncio
 import json
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
 import peermesh
-from peermesh import mcp_server, paths, text
+from peermesh import mcp_server, paths, text, tools
+from peermesh.errors import PeerError
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry, proc_start
 from peermesh.service import Mesh, accepts_short_ids
@@ -22,13 +24,21 @@ class Fake:
         return Outcome("queued", "next turn")
 
 
+@pytest.fixture(autouse=True)
+def in_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The server runs each call in a new process; the tests run it in this one, so that a
+    # patch of peermesh code applies to the call.
+    monkeypatch.setattr(mcp_server, "_runner", tools.run)
+    monkeypatch.setattr(mcp_server, "_noticed", set())
+
+
 @pytest.fixture
 def ctx(make_peer: Callable[..., Peer], monkeypatch: pytest.MonkeyPatch) -> Mesh:
     mesh = Mesh(Registry(), Ledger(), {"claude": Fake(), "codex": Fake()})
     me = make_peer(id="claude:ME", name="claude-me")
     mesh.registry.put(me)
     mesh.registry.put(make_peer(id="codex:X", name="codex-x", runtime="codex", endpoint="X"))
-    monkeypatch.setattr(mcp_server, "_context", lambda ctx=None: (mesh, me))
+    monkeypatch.setattr(tools, "_context", lambda env, codex_thread, cwd: (mesh, me))
     return mesh
 
 
@@ -60,7 +70,7 @@ def test_the_server_states_that_it_resolves_short_ids(
     monkeypatch.setattr(Mesh, "whoami", lambda self, *a, **k: mesh.registry.get("claude:ME"))
     before = mesh.registry._file("claude:ME").read_text()
     assert not accepts_short_ids(me)
-    mcp_server._context()
+    tools._context(os.environ, False, None)
     assert accepts_short_ids(me)
     # The registry record is not written: a stale copy could replace a status from a hook.
     assert mesh.registry._file("claude:ME").read_text() == before
@@ -174,7 +184,7 @@ def test_peers_list_shows_the_name_that_the_user_gave(
     sessions = paths.claude_dir() / "sessions"
     sessions.mkdir(parents=True)
     (sessions / f"{os.getppid()}.json").write_text(json.dumps({"name": "rotom-arch"}))
-    monkeypatch.setattr(mcp_server, "_context", lambda ctx=None: (mesh, me))
+    monkeypatch.setattr(tools, "_context", lambda env, codex_thread, cwd: (mesh, me))
     [row] = [p for p in mcp_server.peers_list("all") if p["id"] == "claude:OTHER"]
     assert (row["name"], row["auto_name"]) == ("rotom-arch", "claude-other")
 
@@ -200,6 +210,11 @@ def test_a_tool_result_says_when_a_newer_peermesh_is_installed(
     # rows from "result", which keeps its shape.
     assert result.structured_content["notice"] == notice
     assert [p["name"] for p in result.structured_content["result"]] == ["codex-x"]
+    # The calls run the installed code, so the note comes one time for each installed version.
+    again = _call("peers_list", {"scope": "all"})
+    assert "notice" not in again.structured_content
+    monkeypatch.setattr(mcp_server, "_installed_version", lambda: "9.9.10")
+    assert "9.9.10" in _call("peers_list", {"scope": "all"}).structured_content["notice"]
 
 
 def test_a_failed_tool_call_says_when_a_newer_peermesh_is_installed(
@@ -218,6 +233,7 @@ def test_a_failed_tool_call_says_when_a_newer_peermesh_is_installed(
         ("peers_track", {"msg_id": "a" * 32}),  # a crash
     )
     for name, arguments in calls:
+        monkeypatch.setattr(mcp_server, "_noticed", set())
         result = _call(name, arguments)
         assert result.is_error, name
         assert result.content[0].text.endswith(notice), name
@@ -247,3 +263,51 @@ def test_an_error_reaches_the_agent_with_its_text(ctx: Mesh) -> None:
     assert result.content[0].text == (
         "Error executing tool peers_list: The scope is not valid. Use 'repo', 'worktree' or 'all'."
     )
+
+
+def _fake_peermesh(root: Path, body: str) -> Path:
+    package = root / "peermesh"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "tools.py").write_text(body)
+    return root
+
+
+def test_a_call_in_a_new_process_gives_the_refusal_text() -> None:
+    with pytest.raises(PeerError, match="The scope is not valid"):
+        mcp_server._in_new_process(
+            "peers_list", {"scope": "galaxy"}, os.environ, codex_thread=False, cwd=None
+        )
+
+
+def test_a_call_in_a_new_process_runs_the_code_that_is_installed_now(tmp_path: Path) -> None:
+    # A different peermesh first on the import path stands in for an upgrade after the start.
+    root = _fake_peermesh(tmp_path, 'import sys\nsys.stdout.write(\'{"result": "new code"}\')\n')
+    env = {**os.environ, "PYTHONPATH": str(root)}
+    result = mcp_server._in_new_process("peers_list", {}, env, codex_thread=False, cwd=None)
+    assert result == "new code"
+
+
+def test_a_call_in_a_new_process_ignores_a_peermesh_module_in_the_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_peermesh(tmp_path, 'import sys\nsys.stdout.write(\'{"result": "the folder"}\')\n')
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(PeerError, match="The scope is not valid"):
+        mcp_server._in_new_process(
+            "peers_list", {"scope": "galaxy"}, os.environ, codex_thread=False, cwd=None
+        )
+
+
+def test_a_crash_in_the_new_process_is_an_error(tmp_path: Path) -> None:
+    root = _fake_peermesh(tmp_path, "raise SystemExit(3)\n")
+    env = {**os.environ, "PYTHONPATH": str(root)}
+    with pytest.raises(RuntimeError, match="ended with code 3"):
+        mcp_server._in_new_process("peers_list", {}, env, codex_thread=False, cwd=None)
+
+
+def test_a_codex_thread_reaches_the_new_process(tmp_path: Path) -> None:
+    # The new process refuses to register a Codex thread whose folder the call does not give.
+    env = {**os.environ, "CODEX_THREAD_ID": "T-new", "PEERMESH_HOME": str(tmp_path / "pm")}
+    with pytest.raises(PeerError, match="does not give its folder"):
+        mcp_server._in_new_process("peers_list", {}, env, codex_thread=True, cwd=None)
