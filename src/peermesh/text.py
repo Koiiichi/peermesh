@@ -74,6 +74,11 @@ UNKNOWN_FOLDER = (
     "Make sure that the user trusts the peermesh hooks. "
     "Then use the tool again after the next prompt."
 )
+STALE_SERVER = (
+    "peermesh: This MCP server runs peermesh {running}, but peermesh {installed} is installed. "
+    "Tell the user to reconnect the peermesh MCP server or to restart this session. "
+    "In Claude Code, the user runs /mcp, selects peermesh and chooses Reconnect."
+)
 MCP_INSTRUCTIONS = (
     "peermesh connects this session to other Claude Code and Codex sessions on this machine. "
     + ONE_CHANNEL

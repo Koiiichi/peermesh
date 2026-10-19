@@ -3,17 +3,54 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, cast
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.types import CallToolResult, InputRequiredResult, TextContent
 
+import peermesh
 from peermesh import text
 from peermesh.errors import PeerError
 from peermesh.registry import Peer, Scope
 from peermesh.service import Mesh, announce_short_ids
 
-mcp = MCPServer("peermesh", instructions=text.MCP_INSTRUCTIONS)
+
+class _Server(MCPServer):
+    """The MCP server, with a note in each tool result while a newer peermesh is installed.
+
+    A Claude Code or Codex session keeps this process until it restarts the server, so the
+    process can run older code than the hooks and the `peers` command of the same session.
+    """
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None = None
+    ) -> CallToolResult | InputRequiredResult:
+        result = await super().call_tool(name, arguments, context)
+        installed = _installed_version()
+        if installed not in (None, peermesh.__version__) and isinstance(result, CallToolResult):
+            notice = text.STALE_SERVER.format(running=peermesh.__version__, installed=installed)
+            result.content.append(TextContent(type="text", text=notice))
+        return result
+
+
+def _installed_version() -> str | None:
+    """The version in the package file that this process imported, as that file is now.
+
+    An upgrade or a `git pull` of an editable install replaces the file; None when it cannot be
+    read.
+    """
+    try:
+        source = Path(peermesh.__file__).read_text()
+    except OSError:
+        return None
+    match = re.search(r'^__version__ = "([^"]+)"', source, re.M)
+    return match.group(1) if match else None
+
+
+mcp = _Server("peermesh", instructions=text.MCP_INSTRUCTIONS)
 
 
 def _session(ctx: Context | None) -> tuple[Mapping[str, str], str | None]:

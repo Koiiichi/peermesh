@@ -8,6 +8,7 @@ from typing import Any, cast
 
 import pytest
 
+import peermesh
 from peermesh import mcp_server, paths, text
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry, proc_start
@@ -175,3 +176,37 @@ def test_peers_list_shows_the_name_that_the_user_gave(
     monkeypatch.setattr(mcp_server, "_context", lambda ctx=None: (mesh, me))
     [row] = [p for p in mcp_server.peers_list("all") if p["id"] == "claude:OTHER"]
     assert (row["name"], row["auto_name"]) == ("rotom-arch", "claude-other")
+
+
+def _call(name: str, arguments: dict[str, Any]) -> Any:
+    from mcp.client import Client
+
+    async def run() -> Any:
+        async with Client(mcp_server.mcp) as client:
+            return await client.call_tool(name, arguments)
+
+    return asyncio.run(run())
+
+
+def test_a_tool_result_says_when_a_newer_peermesh_is_installed(
+    ctx: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mcp_server, "_installed_version", lambda: "9.9.9")
+    result = _call("peers_list", {"scope": "all"})
+    notice = text.STALE_SERVER.format(running=peermesh.__version__, installed="9.9.9")
+    assert result.content[-1].text == notice
+    # The structured result, which the Claude Code mod reads, keeps its shape.
+    assert [p["name"] for p in result.structured_content["result"]] == ["codex-x"]
+
+
+def test_a_tool_result_has_no_note_while_the_installed_peermesh_is_the_same(
+    ctx: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for installed in (peermesh.__version__, None):
+        monkeypatch.setattr(mcp_server, "_installed_version", lambda v=installed: v)
+        result = _call("peers_list", {"scope": "all"})
+        assert all("reconnect" not in getattr(c, "text", "") for c in result.content)
+
+
+def test_the_installed_version_comes_from_the_imported_package_file() -> None:
+    assert mcp_server._installed_version() == peermesh.__version__
