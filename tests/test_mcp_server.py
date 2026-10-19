@@ -196,8 +196,21 @@ def test_a_tool_result_says_when_a_newer_peermesh_is_installed(
     result = _call("peers_list", {"scope": "all"})
     notice = text.STALE_SERVER.format(running=peermesh.__version__, installed="9.9.9")
     assert result.content[-1].text == notice
-    # The structured result, which the Claude Code mod reads, keeps its shape.
+    # Claude Code gives the agent only the structured result. The Claude Code mod reads its
+    # rows from "result", which keeps its shape.
+    assert result.structured_content["notice"] == notice
     assert [p["name"] for p in result.structured_content["result"]] == ["codex-x"]
+
+
+def test_a_failed_tool_call_says_when_a_newer_peermesh_is_installed(
+    ctx: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mcp_server, "_installed_version", lambda: "9.9.9")
+    notice = text.STALE_SERVER.format(running=peermesh.__version__, installed="9.9.9")
+    for name, arguments in (("peers_list", {"scope": "galaxy"}), ("peers_status", {})):
+        result = _call(name, arguments)
+        assert result.is_error, name
+        assert result.content[0].text.endswith(notice), name
 
 
 def test_a_tool_result_has_no_note_while_the_installed_peermesh_is_the_same(
@@ -207,6 +220,7 @@ def test_a_tool_result_has_no_note_while_the_installed_peermesh_is_the_same(
         monkeypatch.setattr(mcp_server, "_installed_version", lambda v=installed: v)
         result = _call("peers_list", {"scope": "all"})
         assert all("reconnect" not in getattr(c, "text", "") for c in result.content)
+        assert "notice" not in result.structured_content
 
 
 def test_the_installed_version_comes_from_the_imported_package_file() -> None:

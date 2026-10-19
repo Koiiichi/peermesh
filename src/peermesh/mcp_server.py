@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from mcp.server.mcpserver import Context, MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.types import CallToolResult, InputRequiredResult, TextContent
 
 import peermesh
@@ -29,12 +29,31 @@ class _Server(MCPServer):
     async def call_tool(
         self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None = None
     ) -> CallToolResult | InputRequiredResult:
-        result = await super().call_tool(name, arguments, context)
-        installed = _installed_version()
-        if installed not in (None, peermesh.__version__) and isinstance(result, CallToolResult):
-            notice = text.STALE_SERVER.format(running=peermesh.__version__, installed=installed)
+        try:
+            result = await super().call_tool(name, arguments, context)
+        except UnexpectedToolError:
+            # A crash keeps the generic text of the library; a note would only repeat it.
+            raise
+        except ToolError as exc:
+            notice = _stale_notice()
+            if notice is None:
+                raise
+            raise ToolError(f"{exc} {notice}") from exc
+        notice = _stale_notice()
+        if notice is not None and isinstance(result, CallToolResult):
+            # Claude Code gives the agent only the structured result when one exists, and
+            # other clients give it the text.
             result.content.append(TextContent(type="text", text=notice))
+            if isinstance(result.structured_content, dict):
+                result.structured_content = {**result.structured_content, "notice": notice}
         return result
+
+
+def _stale_notice() -> str | None:
+    installed = _installed_version()
+    if installed in (None, peermesh.__version__):
+        return None
+    return text.STALE_SERVER.format(running=peermesh.__version__, installed=installed)
 
 
 def _installed_version() -> str | None:

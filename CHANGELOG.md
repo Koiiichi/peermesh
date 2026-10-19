@@ -4,7 +4,7 @@
 
 ### Added
 
-- A peermesh MCP server that runs older code than the installed peermesh says so: each tool result ends with a line that names both versions and tells the agent to ask you to reconnect the server. A session keeps its server across an upgrade, so a session could act on old behavior with no sign of it.
+- A peermesh MCP server that runs older code than the installed peermesh says so: each tool result gets a `notice` field, and each tool error a sentence, that names both versions and tells the agent to ask you to reconnect the server. A session keeps its server across an upgrade, so a session could act on old behavior with no sign of it.
 
 ### Fixed
 
