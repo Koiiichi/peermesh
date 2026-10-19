@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -15,15 +18,13 @@ from mcp.types import CallToolResult, InputRequiredResult, TextContent
 import peermesh
 from peermesh import text
 from peermesh.errors import PeerError
-from peermesh.registry import Peer, Scope
-from peermesh.service import Mesh, announce_short_ids
 
 
 class _Server(MCPServer):
-    """The MCP server, with a note in each tool result while a newer peermesh is installed.
+    """The MCP server, with a note in one tool result when a newer peermesh is installed.
 
-    A Claude Code or Codex session keeps this process until it restarts the server, so the
-    process can run older code than the hooks and the `peers` command of the same session.
+    A Claude Code or Codex session keeps this process across an upgrade. Each call runs the
+    installed code in a new process, but the list of tools is the one that this process loaded.
     """
 
     async def call_tool(
@@ -48,10 +49,15 @@ class _Server(MCPServer):
         return result
 
 
+_noticed: set[str] = set()
+
+
 def _stale_notice() -> str | None:
+    """The note about a newer installed peermesh, the first time that this process sees it."""
     installed = _installed_version()
-    if installed in (None, peermesh.__version__):
+    if installed in (None, peermesh.__version__) or installed in _noticed:
         return None
+    _noticed.add(installed)
     return text.STALE_SERVER.format(running=peermesh.__version__, installed=installed)
 
 
@@ -101,27 +107,74 @@ def _session(ctx: Context | None) -> tuple[Mapping[str, str], str | None]:
     return env, None
 
 
-def _context(ctx: Context | None = None) -> tuple[Mesh, Peer]:
-    mesh = Mesh.default()
-    env, cwd = _session(ctx)
-    # With no folder for a Codex thread, the folder of the server would be used to register
-    # the thread, and it can be an unrelated repository.
-    unknown = env is not os.environ and cwd is None
+class _Runner(Protocol):
+    def __call__(
+        self,
+        tool: str,
+        arguments: dict[str, Any],
+        env: Mapping[str, str],
+        *,
+        codex_thread: bool,
+        cwd: str | None,
+    ) -> Any: ...
+
+
+# A tool call that waits for `codex queue` can take 30 seconds.
+TOOL_TIMEOUT = 120
+
+
+def _in_new_process(
+    tool: str,
+    arguments: dict[str, Any],
+    env: Mapping[str, str],
+    *,
+    codex_thread: bool,
+    cwd: str | None,
+) -> Any:
+    """Run the tool in a new process of the installed code, as the session that `env` names.
+
+    The new process is a child of this one, so the session host is still its ancestor.
+    """
+    call = json.dumps(
+        {"tool": tool, "arguments": arguments, "codex_thread": codex_thread, "cwd": cwd}
+    )
+    # -P keeps the folder of the session off the import path; it can hold a module "peermesh".
+    done = subprocess.run(
+        [sys.executable, "-P", "-m", "peermesh.tools"],
+        input=call,
+        capture_output=True,
+        text=True,
+        env=dict(env),
+        timeout=TOOL_TIMEOUT,
+        check=False,
+    )
+    sys.stderr.write(done.stderr)
     try:
-        me = mesh.whoami(env, cwd, unregistered=text.UNKNOWN_FOLDER if unknown else None)
+        reply = json.loads(done.stdout)
+    except ValueError:
+        reply = None
+    if done.returncode != 0 or not isinstance(reply, dict):
+        raise RuntimeError(f"The peermesh tool process ended with code {done.returncode}.")
+    if "error" in reply:
+        raise PeerError(str(reply["error"]))
+    return reply.get("result")
+
+
+_runner: _Runner = _in_new_process
+
+
+def _call(tool: str, arguments: dict[str, Any], ctx: Context | None) -> Any:
+    env, cwd = _session(ctx)
+    try:
+        return _runner(tool, arguments, env, codex_thread=env is not os.environ, cwd=cwd)
     except PeerError as exc:
         raise ToolError(str(exc)) from exc
-    # This process stays for the whole session, so it states what its version can do.
-    announce_short_ids(me)
-    return mesh, me
 
 
 @mcp.tool(description=text.TOOL_LIST)
 def peers_list(scope: str = "repo", ctx: Context | None = None) -> list[dict[str, Any]]:
-    if scope not in ("repo", "worktree", "all"):
-        raise ToolError("The scope is not valid. Use 'repo', 'worktree' or 'all'.")
-    mesh, me = _context(ctx)
-    return [p.to_json() for p in mesh.list_peers(me, cast(Scope, scope))]
+    result: list[dict[str, Any]] = _call("peers_list", {"scope": scope}, ctx)
+    return result
 
 
 @mcp.tool(description=text.TOOL_SEND)
@@ -132,37 +185,31 @@ def peers_send(
     urgency: str = "normal",
     ctx: Context | None = None,
 ) -> list[dict[str, Any]]:
-    mesh, me = _context(ctx)
-    try:
-        return [r.to_json() for r in mesh.send(me, to, body, kind, urgency)]
-    except PeerError as exc:
-        raise ToolError(str(exc)) from exc
+    arguments = {"to": to, "body": body, "kind": kind, "urgency": urgency}
+    result: list[dict[str, Any]] = _call("peers_send", arguments, ctx)
+    return result
 
 
 @mcp.tool(description=text.TOOL_REPLY)
 def peers_reply(
     msg_id: str, body: str, done: bool = False, ctx: Context | None = None
 ) -> dict[str, Any]:
-    mesh, me = _context(ctx)
-    try:
-        return mesh.reply(me, msg_id, body, done=done).to_json()
-    except PeerError as exc:
-        raise ToolError(str(exc)) from exc
+    result: dict[str, Any] = _call(
+        "peers_reply", {"msg_id": msg_id, "body": body, "done": done}, ctx
+    )
+    return result
 
 
 @mcp.tool(description=text.TOOL_TRACK)
 def peers_track(msg_id: str, ctx: Context | None = None) -> dict[str, Any]:
-    mesh, _ = _context(ctx)
-    try:
-        return mesh.track(msg_id)
-    except PeerError as exc:
-        raise ToolError(str(exc)) from exc
+    result: dict[str, Any] = _call("peers_track", {"msg_id": msg_id}, ctx)
+    return result
 
 
 @mcp.tool(description=text.TOOL_STATUS)
 def peers_status(target: str, ctx: Context | None = None) -> dict[str, Any]:
-    mesh, _ = _context(ctx)
-    return mesh.status(target)
+    result: dict[str, Any] = _call("peers_status", {"target": target}, ctx)
+    return result
 
 
 def main() -> None:

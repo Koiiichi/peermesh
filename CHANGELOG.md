@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Each call of a peermesh MCP tool runs in a new process of the installed code, so a running session gets an upgrade at its next tool call, with no reconnect. A new process starts in a few hundredths of a second. The list of tools still comes from the MCP server that the session started with, so the first tool result after an upgrade says that the list can be out of date, one time. A server that started before this version still runs its old code; reconnect it, or restart the session, one more time.
+
 ## 0.5.3 — 2026-10-19
 
 A peermesh MCP server that runs older code says so, and agents see the text of each tool error.
