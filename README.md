@@ -35,7 +35,7 @@ peers doctor
 - Claude Code: five hooks in `~/.claude/settings.json`, a marked block in `~/.claude/CLAUDE.md`, and the `peermesh` MCP server at user scope.
 - Codex: five hooks in `~/.codex/hooks.json`, a marked block in `~/.codex/AGENTS.md`, and `~/.codex/rules/peermesh.rules`, which lets `peers list`, `send`, `reply`, `status`, `whoami` and `track` run outside the Codex sandbox without an approval prompt. `peers install`, `uninstall` and `log` still ask.
 
-`peers install` checks every file first and changes nothing if one is malformed or `claude` is missing. Codex asks once to trust the new hooks, and again after an upgrade changes them. Run `peers install` again after an upgrade; until then, sessions keep the native delivery and do not get the post-tool hook. `peers uninstall` reverses every change; the first backup of each file stays as `*.peermesh.bak`.
+`peers install` checks every file first and changes nothing if one is malformed or `claude` is missing. Codex asks once to trust the new hooks, and again after an upgrade changes them. Run `peers install` again after an upgrade; until then, sessions keep the native delivery and do not get the post-tool hook. `peers uninstall` reverses every change; the first backup of each file stays as `*.peermesh.bak`. A running session keeps the peermesh MCP server that it started with, and so the older code, until you reconnect the server or restart the session; in Claude Code, run `/mcp`, select `peermesh` and choose Reconnect. While the installed peermesh is newer, each result and each error of a peermesh tool carries a note that says so.
 
 In Claude Code, add the mod next.
 

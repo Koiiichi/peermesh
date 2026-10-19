@@ -3,17 +3,73 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, cast
 
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import CallToolResult, InputRequiredResult, TextContent
 
+import peermesh
 from peermesh import text
 from peermesh.errors import PeerError
 from peermesh.registry import Peer, Scope
 from peermesh.service import Mesh, announce_short_ids
 
-mcp = MCPServer("peermesh", instructions=text.MCP_INSTRUCTIONS)
+
+class _Server(MCPServer):
+    """The MCP server, with a note in each tool result while a newer peermesh is installed.
+
+    A Claude Code or Codex session keeps this process until it restarts the server, so the
+    process can run older code than the hooks and the `peers` command of the same session.
+    """
+
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any], context: Context[Any, Any] | None = None
+    ) -> CallToolResult | InputRequiredResult:
+        try:
+            result = await super().call_tool(name, arguments, context)
+        except ToolError as exc:
+            notice = _stale_notice()
+            if notice is None:
+                raise
+            # The library shows the agent the text of the error. The same type keeps a crash
+            # (UnexpectedToolError) logged with its traceback, and older code can cause one.
+            raise type(exc)(f"{exc} {notice}") from exc
+        notice = _stale_notice()
+        if notice is not None and isinstance(result, CallToolResult):
+            # Claude Code gives the agent only the structured result when one exists, and
+            # other clients give it the text.
+            result.content.append(TextContent(type="text", text=notice))
+            if isinstance(result.structured_content, dict):
+                result.structured_content = {**result.structured_content, "notice": notice}
+        return result
+
+
+def _stale_notice() -> str | None:
+    installed = _installed_version()
+    if installed in (None, peermesh.__version__):
+        return None
+    return text.STALE_SERVER.format(running=peermesh.__version__, installed=installed)
+
+
+def _installed_version() -> str | None:
+    """The version in the package file that this process imported, as that file is now.
+
+    An upgrade or a `git pull` of an editable install replaces the file; None when it cannot be
+    read.
+    """
+    try:
+        source = Path(peermesh.__file__).read_text()
+    except OSError:
+        return None
+    match = re.search(r'^__version__ = "([^"]+)"', source, re.M)
+    return match.group(1) if match else None
+
+
+mcp = _Server("peermesh", instructions=text.MCP_INSTRUCTIONS)
 
 
 def _session(ctx: Context | None) -> tuple[Mapping[str, str], str | None]:
@@ -54,7 +110,7 @@ def _context(ctx: Context | None = None) -> tuple[Mesh, Peer]:
     try:
         me = mesh.whoami(env, cwd, unregistered=text.UNKNOWN_FOLDER if unknown else None)
     except PeerError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ToolError(str(exc)) from exc
     # This process stays for the whole session, so it states what its version can do.
     announce_short_ids(me)
     return mesh, me
@@ -63,7 +119,7 @@ def _context(ctx: Context | None = None) -> tuple[Mesh, Peer]:
 @mcp.tool(description=text.TOOL_LIST)
 def peers_list(scope: str = "repo", ctx: Context | None = None) -> list[dict[str, Any]]:
     if scope not in ("repo", "worktree", "all"):
-        raise ValueError("The scope is not valid. Use 'repo', 'worktree' or 'all'.")
+        raise ToolError("The scope is not valid. Use 'repo', 'worktree' or 'all'.")
     mesh, me = _context(ctx)
     return [p.to_json() for p in mesh.list_peers(me, cast(Scope, scope))]
 
@@ -80,7 +136,7 @@ def peers_send(
     try:
         return [r.to_json() for r in mesh.send(me, to, body, kind, urgency)]
     except PeerError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(description=text.TOOL_REPLY)
@@ -91,7 +147,7 @@ def peers_reply(
     try:
         return mesh.reply(me, msg_id, body, done=done).to_json()
     except PeerError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(description=text.TOOL_TRACK)
@@ -100,7 +156,7 @@ def peers_track(msg_id: str, ctx: Context | None = None) -> dict[str, Any]:
     try:
         return mesh.track(msg_id)
     except PeerError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(description=text.TOOL_STATUS)

@@ -7,7 +7,9 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
+import peermesh
 from peermesh import mcp_server, paths, text
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry, proc_start
@@ -44,7 +46,7 @@ def test_list_send_reply_status(ctx: Mesh) -> None:
 
 
 def test_bad_scope_is_a_clear_error(ctx: Mesh) -> None:
-    with pytest.raises(ValueError, match="scope"):
+    with pytest.raises(ToolError, match="scope"):
         mcp_server.peers_list("galaxy")
 
 
@@ -134,7 +136,7 @@ def test_metadata_that_names_a_thread_of_another_process_is_refused(
             )
         )
         ctx = _Ctx({"x-codex-turn-metadata": {"thread_id": "T2"}})
-        with pytest.raises(ValueError, match="not an ancestor"):
+        with pytest.raises(ToolError, match="not an ancestor"):
             mcp_server.peers_send(["anyone"], "spoof", ctx=cast(Any, ctx))
     finally:
         other.kill()
@@ -148,7 +150,7 @@ def test_a_codex_thread_with_an_unknown_folder_is_not_registered_by_a_call(
     mesh = Mesh(Registry(), Ledger(), {"claude": Fake(), "codex": Fake()})
     monkeypatch.setattr(Mesh, "default", classmethod(lambda cls: mesh))
     turn = {"thread_id": "T9", "workspaces": {"/a": {}, "/b": {}}}
-    with pytest.raises(ValueError, match="does not give its folder"):
+    with pytest.raises(ToolError, match="does not give its folder"):
         mcp_server.peers_list(ctx=cast(Any, _Ctx({"x-codex-turn-metadata": turn})))
     assert mesh.registry.get("codex:T9") is None
     # A thread that a hook registered does not need the folder.
@@ -175,3 +177,73 @@ def test_peers_list_shows_the_name_that_the_user_gave(
     monkeypatch.setattr(mcp_server, "_context", lambda ctx=None: (mesh, me))
     [row] = [p for p in mcp_server.peers_list("all") if p["id"] == "claude:OTHER"]
     assert (row["name"], row["auto_name"]) == ("rotom-arch", "claude-other")
+
+
+def _call(name: str, arguments: dict[str, Any]) -> Any:
+    from mcp.client import Client
+
+    async def run() -> Any:
+        async with Client(mcp_server.mcp) as client:
+            return await client.call_tool(name, arguments)
+
+    return asyncio.run(run())
+
+
+def test_a_tool_result_says_when_a_newer_peermesh_is_installed(
+    ctx: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mcp_server, "_installed_version", lambda: "9.9.9")
+    result = _call("peers_list", {"scope": "all"})
+    notice = text.STALE_SERVER.format(running=peermesh.__version__, installed="9.9.9")
+    assert result.content[-1].text == notice
+    # Claude Code gives the agent only the structured result. The Claude Code mod reads its
+    # rows from "result", which keeps its shape.
+    assert result.structured_content["notice"] == notice
+    assert [p["name"] for p in result.structured_content["result"]] == ["codex-x"]
+
+
+def test_a_failed_tool_call_says_when_a_newer_peermesh_is_installed(
+    ctx: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mcp_server, "_installed_version", lambda: "9.9.9")
+    notice = text.STALE_SERVER.format(running=peermesh.__version__, installed="9.9.9")
+
+    def crash(msg_id: str) -> dict[str, Any]:
+        raise PermissionError("the ledger cannot be read")
+
+    monkeypatch.setattr(ctx, "track", crash)
+    calls = (
+        ("peers_list", {"scope": "galaxy"}),  # an error of peermesh
+        ("peers_status", {}),  # an argument that is missing
+        ("peers_track", {"msg_id": "a" * 32}),  # a crash
+    )
+    for name, arguments in calls:
+        result = _call(name, arguments)
+        assert result.is_error, name
+        assert result.content[0].text.endswith(notice), name
+    # A crash keeps the generic text of the library and does not show the exception.
+    crashed = _call("peers_track", {"msg_id": "a" * 32}).content[0].text
+    assert crashed.startswith("Error executing tool peers_track") and "ledger" not in crashed
+
+
+def test_a_tool_result_has_no_note_while_the_installed_peermesh_is_the_same(
+    ctx: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for installed in (peermesh.__version__, None):
+        monkeypatch.setattr(mcp_server, "_installed_version", lambda v=installed: v)
+        result = _call("peers_list", {"scope": "all"})
+        assert all("reconnect" not in getattr(c, "text", "") for c in result.content)
+        assert "notice" not in result.structured_content
+
+
+def test_the_installed_version_comes_from_the_imported_package_file() -> None:
+    assert mcp_server._installed_version() == peermesh.__version__
+
+
+def test_an_error_reaches_the_agent_with_its_text(ctx: Mesh) -> None:
+    # The MCP library shows only "Error executing tool" for an exception that is not a ToolError.
+    result = _call("peers_list", {"scope": "galaxy"})
+    assert result.is_error
+    assert result.content[0].text == (
+        "Error executing tool peers_list: The scope is not valid. Use 'repo', 'worktree' or 'all'."
+    )
