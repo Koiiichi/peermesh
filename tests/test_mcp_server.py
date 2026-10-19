@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import pytest
+from mcp.server.mcpserver.exceptions import ToolError
 
 import peermesh
 from peermesh import mcp_server, paths, text
@@ -45,7 +46,7 @@ def test_list_send_reply_status(ctx: Mesh) -> None:
 
 
 def test_bad_scope_is_a_clear_error(ctx: Mesh) -> None:
-    with pytest.raises(ValueError, match="scope"):
+    with pytest.raises(ToolError, match="scope"):
         mcp_server.peers_list("galaxy")
 
 
@@ -135,7 +136,7 @@ def test_metadata_that_names_a_thread_of_another_process_is_refused(
             )
         )
         ctx = _Ctx({"x-codex-turn-metadata": {"thread_id": "T2"}})
-        with pytest.raises(ValueError, match="not an ancestor"):
+        with pytest.raises(ToolError, match="not an ancestor"):
             mcp_server.peers_send(["anyone"], "spoof", ctx=cast(Any, ctx))
     finally:
         other.kill()
@@ -149,7 +150,7 @@ def test_a_codex_thread_with_an_unknown_folder_is_not_registered_by_a_call(
     mesh = Mesh(Registry(), Ledger(), {"claude": Fake(), "codex": Fake()})
     monkeypatch.setattr(Mesh, "default", classmethod(lambda cls: mesh))
     turn = {"thread_id": "T9", "workspaces": {"/a": {}, "/b": {}}}
-    with pytest.raises(ValueError, match="does not give its folder"):
+    with pytest.raises(ToolError, match="does not give its folder"):
         mcp_server.peers_list(ctx=cast(Any, _Ctx({"x-codex-turn-metadata": turn})))
     assert mesh.registry.get("codex:T9") is None
     # A thread that a hook registered does not need the folder.
@@ -210,3 +211,12 @@ def test_a_tool_result_has_no_note_while_the_installed_peermesh_is_the_same(
 
 def test_the_installed_version_comes_from_the_imported_package_file() -> None:
     assert mcp_server._installed_version() == peermesh.__version__
+
+
+def test_an_error_reaches_the_agent_with_its_text(ctx: Mesh) -> None:
+    # The MCP library shows only "Error executing tool" for an exception that is not a ToolError.
+    result = _call("peers_list", {"scope": "galaxy"})
+    assert result.is_error
+    assert result.content[0].text == (
+        "Error executing tool peers_list: The scope is not valid. Use 'repo', 'worktree' or 'all'."
+    )

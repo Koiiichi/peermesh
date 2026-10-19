@@ -6,6 +6,10 @@
 
 - A peermesh MCP server that runs older code than the installed peermesh says so: each tool result ends with a line that names both versions and tells the agent to ask you to reconnect the server. A session keeps its server across an upgrade, so a session could act on old behavior with no sign of it.
 
+### Fixed
+
+- An error of a peermesh tool reaches the agent with its text, for example `Error executing tool peers_list: The scope is not valid. Use 'repo', 'worktree' or 'all'.` The MCP library showed only `Error executing tool peers_list` for each error, so an agent did not see why a send or a list failed.
+
 ## 0.5.2 — 2026-10-17
 
 Sessions find each other by the names that you gave them.
