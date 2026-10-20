@@ -280,30 +280,47 @@ def test_a_call_in_a_new_process_gives_the_refusal_text() -> None:
         )
 
 
-def test_a_call_in_a_new_process_runs_the_code_that_is_installed_now(tmp_path: Path) -> None:
-    # A different peermesh first on the import path stands in for an upgrade after the start.
+def test_a_call_in_a_new_process_runs_the_code_that_is_installed_now(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # New files in the folder that the server loaded peermesh from stand in for an upgrade.
     root = _fake_peermesh(tmp_path, 'import sys\nsys.stdout.write(\'{"result": "new code"}\')\n')
-    env = {**os.environ, "PYTHONPATH": str(root)}
-    result = mcp_server._in_new_process("peers_list", {}, env, codex_thread=False, cwd=None)
+    (root / "peermesh" / "tools.py").write_text(
+        'import sys\ndef main():\n    sys.stdout.write(\'{"result": "new code"}\')\n'
+    )
+    monkeypatch.setattr(mcp_server, "_package_root", lambda: str(root))
+    result = mcp_server._in_new_process("peers_list", {}, os.environ, codex_thread=False, cwd=None)
     assert result == "new code"
 
 
-def test_a_call_in_a_new_process_ignores_a_peermesh_module_in_the_folder(
+def test_a_call_in_a_new_process_ignores_a_peermesh_module_in_the_folder_or_pythonpath(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _fake_peermesh(tmp_path, 'import sys\nsys.stdout.write(\'{"result": "the folder"}\')\n')
-    monkeypatch.chdir(tmp_path)
-    with pytest.raises(PeerError, match="The scope is not valid"):
-        mcp_server._in_new_process(
-            "peers_list", {"scope": "galaxy"}, os.environ, codex_thread=False, cwd=None
-        )
+    # A module that a session can write must not run in place of peermesh, as any session.
+    folder = _fake_peermesh(tmp_path / "folder", "raise SystemExit('the folder ran')\n")
+    elsewhere = _fake_peermesh(tmp_path / "elsewhere", "raise SystemExit('PYTHONPATH ran')\n")
+    monkeypatch.chdir(folder)
+    for pythonpath in (".", "", f"{elsewhere}", f":{elsewhere}"):
+        env = {**os.environ, "PYTHONPATH": pythonpath}
+        with pytest.raises(PeerError, match="The scope is not valid"):
+            mcp_server._in_new_process(
+                "peers_list", {"scope": "galaxy"}, env, codex_thread=False, cwd=None
+            )
 
 
-def test_a_crash_in_the_new_process_is_an_error(tmp_path: Path) -> None:
+def test_a_crash_in_the_new_process_is_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = _fake_peermesh(tmp_path, "raise SystemExit(3)\n")
-    env = {**os.environ, "PYTHONPATH": str(root)}
+    monkeypatch.setattr(mcp_server, "_package_root", lambda: str(root))
     with pytest.raises(RuntimeError, match="ended with code 3"):
-        mcp_server._in_new_process("peers_list", {}, env, codex_thread=False, cwd=None)
+        mcp_server._in_new_process("peers_list", {}, os.environ, codex_thread=False, cwd=None)
+
+
+def test_the_package_root_is_the_folder_of_the_loaded_package() -> None:
+    assert (Path(mcp_server._package_root()) / "peermesh" / "__init__.py").samefile(
+        peermesh.__file__
+    )
 
 
 def test_a_codex_thread_reaches_the_new_process(tmp_path: Path) -> None:
