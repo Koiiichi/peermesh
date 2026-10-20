@@ -8,7 +8,6 @@ import re
 import subprocess
 import sys
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any, Protocol
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -16,15 +15,16 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, InputRequiredResult, TextContent
 
 import peermesh
-from peermesh import text
+from peermesh import text, tools
 from peermesh.errors import PeerError
 
 
 class _Server(MCPServer):
-    """The MCP server, with a note in one tool result when a newer peermesh is installed.
+    """The MCP server. Each call runs the installed peermesh in a new process.
 
-    A Claude Code or Codex session keeps this process across an upgrade. Each call runs the
-    installed code in a new process, but the list of tools is the one that this process loaded.
+    A Claude Code or Codex session keeps this process across an upgrade, and neither client starts
+    an interactive session's server again after it exits. So the work of each call runs in a new
+    process of the installed code, and only the list of tools is the one that this process loaded.
     """
 
     async def call_tool(
@@ -33,14 +33,15 @@ class _Server(MCPServer):
         try:
             result = await super().call_tool(name, arguments, context)
         except ToolError as exc:
-            notice = _stale_notice()
-            if notice is None:
+            notes = _notes.pop(id(context), [])
+            if not notes:
                 raise
             # The library shows the agent the text of the error. The same type keeps a crash
-            # (UnexpectedToolError) logged with its traceback, and older code can cause one.
-            raise type(exc)(f"{exc} {notice}") from exc
-        notice = _stale_notice()
-        if notice is not None and isinstance(result, CallToolResult):
+            # (UnexpectedToolError) logged with its traceback.
+            raise type(exc)(" ".join([str(exc), *notes])) from exc
+        notes = _notes.pop(id(context), [])
+        if notes and isinstance(result, CallToolResult):
+            notice = " ".join(notes)
             # Claude Code gives the agent only the structured result when one exists, and
             # other clients give it the text.
             result.content.append(TextContent(type="text", text=notice))
@@ -49,31 +50,10 @@ class _Server(MCPServer):
         return result
 
 
+# Notes for the agent, by the context object of the call that the server is answering.
+_notes: dict[int, list[str]] = {}
+# The newer versions that a note already named, so that each one is named one time.
 _noticed: set[str] = set()
-
-
-def _stale_notice() -> str | None:
-    """The note about a newer installed peermesh, the first time that this process sees it."""
-    installed = _installed_version()
-    if installed in (None, peermesh.__version__) or installed in _noticed:
-        return None
-    _noticed.add(installed)
-    return text.STALE_SERVER.format(running=peermesh.__version__, installed=installed)
-
-
-def _installed_version() -> str | None:
-    """The version in the package file that this process imported, as that file is now.
-
-    An upgrade or a `git pull` of an editable install replaces the file; None when it cannot be
-    read.
-    """
-    try:
-        source = Path(peermesh.__file__).read_text()
-    except OSError:
-        return None
-    match = re.search(r'^__version__ = "([^"]+)"', source, re.M)
-    return match.group(1) if match else None
-
 
 mcp = _Server("peermesh", instructions=text.MCP_INSTRUCTIONS)
 
@@ -107,6 +87,10 @@ def _session(ctx: Context | None) -> tuple[Mapping[str, str], str | None]:
     return env, None
 
 
+class _Unavailable(Exception):
+    """The installed peermesh cannot run. The text names the cause for the agent."""
+
+
 class _Runner(Protocol):
     def __call__(
         self,
@@ -116,7 +100,13 @@ class _Runner(Protocol):
         *,
         codex_thread: bool,
         cwd: str | None,
-    ) -> Any: ...
+    ) -> dict[str, Any]: ...
+
+
+def _command() -> list[str]:
+    # -I ignores PYTHONPATH and the folder of the session, which can hold a module "peermesh",
+    # but it keeps the site-packages of the environment, which name the installed peermesh.
+    return [sys.executable, "-I", "-m", "peermesh.tools"]
 
 
 def _in_new_process(
@@ -126,8 +116,8 @@ def _in_new_process(
     *,
     codex_thread: bool,
     cwd: str | None,
-) -> Any:
-    """Run the tool in a new process of the installed code, as the session that `env` names.
+) -> dict[str, Any]:
+    """The reply of the tool from a new process of the installed code, as the session in `env`.
 
     The new process is a child of this one, so the session host is still its ancestor. It has
     no time limit: a send to several Codex sessions can wait 30 seconds for each of them.
@@ -135,35 +125,38 @@ def _in_new_process(
     call = json.dumps(
         {"tool": tool, "arguments": arguments, "codex_thread": codex_thread, "cwd": cwd}
     )
-    # -I ignores PYTHONPATH and the folder of the session, which can hold a module "peermesh".
-    # The package comes only from the folder that this process loaded it from, and an upgrade
-    # replaces the files there.
-    start = (
-        f"import sys; sys.path.insert(0, {_package_root()!r}); import peermesh.tools as t; t.main()"
-    )
-    done = subprocess.run(
-        [sys.executable, "-I", "-c", start],
-        input=call,
-        capture_output=True,
-        text=True,
-        env=dict(env),
-        check=False,
-    )
+    try:
+        done = subprocess.run(
+            _command(), input=call, capture_output=True, text=True, env=dict(env), check=False
+        )
+    except OSError as exc:
+        raise _Unavailable(f"its Python interpreter cannot start: {exc.strerror}") from exc
     sys.stderr.write(done.stderr)
+    if done.returncode != 0 and re.search(r"No module named 'peermesh(\.tools)?'", done.stderr):
+        raise _Unavailable("the environment does not hold peermesh")
     try:
         reply = json.loads(done.stdout)
     except ValueError:
         reply = None
     if done.returncode != 0 or not isinstance(reply, dict):
         raise RuntimeError(f"The peermesh tool process ended with code {done.returncode}.")
-    if "error" in reply:
-        raise PeerError(str(reply["error"]))
-    return reply.get("result")
+    return reply
 
 
-def _package_root() -> str:
-    """The folder that holds the peermesh package of this process."""
-    return str(Path(peermesh.__file__).resolve().parent.parent)
+def _in_this_process(
+    tool: str,
+    arguments: dict[str, Any],
+    env: Mapping[str, str],
+    *,
+    codex_thread: bool,
+    cwd: str | None,
+) -> dict[str, Any]:
+    """The reply of the tool from the code that this process loaded."""
+    try:
+        result = tools.run(tool, arguments, env, codex_thread=codex_thread, cwd=cwd)
+    except PeerError as exc:
+        return {"error": str(exc), "version": peermesh.__version__}
+    return {"result": result, "version": peermesh.__version__}
 
 
 _runner: _Runner = _in_new_process
@@ -171,10 +164,25 @@ _runner: _Runner = _in_new_process
 
 def _call(tool: str, arguments: dict[str, Any], ctx: Context | None) -> Any:
     env, cwd = _session(ctx)
+    codex_thread = env is not os.environ
     try:
-        return _runner(tool, arguments, env, codex_thread=env is not os.environ, cwd=cwd)
-    except PeerError as exc:
-        raise ToolError(str(exc)) from exc
+        reply = _runner(tool, arguments, env, codex_thread=codex_thread, cwd=cwd)
+    except _Unavailable as exc:
+        # An older server that still runs is better than none.
+        _note(ctx, text.TOOLS_UNAVAILABLE.format(reason=exc))
+        reply = _in_this_process(tool, arguments, env, codex_thread=codex_thread, cwd=cwd)
+    version = reply.get("version")
+    if isinstance(version, str) and version != peermesh.__version__ and version not in _noticed:
+        _noticed.add(version)
+        _note(ctx, text.STALE_SERVER.format(running=peermesh.__version__, installed=version))
+    if "error" in reply:
+        raise ToolError(str(reply["error"]))
+    return reply.get("result")
+
+
+def _note(ctx: Context | None, note: str) -> None:
+    if ctx is not None:
+        _notes.setdefault(id(ctx), []).append(note)
 
 
 @mcp.tool(description=text.TOOL_LIST)

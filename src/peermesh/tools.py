@@ -1,9 +1,8 @@
 """The work of each peermesh MCP tool, which the MCP server runs in a new process for each call.
 
 A Claude Code or Codex session keeps its MCP server across an upgrade, and neither client starts
-an interactive session's server again after it exits. The server runs this module for each call,
-in isolated mode and from the folder that it loaded peermesh from, so each call runs the
-installed code.
+an interactive session's server again after it exits. The server runs this module for each call
+(`python -I -m peermesh.tools`), so each call runs the installed code.
 """
 
 from __future__ import annotations
@@ -14,6 +13,7 @@ import sys
 from collections.abc import Mapping
 from typing import Any, cast
 
+import peermesh
 from peermesh import text
 from peermesh.errors import PeerError
 from peermesh.registry import Peer, Scope
@@ -75,7 +75,8 @@ def _context(env: Mapping[str, str], codex_thread: bool, cwd: str | None) -> tup
 
 
 def main() -> None:
-    """Read one call as JSON on stdin and write {"result": ...} or {"error": text} on stdout."""
+    """Read one call as JSON on stdin; write {"result": ...} or {"error": text} on stdout, with the
+    version of the code that ran the call."""
     call = json.loads(sys.stdin.read())
     try:
         result = run(
@@ -89,7 +90,7 @@ def main() -> None:
         reply: dict[str, Any] = {"error": str(exc)}
     else:
         reply = {"result": result}
-    sys.stdout.write(json.dumps(reply))
+    sys.stdout.write(json.dumps(reply | {"version": peermesh.__version__}))
 
 
 if __name__ == "__main__":

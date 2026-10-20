@@ -81,6 +81,11 @@ STALE_SERVER = (
     "to reconnect the peermesh MCP server or to restart this session. In Claude Code, the user "
     "runs /mcp, selects peermesh and chooses Reconnect."
 )
+TOOLS_UNAVAILABLE = (
+    "peermesh: The installed peermesh cannot run: {reason}. This call ran the peermesh code that "
+    "this MCP server started with. Tell the user to reconnect the peermesh MCP server or to "
+    "restart this session."
+)
 MCP_INSTRUCTIONS = (
     "peermesh connects this session to other Claude Code and Codex sessions on this machine. "
     + ONE_CHANNEL
