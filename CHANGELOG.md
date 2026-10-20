@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.5.4 — 2026-10-19
+
+A running session gets an upgrade at its next peermesh tool call, with no reconnect.
+
+### Upgrade
+
+1. Pull: `git pull`. No reinstall is necessary. The hooks of `peers install` and of the plugin, and the Codex rule, are the same as in 0.5.3, so Codex does not ask you to trust the hooks again.
+2. Reconnect the peermesh MCP server in each running session one last time, or restart the session: in Claude Code, run `/mcp`, select `peermesh` and choose Reconnect. A server that started before 0.5.4 runs its old code. From 0.5.4 on, each tool call runs the installed peermesh.
+3. If you use the Codex plugin, run `codex plugin add peermesh@peermesh` to show the new version; its hooks and tools are unchanged.
 
 ### Changed
 
