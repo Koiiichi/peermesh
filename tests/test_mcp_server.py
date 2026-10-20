@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -12,7 +13,6 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 import peermesh
 from peermesh import mcp_server, paths, text, tools
-from peermesh.errors import PeerError
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry, proc_start
 from peermesh.service import Mesh, accepts_short_ids
@@ -25,11 +25,22 @@ class Fake:
 
 
 @pytest.fixture(autouse=True)
-def in_process(monkeypatch: pytest.MonkeyPatch) -> None:
+def ran(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     # The server runs each call in a new process; the tests run it in this one, so that a
-    # patch of peermesh code applies to the call.
-    monkeypatch.setattr(mcp_server, "_runner", tools.run)
+    # patch of peermesh code applies to the call. A test sets the version that the call ran.
+    version = {"version": peermesh.__version__}
+
+    def run_here(
+        tool: str, arguments: dict[str, Any], env: Any, *, codex_thread: bool, cwd: str | None
+    ) -> dict[str, Any]:
+        reply = mcp_server._in_this_process(
+            tool, arguments, env, codex_thread=codex_thread, cwd=cwd
+        )
+        return reply | version
+
+    monkeypatch.setattr(mcp_server, "_runner", run_here)
     monkeypatch.setattr(mcp_server, "_noticed", set())
+    return version
 
 
 @pytest.fixture
@@ -199,10 +210,10 @@ def _call(name: str, arguments: dict[str, Any]) -> Any:
     return asyncio.run(run())
 
 
-def test_a_tool_result_says_when_a_newer_peermesh_is_installed(
-    ctx: Mesh, monkeypatch: pytest.MonkeyPatch
+def test_the_first_result_from_a_newer_peermesh_says_that_the_tool_list_is_old(
+    ctx: Mesh, ran: dict[str, str]
 ) -> None:
-    monkeypatch.setattr(mcp_server, "_installed_version", lambda: "9.9.9")
+    ran["version"] = "9.9.9"
     result = _call("peers_list", {"scope": "all"})
     notice = text.STALE_SERVER.format(running=peermesh.__version__, installed="9.9.9")
     assert result.content[-1].text == notice
@@ -210,50 +221,40 @@ def test_a_tool_result_says_when_a_newer_peermesh_is_installed(
     # rows from "result", which keeps its shape.
     assert result.structured_content["notice"] == notice
     assert [p["name"] for p in result.structured_content["result"]] == ["codex-x"]
-    # The calls run the installed code, so the note comes one time for each installed version.
-    again = _call("peers_list", {"scope": "all"})
-    assert "notice" not in again.structured_content
-    monkeypatch.setattr(mcp_server, "_installed_version", lambda: "9.9.10")
+    # The note comes one time for each newer version.
+    assert "notice" not in _call("peers_list", {"scope": "all"}).structured_content
+    ran["version"] = "9.9.10"
     assert "9.9.10" in _call("peers_list", {"scope": "all"}).structured_content["notice"]
 
 
-def test_a_failed_tool_call_says_when_a_newer_peermesh_is_installed(
-    ctx: Mesh, monkeypatch: pytest.MonkeyPatch
+def test_a_failed_call_from_a_newer_peermesh_carries_the_note(
+    ctx: Mesh, ran: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(mcp_server, "_installed_version", lambda: "9.9.9")
+    ran["version"] = "9.9.9"
     notice = text.STALE_SERVER.format(running=peermesh.__version__, installed="9.9.9")
+    for name, arguments in (("peers_list", {"scope": "galaxy"}), ("peers_status", {})):
+        monkeypatch.setattr(mcp_server, "_noticed", set())
+        result = _call(name, arguments)
+        assert result.is_error, name
+        # A missing argument fails before the tool runs, so it has no version and no note.
+        assert result.content[0].text.endswith(notice) == (name == "peers_list"), name
 
+
+def test_a_crash_keeps_the_generic_text(ctx: Mesh, monkeypatch: pytest.MonkeyPatch) -> None:
     def crash(msg_id: str) -> dict[str, Any]:
         raise PermissionError("the ledger cannot be read")
 
     monkeypatch.setattr(ctx, "track", crash)
-    calls = (
-        ("peers_list", {"scope": "galaxy"}),  # an error of peermesh
-        ("peers_status", {}),  # an argument that is missing
-        ("peers_track", {"msg_id": "a" * 32}),  # a crash
-    )
-    for name, arguments in calls:
-        monkeypatch.setattr(mcp_server, "_noticed", set())
-        result = _call(name, arguments)
-        assert result.is_error, name
-        assert result.content[0].text.endswith(notice), name
-    # A crash keeps the generic text of the library and does not show the exception.
-    crashed = _call("peers_track", {"msg_id": "a" * 32}).content[0].text
-    assert crashed.startswith("Error executing tool peers_track") and "ledger" not in crashed
+    crashed = _call("peers_track", {"msg_id": "a" * 32})
+    assert crashed.is_error
+    assert crashed.content[0].text.startswith("Error executing tool peers_track")
+    assert "ledger" not in crashed.content[0].text
 
 
-def test_a_tool_result_has_no_note_while_the_installed_peermesh_is_the_same(
-    ctx: Mesh, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    for installed in (peermesh.__version__, None):
-        monkeypatch.setattr(mcp_server, "_installed_version", lambda v=installed: v)
-        result = _call("peers_list", {"scope": "all"})
-        assert all("reconnect" not in getattr(c, "text", "") for c in result.content)
-        assert "notice" not in result.structured_content
-
-
-def test_the_installed_version_comes_from_the_imported_package_file() -> None:
-    assert mcp_server._installed_version() == peermesh.__version__
+def test_a_result_from_the_same_peermesh_has_no_note(ctx: Mesh) -> None:
+    result = _call("peers_list", {"scope": "all"})
+    assert all("peermesh: This MCP server" not in getattr(c, "text", "") for c in result.content)
+    assert "notice" not in result.structured_content
 
 
 def test_an_error_reaches_the_agent_with_its_text(ctx: Mesh) -> None:
@@ -265,66 +266,90 @@ def test_an_error_reaches_the_agent_with_its_text(ctx: Mesh) -> None:
     )
 
 
-def _fake_peermesh(root: Path, body: str) -> Path:
+def _fake_install(root: Path, tools_py: str) -> list[str]:
+    """A command that runs a peermesh from `root`, which stands in for a new installation."""
     package = root / "peermesh"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text("")
-    (package / "tools.py").write_text(body)
-    return root
+    (package / "tools.py").write_text(tools_py)
+    start = (
+        f"import sys, runpy; sys.path.insert(0, {str(root)!r}); "
+        "runpy.run_module('peermesh.tools', run_name='__main__')"
+    )
+    return [sys.executable, "-I", "-c", start]
 
 
-def test_a_call_in_a_new_process_gives_the_refusal_text() -> None:
-    with pytest.raises(PeerError, match="The scope is not valid"):
-        mcp_server._in_new_process(
-            "peers_list", {"scope": "galaxy"}, os.environ, codex_thread=False, cwd=None
-        )
+def _new_process(arguments: dict[str, Any] | None = None, **env: str) -> dict[str, Any]:
+    return mcp_server._in_new_process(
+        "peers_list", arguments or {}, {**os.environ, **env}, codex_thread=False, cwd=None
+    )
 
 
-def test_a_call_in_a_new_process_runs_the_code_that_is_installed_now(
+def test_a_call_in_a_new_process_gives_the_refusal_text_and_the_version() -> None:
+    reply = _new_process({"scope": "galaxy"})
+    assert reply == {
+        "error": "The scope is not valid. Use 'repo', 'worktree' or 'all'.",
+        "version": peermesh.__version__,
+    }
+
+
+def test_a_call_in_a_new_process_runs_the_installation_of_the_moment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # New files in the folder that the server loaded peermesh from stand in for an upgrade.
-    root = _fake_peermesh(tmp_path, 'import sys\nsys.stdout.write(\'{"result": "new code"}\')\n')
-    (root / "peermesh" / "tools.py").write_text(
-        'import sys\ndef main():\n    sys.stdout.write(\'{"result": "new code"}\')\n'
-    )
-    monkeypatch.setattr(mcp_server, "_package_root", lambda: str(root))
-    result = mcp_server._in_new_process("peers_list", {}, os.environ, codex_thread=False, cwd=None)
-    assert result == "new code"
+    body = 'import sys\nsys.stdout.write(\'{"result": "new code", "version": "9.9.9"}\')\n'
+    monkeypatch.setattr(mcp_server, "_command", lambda: _fake_install(tmp_path, body))
+    assert _new_process() == {"result": "new code", "version": "9.9.9"}
 
 
 def test_a_call_in_a_new_process_ignores_a_peermesh_module_in_the_folder_or_pythonpath(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A module that a session can write must not run in place of peermesh, as any session.
-    folder = _fake_peermesh(tmp_path / "folder", "raise SystemExit('the folder ran')\n")
-    elsewhere = _fake_peermesh(tmp_path / "elsewhere", "raise SystemExit('PYTHONPATH ran')\n")
-    monkeypatch.chdir(folder)
-    for pythonpath in (".", "", f"{elsewhere}", f":{elsewhere}"):
-        env = {**os.environ, "PYTHONPATH": pythonpath}
-        with pytest.raises(PeerError, match="The scope is not valid"):
-            mcp_server._in_new_process(
-                "peers_list", {"scope": "galaxy"}, env, codex_thread=False, cwd=None
-            )
+    for name in ("folder", "elsewhere"):
+        package = tmp_path / name / "peermesh"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text(f"raise SystemExit('{name} ran')\n")
+    monkeypatch.chdir(tmp_path / "folder")
+    elsewhere = str(tmp_path / "elsewhere")
+    for pythonpath in (".", "", elsewhere, f":{elsewhere}"):
+        reply = _new_process({"scope": "galaxy"}, PYTHONPATH=pythonpath)
+        assert reply["version"] == peermesh.__version__, pythonpath
 
 
 def test_a_crash_in_the_new_process_is_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = _fake_peermesh(tmp_path, "raise SystemExit(3)\n")
-    monkeypatch.setattr(mcp_server, "_package_root", lambda: str(root))
-    with pytest.raises(RuntimeError, match="ended with code 3"):
-        mcp_server._in_new_process("peers_list", {}, os.environ, codex_thread=False, cwd=None)
-
-
-def test_the_package_root_is_the_folder_of_the_loaded_package() -> None:
-    assert (Path(mcp_server._package_root()) / "peermesh" / "__init__.py").samefile(
-        peermesh.__file__
+    monkeypatch.setattr(
+        mcp_server, "_command", lambda: _fake_install(tmp_path, "raise SystemExit(3)\n")
     )
+    with pytest.raises(RuntimeError, match="ended with code 3"):
+        _new_process()
 
 
 def test_a_codex_thread_reaches_the_new_process(tmp_path: Path) -> None:
     # The new process refuses to register a Codex thread whose folder the call does not give.
     env = {**os.environ, "CODEX_THREAD_ID": "T-new", "PEERMESH_HOME": str(tmp_path / "pm")}
-    with pytest.raises(PeerError, match="does not give its folder"):
-        mcp_server._in_new_process("peers_list", {}, env, codex_thread=True, cwd=None)
+    reply = mcp_server._in_new_process("peers_list", {}, env, codex_thread=True, cwd=None)
+    assert "does not give its folder" in reply["error"]
+
+
+def test_a_call_runs_here_with_a_note_when_the_installation_cannot_run(
+    ctx: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(mcp_server, "_runner", mcp_server._in_new_process)
+    for command, reason in (
+        (["/nonexistent/python"], "its Python interpreter cannot start"),
+        (
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                "raise ModuleNotFoundError(\"No module named 'peermesh'\")",
+            ],
+            "the environment does not hold peermesh",
+        ),
+    ):
+        monkeypatch.setattr(mcp_server, "_command", lambda c=command: c)
+        result = _call("peers_list", {"scope": "all"})
+        assert [p["name"] for p in result.structured_content["result"]] == ["codex-x"]
+        assert reason in result.structured_content["notice"]
