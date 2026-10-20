@@ -119,10 +119,6 @@ class _Runner(Protocol):
     ) -> Any: ...
 
 
-# A tool call that waits for `codex queue` can take 30 seconds.
-TOOL_TIMEOUT = 120
-
-
 def _in_new_process(
     tool: str,
     arguments: dict[str, Any],
@@ -133,19 +129,24 @@ def _in_new_process(
 ) -> Any:
     """Run the tool in a new process of the installed code, as the session that `env` names.
 
-    The new process is a child of this one, so the session host is still its ancestor.
+    The new process is a child of this one, so the session host is still its ancestor. It has
+    no time limit: a send to several Codex sessions can wait 30 seconds for each of them.
     """
     call = json.dumps(
         {"tool": tool, "arguments": arguments, "codex_thread": codex_thread, "cwd": cwd}
     )
-    # -P keeps the folder of the session off the import path; it can hold a module "peermesh".
+    # -I ignores PYTHONPATH and the folder of the session, which can hold a module "peermesh".
+    # The package comes only from the folder that this process loaded it from, and an upgrade
+    # replaces the files there.
+    start = (
+        f"import sys; sys.path.insert(0, {_package_root()!r}); import peermesh.tools as t; t.main()"
+    )
     done = subprocess.run(
-        [sys.executable, "-P", "-m", "peermesh.tools"],
+        [sys.executable, "-I", "-c", start],
         input=call,
         capture_output=True,
         text=True,
         env=dict(env),
-        timeout=TOOL_TIMEOUT,
         check=False,
     )
     sys.stderr.write(done.stderr)
@@ -158,6 +159,11 @@ def _in_new_process(
     if "error" in reply:
         raise PeerError(str(reply["error"]))
     return reply.get("result")
+
+
+def _package_root() -> str:
+    """The folder that holds the peermesh package of this process."""
+    return str(Path(peermesh.__file__).resolve().parent.parent)
 
 
 _runner: _Runner = _in_new_process

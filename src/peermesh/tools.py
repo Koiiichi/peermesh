@@ -1,8 +1,9 @@
 """The work of each peermesh MCP tool, which the MCP server runs in a new process for each call.
 
 A Claude Code or Codex session keeps its MCP server across an upgrade, and neither client starts
-an interactive session's server again after it exits. The server runs this module for each call
-(`python -P -m peermesh.tools`), so each call runs the installed code.
+an interactive session's server again after it exits. The server runs this module for each call,
+in isolated mode and from the folder that it loaded peermesh from, so each call runs the
+installed code.
 """
 
 from __future__ import annotations
