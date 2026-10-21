@@ -23,6 +23,9 @@ STUB = r"""#!/usr/bin/env python3
 import json, os, sys
 log = os.environ["STUB_LOG"]
 args = sys.argv[1:]
+if os.environ.get("STUB_CWD_LOG"):
+    with open(os.environ["STUB_CWD_LOG"], "a") as fh:
+        fh.write(args[0] + " " + os.getcwd() + "\n")
 if args[:1] == ["queue"]:
     with open(log, "a") as fh:
         fh.write(json.dumps({"argv": args}) + "\n")
@@ -138,6 +141,47 @@ def test_codex_queue_idle_is_delivered(make_peer: Callable[..., Peer], stub_code
     outcome = CodexTransport().deliver(b, "RENDERED", new_message(a, b, "hello"))
     assert outcome.status == "delivered"
     assert _log(stub_codex) == [{"argv": ["queue", "--thread", "t-1", "--message", "RENDERED"]}]
+
+
+@pytest.fixture
+def deleted_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Run the test in a folder that no longer exists, and record the folder of each codex run."""
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()
+    log = tmp_path / "cwd.log"
+    monkeypatch.setenv("STUB_CWD_LOG", str(log))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    return log
+
+
+def test_codex_queue_runs_in_the_folder_of_the_target(
+    make_peer: Callable[..., Peer], stub_codex: Path, deleted_cwd: Path, tmp_path: Path
+) -> None:
+    folder = tmp_path / "project"
+    folder.mkdir()
+    a, b = _pair(make_peer, status="idle", cwd=str(folder))
+    assert CodexTransport().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
+    assert deleted_cwd.read_text() == f"queue {os.path.realpath(folder)}\n"
+
+
+def test_codex_queue_runs_in_home_when_the_target_folder_is_gone(
+    make_peer: Callable[..., Peer], stub_codex: Path, deleted_cwd: Path, tmp_path: Path
+) -> None:
+    a, b = _pair(make_peer, status="idle", cwd=str(tmp_path / "deleted-project"))
+    assert CodexTransport().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
+    assert deleted_cwd.read_text() == f"queue {os.path.realpath(tmp_path)}\n"
+
+
+def test_steer_proxy_runs_in_home(
+    make_peer: Callable[..., Peer], stub_codex: Path, deleted_cwd: Path, tmp_path: Path
+) -> None:
+    _daemon_socket()
+    a, b = _pair(make_peer, status="busy")
+    msg = new_message(a, b, "stop", kind="request", urgency="now")
+    assert CodexTransport().deliver(b, "R", msg).status == "delivered"
+    assert deleted_cwd.read_text() == f"app-server {os.path.realpath(tmp_path)}\n"
 
 
 def test_codex_queue_busy_is_queued(make_peer: Callable[..., Peer], stub_codex: Path) -> None:

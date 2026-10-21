@@ -29,6 +29,18 @@ def codex_bin() -> str | None:
     return shutil.which("codex")
 
 
+def _start_folder(preferred: str | None = None) -> str:
+    """A folder that exists, for a codex command to start in: preferred, else the home folder.
+
+    Codex reads its configuration for the folder that it starts in, and stops with "failed to
+    resolve config cwd" when that folder does not exist. The folder of this process can be gone:
+    a session keeps the folder that it started in after someone deletes it.
+    """
+    if preferred and os.path.isdir(preferred):
+        return preferred
+    return str(Path.home())
+
+
 def daemon_socket() -> Path:
     return paths.codex_home() / "app-server-control" / "app-server-control.sock"
 
@@ -257,6 +269,7 @@ class AppServerSteerer:
         # Codex 0.155 serves newline-delimited JSON, which `app-server proxy` relays.
         proc = subprocess.Popen(
             [self.exe, "app-server", "proxy"],
+            cwd=_start_folder(),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -325,6 +338,8 @@ class CodexTransport:
         try:
             result = subprocess.run(
                 [exe, "queue", "--thread", target.endpoint, "--message", rendered],
+                # Codex reads project configuration for this folder; the target thread runs there.
+                cwd=_start_folder(target.cwd),
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
