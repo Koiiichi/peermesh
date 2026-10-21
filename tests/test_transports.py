@@ -16,6 +16,7 @@ import pytest
 from peermesh import paths
 from peermesh.envelope import new_message
 from peermesh.registry import Peer, proc_start
+from peermesh.transports import codex
 from peermesh.transports.claude import CLAUDE_HOLD_NOTE, ClaudeSocketTransport
 from peermesh.transports.codex import AppServerSteerer, CodexTransport, _WsRpc
 
@@ -172,6 +173,27 @@ def test_codex_queue_runs_in_home_when_the_target_folder_is_gone(
     a, b = _pair(make_peer, status="idle", cwd=str(tmp_path / "deleted-project"))
     assert CodexTransport().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
     assert deleted_cwd.read_text() == f"queue {os.path.realpath(tmp_path)}\n"
+
+
+def test_codex_queue_runs_in_root_when_home_is_gone(
+    make_peer: Callable[..., Peer],
+    stub_codex: Path,
+    deleted_cwd: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
+    a, b = _pair(make_peer, status="idle", cwd=str(tmp_path / "deleted-project"))
+    assert CodexTransport().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
+    assert deleted_cwd.read_text() == "queue /\n"
+
+
+def test_steer_proxy_that_cannot_start_is_not_steered(
+    stub_codex: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _daemon_socket()
+    monkeypatch.setattr(codex, "_start_folder", lambda preferred=None: str(tmp_path / "missing"))
+    assert AppServerSteerer(os.environ["PEERMESH_CODEX"]).steer("t-1", "x") == "not_steered"
 
 
 def test_steer_proxy_runs_in_home(
