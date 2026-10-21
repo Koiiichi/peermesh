@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -133,6 +134,23 @@ def test_claude_native_status_mapping() -> None:
     assert claude_native_status(12) == "idle"
     assert claude_native_status(13) is None
     assert claude_native_status(14) is None
+
+
+def test_claude_session_record_is_read_as_utf8() -> None:
+    # Claude Code writes UTF-8. Under a Latin-1 locale, Python's default reads "é" as "Ã©".
+    locales = subprocess.run(["locale", "-a"], capture_output=True, text=True).stdout
+    if "en_US.ISO8859-1" not in locales:
+        pytest.skip("the en_US.ISO8859-1 locale is not installed")
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    record = {"sessionId": "S", "name": "café", "messagingSocketPath": "/tmp/café.sock"}
+    (sessions / "41.json").write_bytes(json.dumps(record, ensure_ascii=False).encode())
+    probe = "from peermesh import registry; print(ascii(registry.claude_session(41)))"
+    env = {**os.environ, "LC_ALL": "en_US.ISO8859-1", "PYTHONUTF8": "0"}
+    out = subprocess.run(
+        [sys.executable, "-c", probe], env=env, capture_output=True, text=True, check=True
+    ).stdout
+    assert out.strip() == ascii(record)
 
 
 def rename(pid: int, name: str, source: str | None = "user") -> None:

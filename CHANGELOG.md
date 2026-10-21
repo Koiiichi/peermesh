@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- peermesh reads Claude Code's session records as UTF-8. Under a locale with another encoding, such as `en_US.ISO8859-1`, a session name or an inbox socket path with a character outside ASCII was read wrong: a name that the user gave, such as `café`, became `cafÃ©`, and a message to a session with such a socket path could not be delivered.
+
 ## 0.5.5 — 2026-10-21
 
 A message to a Codex session works when the folder of the sending session was deleted, and `peers list` works in your own terminal.
