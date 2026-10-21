@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.5.5 — 2026-10-21
+
+A message to a Codex session works when the folder of the sending session was deleted, and `peers list` works in your own terminal.
+
+### Upgrade
+
+1. Pull: `git pull`. No reinstall is necessary. The hooks of `peers install` and of the plugin, and the Codex rule, are the same as in 0.5.4, so Codex does not ask you to trust the hooks again.
+2. Nothing else for a session that started with 0.5.4: it gets this version at its next peermesh tool call. Reconnect a session that started before 0.5.4: in Claude Code, run `/mcp`, select `peermesh` and choose Reconnect.
+3. If you use the Codex plugin, run `codex plugin add peermesh@peermesh` to show the new version; its hooks and tools are unchanged.
 
 ### Changed
 

@@ -1,3 +1,3 @@
 """Local peer messaging between Claude Code and Codex sessions."""
 
-__version__ = "0.5.4"
+__version__ = "0.5.5"
