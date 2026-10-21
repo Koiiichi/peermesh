@@ -81,8 +81,14 @@ def test_claude_version_floor() -> None:
 
 
 def test_claude_session_record_fields() -> None:
-    files = glob.glob(str(REAL_HOME / ".claude" / "sessions" / "*.json"))
-    if not files:
+    records = []
+    for name in glob.glob(str(REAL_HOME / ".claude" / "sessions" / "*.json")):
+        try:
+            records.append(json.loads(Path(name).read_text()))
+        except (OSError, ValueError):
+            continue  # the session ended, or is writing the file, while the test reads it
+    if not records:
         pytest.skip("no live Claude Code session")
-    data = json.loads(Path(files[0]).read_text())
-    assert {"pid", "sessionId", "messagingSocketPath", "status"} <= set(data)
+    assert all({"pid", "sessionId", "status"} <= set(r) for r in records)
+    # Some live sessions have no inbox socket, so one record with every field shows the format.
+    assert any("messagingSocketPath" in r for r in records)
