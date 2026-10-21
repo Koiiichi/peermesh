@@ -138,15 +138,17 @@ def test_claude_native_status_mapping() -> None:
 
 def test_claude_session_record_is_read_as_utf8() -> None:
     # Claude Code writes UTF-8. Under a Latin-1 locale, Python's default reads "é" as "Ã©".
-    locales = subprocess.run(["locale", "-a"], capture_output=True, text=True).stdout
-    if "en_US.ISO8859-1" not in locales:
-        pytest.skip("the en_US.ISO8859-1 locale is not installed")
+    locales = subprocess.run(["locale", "-a"], capture_output=True, text=True).stdout.split()
+    # macOS lists en_US.ISO8859-1, Linux en_US.iso88591.
+    latin1 = [n for n in locales if n.lower().replace("-", "") == "en_us.iso88591"]
+    if not latin1:
+        pytest.skip("no en_US Latin-1 locale is installed")
     sessions = paths.claude_dir() / "sessions"
     sessions.mkdir(parents=True)
     record = {"sessionId": "S", "name": "café", "messagingSocketPath": "/tmp/café.sock"}
     (sessions / "41.json").write_bytes(json.dumps(record, ensure_ascii=False).encode())
     probe = "from peermesh import registry; print(ascii(registry.claude_session(41)))"
-    env = {**os.environ, "LC_ALL": "en_US.ISO8859-1", "PYTHONUTF8": "0"}
+    env = {**os.environ, "LC_ALL": latin1[0], "PYTHONUTF8": "0"}
     out = subprocess.run(
         [sys.executable, "-c", probe], env=env, capture_output=True, text=True, check=True
     ).stdout
