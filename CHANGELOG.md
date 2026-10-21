@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- `peers list` works outside an agent session, for example in your own terminal or in a `!` command in Claude Code: it lists every live session by name. Before, it stopped with "This process is not inside a Claude Code or Codex session". Outside a session, `--scope repo` and `--scope worktree` still give an error, because they need a session to compare with.
+
 ## 0.5.4 — 2026-10-19
 
 A running session gets an upgrade at its next peermesh tool call, with no reconnect.

@@ -65,8 +65,29 @@ def test_outside_session_exit_code(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.delenv("CODEX_THREAD_ID")
-    assert cli.main(["list"]) == 2
+    assert cli.main(["send", "claude-p", "--body", "hi there"]) == 2
     assert "not inside" in capsys.readouterr().err
+
+
+def test_list_outside_session_shows_every_session(
+    setup: tuple[Mesh, Fake],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    assert cli.main(["--json", "list"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert [r["name"] for r in rows] == ["claude-p", "codex-me"]
+
+
+def test_list_outside_session_refuses_a_narrow_scope(
+    setup: tuple[Mesh, Fake],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("CODEX_THREAD_ID")
+    assert cli.main(["list", "--scope", "repo"]) == 2
+    assert "--scope all" in capsys.readouterr().err
 
 
 def test_log_shows_recent(setup: tuple[Mesh, Fake], capsys: pytest.CaptureFixture[str]) -> None:

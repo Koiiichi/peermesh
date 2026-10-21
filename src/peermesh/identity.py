@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from peermesh import paths
-from peermesh.errors import NoInboxError, PeerError
+from peermesh.errors import NoInboxError, NoSessionError, PeerError
 from peermesh.registry import Peer, Runtime, proc_start, repo_info
 from peermesh.transports.codex import daemon_socket
 
@@ -92,7 +92,7 @@ def session_from_env(env: Mapping[str, str], start: int | None = None) -> tuple[
     if codex_id:
         candidates.append(("codex", codex_id))
     if not candidates:
-        raise PeerError(
+        raise NoSessionError(
             "This process is not inside a Claude Code or Codex session. "
             "Run this command from the shell of an agent session."
         )
