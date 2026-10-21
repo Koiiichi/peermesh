@@ -6,6 +6,10 @@
 
 - `peers list` works outside an agent session, for example in your own terminal or in a `!` command in Claude Code: it lists every live session by name. Before, it stopped with "This process is not inside a Claude Code or Codex session". Outside a session, `--scope repo` and `--scope worktree` still give an error, because they need a session to compare with.
 
+### Fixed
+
+- A message to a Codex session no longer fails with "codex queue failed: Error: failed to resolve config cwd: No such file or directory" when the folder that the sending session started in was deleted. peermesh now runs `codex queue` in the folder of the receiving Codex session, or in your home folder when that folder does not exist either, and runs `codex app-server proxy` in your home folder.
+
 ## 0.5.4 — 2026-10-19
 
 A running session gets an upgrade at its next peermesh tool call, with no reconnect.
