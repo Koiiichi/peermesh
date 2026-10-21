@@ -89,7 +89,7 @@ def _session_record(path: Path) -> dict[str, Any] | None:
     """
     for _ in range(5):
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return None
         except ValueError:
