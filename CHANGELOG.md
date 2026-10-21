@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- A message to a Codex session no longer fails with "codex queue failed: Error: failed to resolve config cwd: No such file or directory" when the folder that the sending session started in was deleted. peermesh now runs `codex queue` in the folder of the receiving Codex session, or in your home folder when that folder does not exist either, and runs `codex app-server proxy` in your home folder.
+- A message to a Codex session no longer fails with "codex queue failed: Error: failed to resolve config cwd: No such file or directory" when the folder that the sending session started in was deleted. peermesh now runs `codex queue` in the folder of the receiving Codex session, or in your home folder when that folder does not exist either, and runs `codex app-server proxy` in your home folder. The root folder is the last fallback. When the proxy cannot start, an urgent message goes to the queue.
 
 ## 0.5.4 — 2026-10-19
 

@@ -36,15 +36,17 @@ def codex_bin() -> str | None:
 
 
 def _start_folder(preferred: str | None = None) -> str:
-    """A folder that exists, for a codex command to start in: preferred, else the home folder.
+    """A folder that exists for a codex command to start in.
 
-    Codex reads its configuration for the folder that it starts in, and stops with "failed to
-    resolve config cwd" when that folder does not exist. The folder of this process can be gone:
-    a session keeps the folder that it started in after someone deletes it.
+    The folder is preferred, else the home folder, else the root folder. Codex reads its
+    configuration for the folder that it starts in, and stops with "failed to resolve config cwd"
+    when that folder does not exist. The folder of this process can be gone: a session keeps the
+    folder that it started in after someone deletes it.
     """
-    if preferred and os.path.isdir(preferred):
-        return preferred
-    return str(Path.home())
+    for folder in (preferred, str(Path.home())):
+        if folder and os.path.isdir(folder):
+            return folder
+    return "/"
 
 
 def daemon_socket() -> Path:
@@ -273,14 +275,18 @@ class AppServerSteerer:
             finally:
                 ws.close()
         # Codex 0.155 serves newline-delimited JSON, which `app-server proxy` relays.
-        proc = subprocess.Popen(
-            [self.exe, "app-server", "proxy"],
-            cwd=_start_folder(),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
+        try:
+            proc = subprocess.Popen(
+                [self.exe, "app-server", "proxy"],
+                cwd=_start_folder(),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        except OSError:
+            # Nothing was sent, so the queue can still deliver the message.
+            return "not_steered"
         try:
             return self._steer(_Rpc(proc, self.timeout), thread_id, text)
         finally:
