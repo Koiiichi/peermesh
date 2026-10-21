@@ -195,7 +195,7 @@ def remove_block(content: str) -> str:
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     if not isinstance(data, dict):
@@ -215,7 +215,7 @@ def _write(path: Path, content: str, dry_run: bool, actions: list[str]) -> None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     _backup(path)
-    path.write_text(content)
+    path.write_text(content, encoding="utf-8")
 
 
 def _dump(config: dict[str, Any]) -> str:
@@ -230,7 +230,7 @@ def _check_json(path: Path) -> None:
 
 
 def _check_markers(path: Path) -> None:
-    content = path.read_text() if path.exists() else ""
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
     begins, ends = content.count(BEGIN), content.count(END)
     misordered = begins == 1 and ends == 1 and content.index(BEGIN) > content.index(END)
     if begins != ends or begins > 1 or misordered:
@@ -284,14 +284,14 @@ def install(
         merged = merge_hooks(_read_json(settings), peers, "claude")
         _write(settings, _dump(merged), dry_run, actions)
         md = paths.claude_dir() / "CLAUDE.md"
-        current = md.read_text() if md.exists() else ""
+        current = md.read_text(encoding="utf-8") if md.exists() else ""
         _write(md, upsert_block(current, text.CLAUDE_BLOCK), dry_run, actions)
     if "codex" in runtimes:
         hooks_file = paths.codex_home() / "hooks.json"
         merged = merge_hooks(_read_json(hooks_file), peers, "codex")
         _write(hooks_file, _dump(merged), dry_run, actions)
         agents = paths.codex_home() / "AGENTS.md"
-        current = agents.read_text() if agents.exists() else ""
+        current = agents.read_text(encoding="utf-8") if agents.exists() else ""
         _write(agents, upsert_block(current, text.CODEX_BLOCK), dry_run, actions)
         _write(paths.codex_home() / "rules" / "peermesh.rules", CODEX_RULE, dry_run, actions)
     return actions
@@ -309,7 +309,7 @@ def uninstall(runtimes: set[str], *, runner: Runner = subprocess.run) -> list[st
             _write(settings, _dump(strip_hooks(_read_json(settings))), False, actions)
         md = paths.claude_dir() / "CLAUDE.md"
         if md.exists():
-            _write(md, remove_block(md.read_text()), False, actions)
+            _write(md, remove_block(md.read_text(encoding="utf-8")), False, actions)
         runner(
             ["claude", "mcp", "remove", "--scope", "user", "peermesh"],
             capture_output=True,
@@ -323,7 +323,7 @@ def uninstall(runtimes: set[str], *, runner: Runner = subprocess.run) -> list[st
             _write(hooks_file, _dump(strip_hooks(_read_json(hooks_file))), False, actions)
         agents = paths.codex_home() / "AGENTS.md"
         if agents.exists():
-            _write(agents, remove_block(agents.read_text()), False, actions)
+            _write(agents, remove_block(agents.read_text(encoding="utf-8")), False, actions)
         rule = paths.codex_home() / "rules" / "peermesh.rules"
         if rule.exists():
             rule.unlink()
