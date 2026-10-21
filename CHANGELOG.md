@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- `peers install`, `peers uninstall` and `peers doctor` read and write `CLAUDE.md`, `AGENTS.md`, `settings.json` and `hooks.json` as UTF-8. Under a locale whose encoding cannot read a character in those files, such as `en_US.US-ASCII`, `peers install` refused a valid `settings.json` as "not a valid JSON object", and a write could change text outside ASCII.
 - peermesh reads Claude Code's session records as UTF-8. Under a locale with another encoding, such as `en_US.ISO8859-1`, a session name or an inbox socket path with a character outside ASCII was read wrong: a name that the user gave, such as `café`, became `cafÃ©`, and a message to a session with such a socket path could not be delivered.
 
 ## 0.5.5 — 2026-10-21

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -82,6 +84,38 @@ def test_install_and_uninstall_roundtrip() -> None:
     assert json.loads((paths.claude_dir() / "settings.json").read_text()) == {}
     assert not (paths.codex_home() / "rules" / "peermesh.rules").exists()
     assert any(c[:3] == ["claude", "mcp", "remove"] for c in runner.calls)
+
+
+_PROBE = """
+import subprocess
+from peermesh import install
+run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "2.1.285 (Claude Code)", "")
+which = lambda name: "/usr/local/bin/" + name
+install.install({"claude", "codex"}, dry_run=False, runner=run, which=which)
+install.uninstall({"claude", "codex"}, runner=run)
+"""
+
+
+def test_install_keeps_text_outside_ascii_under_an_ascii_locale() -> None:
+    # The files are UTF-8 whatever the locale of the process that runs peers install.
+    locales = subprocess.run(["locale", "-a"], capture_output=True, text=True).stdout.split()
+    if "en_US.US-ASCII" not in locales:
+        pytest.skip("the en_US.US-ASCII locale is not installed")
+    files = {
+        paths.claude_dir() / "CLAUDE.md": "# Règles de Zoë\n",
+        paths.claude_dir() / "settings.json": '{"statusLine": {"command": "echo café"}}\n',
+        paths.codex_home() / "AGENTS.md": "# Ünïcode rules\n",
+    }
+    for path, content in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content.encode())
+    env = {**os.environ, "LC_ALL": "en_US.US-ASCII", "PYTHONUTF8": "0"}
+    subprocess.run([sys.executable, "-c", _PROBE], env=env, check=True)
+    assert json.loads((paths.claude_dir() / "settings.json").read_bytes()) == {
+        "statusLine": {"command": "echo café"}
+    }
+    for path in (paths.claude_dir() / "CLAUDE.md", paths.codex_home() / "AGENTS.md"):
+        assert path.read_bytes() == files[path].encode()
 
 
 def test_dry_run_writes_nothing() -> None:
