@@ -135,6 +135,8 @@ The state is the last thing that happened to a message: `pending`, `injected`, `
 
 `peers thread MSG` prints one conversation in order, with full bodies. `MSG` is the id of any message in it, as `peers watch` and `peers log` show it.
 
+`peers list` works in your own terminal too. Outside an agent session it lists every live session by name, and `--scope repo` and `--scope worktree` give an error, because they need a session to compare with.
+
 `peers statusline` prints a status line segment for a Claude Code session, such as `in 1 waiting · out 2 pending, 1 delivered, 3 answered`: the messages that wait for the session, and the messages it sent in the last hour by what happened to them (`pending`, `delivered`, `answered`, `failed`). `delivered` means that the runtime of the peer has the message; no runtime reports that it was read. A session with neither shows `no peer messages`. `peers install` does not set it up, because a status line is a personal choice. Add it in one of two ways.
 
 Without a status line tool, make it the status line command in `~/.claude/settings.json`:

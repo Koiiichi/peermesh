@@ -13,7 +13,7 @@ from typing import Any
 
 from peermesh import paths, views
 from peermesh.envelope import short_id
-from peermesh.errors import PeerError
+from peermesh.errors import NoSessionError, PeerError
 from peermesh.service import Mesh, SendResult
 
 
@@ -141,7 +141,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="print JSON")
     sub = p.add_subparsers(dest="cmd", required=True)
     ls = sub.add_parser("list")
-    ls.add_argument("--scope", choices=["repo", "worktree", "all"], default="repo")
+    ls.add_argument(
+        "--scope",
+        choices=["repo", "worktree", "all"],
+        help="default: repo; outside an agent session, all",
+    )
     snd = sub.add_parser("send")
     snd.add_argument("targets", nargs="+")
     snd.add_argument("--body", required=True, help="text, or - for stdin")
@@ -241,12 +245,21 @@ def main(argv: list[str] | None = None) -> int:
             ]
             _print(args, data, lines)
             return 0
-        me = mesh.whoami()
-        if args.cmd == "whoami":
-            _print(args, me.to_json(), [f"{me.name}  ({me.id})"])
-            return 0
         if args.cmd == "list":
-            peers = mesh.list_peers(me, args.scope)
+            try:
+                me = mesh.whoami()
+            except NoSessionError:
+                if args.scope not in (None, "all"):
+                    raise PeerError(
+                        f"--scope {args.scope} needs an agent session. "
+                        "Run it from the shell of an agent session, or use --scope all."
+                    ) from None
+                me = None
+            peers = (
+                mesh.list_peers(me, args.scope or "repo")
+                if me
+                else sorted(mesh.all_peers(), key=lambda p: p.name)
+            )
             _print(
                 args,
                 [p.to_json() for p in peers],
@@ -256,8 +269,12 @@ def main(argv: list[str] | None = None) -> int:
                     f"{p.branch or '-':20} {p.worktree or p.cwd}"
                     for p in peers
                 ]
-                or ["No other live peer in this scope."],
+                or ["No other live peer in this scope." if me else "No live session."],
             )
+            return 0
+        me = mesh.whoami()
+        if args.cmd == "whoami":
+            _print(args, me.to_json(), [f"{me.name}  ({me.id})"])
             return 0
         if args.cmd == "send":
             urgency = "now" if args.urgent else "normal"
