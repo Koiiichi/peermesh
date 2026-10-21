@@ -184,6 +184,32 @@ def test_steer_proxy_runs_in_home(
     assert deleted_cwd.read_text() == f"app-server {os.path.realpath(tmp_path)}\n"
 
 
+@pytest.mark.parametrize("via", ["PEERMESH_CODEX", "PATH"])
+def test_relative_codex_path_still_runs_in_another_folder(
+    make_peer: Callable[..., Peer],
+    stub_codex: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    via: str,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    if via == "PATH":
+        monkeypatch.delenv("PEERMESH_CODEX")
+        # The stub's shebang finds python3 through the rest of PATH.
+        monkeypatch.setenv("PATH", "bin" + os.pathsep + os.environ["PATH"])
+    else:
+        monkeypatch.setenv("PEERMESH_CODEX", "bin/codex")
+    folder = tmp_path / "project"
+    folder.mkdir()
+    a, b = _pair(make_peer, status="idle", cwd=str(folder))
+    assert CodexTransport().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
+    _daemon_socket()
+    a, b = _pair(make_peer, status="busy", cwd=str(folder))
+    msg = new_message(a, b, "stop", kind="request", urgency="now")
+    assert CodexTransport().deliver(b, "R", msg).status == "delivered"
+    assert [next(iter(e)) for e in _log(stub_codex)] == ["argv", "steer"]
+
+
 def test_codex_queue_busy_is_queued(make_peer: Callable[..., Peer], stub_codex: Path) -> None:
     a, b = _pair(make_peer, status="busy")
     outcome = CodexTransport().deliver(b, "R", new_message(a, b, "hello"))
