@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import time
 from collections.abc import Mapping
 from pathlib import Path
 
-from peermesh import paths
 from peermesh.errors import NoInboxError, NoSessionError, PeerError
-from peermesh.registry import Peer, Runtime, proc_start, repo_info
+from peermesh.registry import Peer, Runtime, claude_session, proc_start, repo_info
 from peermesh.transports.codex import daemon_socket
 
 
@@ -51,11 +49,8 @@ def find_host(
     chain = ancestors(start or os.getpid())
     if runtime == "claude":
         for depth, pid in enumerate(chain):
-            try:
-                data = json.loads((paths.claude_dir() / "sessions" / f"{pid}.json").read_text())
-            except (OSError, ValueError):
-                continue
-            if isinstance(data, dict) and data.get("sessionId") == session_id:
+            data = claude_session(pid)
+            if data is not None and data.get("sessionId") == session_id:
                 return pid, depth
         for depth, pid in enumerate(chain):
             if _is_claude_command(command_of(pid)):
@@ -74,11 +69,8 @@ def current_claude_session(start: int | None = None) -> str | None:
     /clear or /resume the host's session file has the current id.
     """
     for pid in ancestors(start or os.getpid()):
-        try:
-            data = json.loads((paths.claude_dir() / "sessions" / f"{pid}.json").read_text())
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict) and isinstance(data.get("sessionId"), str):
+        data = claude_session(pid)
+        if data is not None and isinstance(data.get("sessionId"), str):
             return str(data["sessionId"])
     return None
 
@@ -126,11 +118,8 @@ def detect(
     if runtime == "claude":
         # The host's own session record names its socket. The variable can be inherited from
         # an outer Claude session, so it is only a fallback.
-        try:
-            native = json.loads((paths.claude_dir() / "sessions" / f"{host_pid}.json").read_text())
-            endpoint = str(native.get("messagingSocketPath", ""))
-        except (OSError, ValueError, AttributeError):
-            endpoint = ""
+        native = claude_session(host_pid) or {}
+        endpoint = str(native.get("messagingSocketPath", ""))
         endpoint = endpoint or env.get("CLAUDE_CODE_MESSAGING_SOCKET", "")
         if not endpoint:
             raise NoInboxError(

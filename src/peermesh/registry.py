@@ -183,10 +183,12 @@ def claude_native_status(pid: int) -> Status | None:
     return state[0] if state else None
 
 
-def _claude_session(pid: int) -> dict[str, Any] | None:
+def claude_session(pid: int) -> dict[str, Any] | None:
     """Claude Code's own session file. The format is internal; failure is normal."""
     try:
-        data = json.loads((paths.claude_dir() / "sessions" / f"{pid}.json").read_text())
+        # Claude Code writes UTF-8, whatever the locale of this process is.
+        text = (paths.claude_dir() / "sessions" / f"{pid}.json").read_text(encoding="utf-8")
+        data = json.loads(text)
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
@@ -197,7 +199,7 @@ def claude_native_state(pid: int) -> tuple[Status, float] | None:
 
     The time is infinite when the file does not give it, so the native status wins.
     """
-    data = _claude_session(pid)
+    data = claude_session(pid)
     if data is None:
         return None
     raw = data.get("status")
@@ -220,7 +222,7 @@ def claude_user_name(pid: int) -> str | None:
     session. A name from the folder, the first prompt, a hook or a name collision ("derived",
     "auto", "hook", "collision") is ignored.
     """
-    data = _claude_session(pid)
+    data = claude_session(pid)
     if data is None or data.get("nameSource") not in (None, "user", "peer"):
         return None
     if not isinstance(data.get("name"), str):
