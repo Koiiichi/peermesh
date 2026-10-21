@@ -23,10 +23,16 @@ from peermesh.transports import Outcome
 
 
 def codex_bin() -> str | None:
+    """The absolute path of the codex executable, or None when there is none.
+
+    The path is absolute because peermesh runs codex in another folder than its own.
+    """
     override = os.environ.get("PEERMESH_CODEX")
     if override:
-        return override if os.access(override, os.X_OK) else None
-    return shutil.which("codex")
+        found = override if os.access(override, os.X_OK) else None
+    else:
+        found = shutil.which("codex")
+    return os.path.abspath(found) if found else None
 
 
 def _start_folder(preferred: str | None = None) -> str:
