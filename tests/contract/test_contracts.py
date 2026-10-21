@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -80,13 +81,31 @@ def test_claude_version_floor() -> None:
     assert version is not None and version >= MIN_CLAUDE
 
 
+def _session_record(path: Path) -> dict[str, Any] | None:
+    """The record in path, or None when its session ended while the test read it.
+
+    A record that stays unreadable fails the test, because a new format must not pass as a
+    session that ended.
+    """
+    for _ in range(5):
+        try:
+            data = json.loads(path.read_text())
+        except FileNotFoundError:
+            return None
+        except ValueError:
+            time.sleep(0.1)  # the session can be writing the file
+            continue
+        assert isinstance(data, dict), f"{path} does not hold a JSON object"
+        return data
+    pytest.fail(f"{path} does not hold valid JSON")
+
+
 def test_claude_session_record_fields() -> None:
     records = []
     for name in glob.glob(str(REAL_HOME / ".claude" / "sessions" / "*.json")):
-        try:
-            records.append(json.loads(Path(name).read_text()))
-        except (OSError, ValueError):
-            continue  # the session ended, or is writing the file, while the test reads it
+        record = _session_record(Path(name))
+        if record is not None:
+            records.append(record)
     if not records:
         pytest.skip("no live Claude Code session")
     assert all({"pid", "sessionId", "status"} <= set(r) for r in records)
