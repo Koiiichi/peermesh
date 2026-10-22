@@ -378,3 +378,25 @@ def test_process_began_is_the_start_of_the_process_on_the_wall_clock() -> None:
     began = float(out)
     # A tick of the Linux clock is 10 ms.
     assert before - 0.02 <= began <= time.time()
+
+
+def test_process_began_on_linux_is_a_lower_bound_when_the_clock_reads_are_apart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The wall clock reads 1000 s when the uptime is read, and the hook is then descheduled
+    # for 1 s. The machine booted at 940 s, and the process started 50 s after boot.
+    now = [1000.0]
+    files = {"/proc/self/stat": "1 (python) S" + " 0" * 18 + " 5000 0", "/proc/uptime": "60.00 0"}
+
+    def read_text(path: Path) -> str:
+        text = files[str(path)]
+        if str(path) == "/proc/uptime":
+            now[0] += 1.0
+        return text
+
+    monkeypatch.setattr(registry.sys, "platform", "linux")
+    monkeypatch.setattr(registry.time, "time", lambda: now[0])
+    monkeypatch.setattr(registry.os, "sysconf", lambda name: 100)
+    monkeypatch.setattr(registry.Path, "read_text", read_text)
+    began = registry.process_began()
+    assert began is not None and began <= 990.0

@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Literal, get_args
 
 from peermesh import paths
-from peermesh.errors import UnreadableRecord
+from peermesh.errors import ProcessCheckError, UnreadableRecord
 
 Runtime = Literal["claude", "codex"]
 Status = Literal["busy", "idle", "paused", "offline"]
@@ -122,37 +122,57 @@ _SHAPES: dict[str, Callable[[object], bool]] = {
 }
 
 
+_PS_FAILED = (
+    "peermesh cannot tell which processes run, because ps failed: {detail}. It changes no "
+    "session until ps works. Run `ps -o pid=,lstart= -p 1` to see the error."
+)
+
+
 def proc_start(pid: int) -> str | None:
-    """Return the start time `ps` prints for pid, or None when the pid is not running."""
+    """Return the start time `ps` prints for pid, or None when the pid is not running.
+    Raises ProcessCheckError when ps gives no trusted answer."""
     return proc_starts([pid]).get(pid)
 
 
 def proc_starts(pids: list[int]) -> dict[int, str]:
-    """The start time `ps` prints for each running pid, from one `ps` call."""
+    """The start time `ps` prints for each running pid, from one `ps` call. A pid that is not
+    in the result does not run. Raises ProcessCheckError when ps does not start, writes an
+    error, or prints a line that is not a pid and a start time: then no pid is known to have
+    exited, and a caller that ends sessions must end none."""
     wanted = sorted({pid for pid in pids if pid > 0})
     if not wanted:
         return {}
     # lstart text depends on locale and time zone; pin both so every session compares alike.
     env = {**os.environ, "LC_ALL": "C", "TZ": "UTC"}
-    result = subprocess.run(
-        ["ps", "-o", "pid=,lstart=", "-p", ",".join(map(str, wanted))],
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "pid=,lstart=", "-p", ",".join(map(str, wanted))],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+    except OSError as exc:
+        raise ProcessCheckError(_PS_FAILED.format(detail=exc)) from exc
+    # ps exits with 1 and writes nothing to stderr when no pid runs.
+    if result.returncode not in (0, 1) or result.stderr.strip():
+        detail = result.stderr.strip()[-200:] or f"exit status {result.returncode}"
+        raise ProcessCheckError(_PS_FAILED.format(detail=detail))
     starts: dict[int, str] = {}
     for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
         pid_text, _, start = line.strip().partition(" ")
-        if pid_text.isdigit() and start.strip():
-            starts[int(pid_text)] = start.strip()
+        if not pid_text.isdigit() or not start.strip():
+            raise ProcessCheckError(_PS_FAILED.format(detail=f"unexpected line {line!r}"))
+        starts[int(pid_text)] = start.strip()
     return starts
 
 
 def process_began() -> float | None:
     """The time the kernel started this process, in time.time() seconds, or None when the
     platform does not tell. A hook process starts when its runtime fires the event, so this
-    time comes before everything that the event caused."""
+    time comes before everything that the event caused. On Linux it is a lower bound."""
     try:
         if sys.platform == "darwin":
             # sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID): a kinfo_proc starts with the
@@ -165,11 +185,14 @@ def process_began() -> float | None:
             sec, usec = struct.unpack_from("qi", buf, 0)
             return float(sec + usec / 1e6)
         if sys.platform.startswith("linux"):
-            # Field 22 of /proc/self/stat is the start, in clock ticks after boot.
+            # Field 22 of /proc/self/stat is the start, in clock ticks after boot. The wall
+            # clock is read before the uptime, and the uptime has 10 ms steps, so a delay
+            # between the reads makes the result earlier, never later: a lower bound.
             stat = Path("/proc/self/stat").read_text().rpartition(")")[2].split()
             ticks = int(stat[19]) / os.sysconf("SC_CLK_TCK")
+            wall = time.time()
             uptime = float(Path("/proc/uptime").read_text().split()[0])
-            return time.time() - uptime + ticks
+            return wall - uptime - 0.01 + ticks
     except (OSError, ValueError, IndexError, AttributeError, struct.error):
         return None
     return None

@@ -127,7 +127,7 @@ def _hook(args: argparse.Namespace) -> int:
             inbox=args.inbox,
             plugin=args.plugin,
             emit=lambda out: print(json.dumps(out), flush=True),
-            began=began,
+            began=hooks.UNKNOWN_START if began is None else began,
         )
     except Exception:  # a hook must never break the host session
         try:

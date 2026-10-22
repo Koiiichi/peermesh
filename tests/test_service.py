@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from peermesh import paths
+from peermesh import paths, service
 from peermesh.envelope import Message
 from peermesh.errors import PeerError
 from peermesh.ledger import Ledger
@@ -277,10 +277,18 @@ def test_busy_target_reports_queued(world: World) -> None:
     assert world.mesh.send(world.peers["ca"], "codex-a", "when free: rebase")[0].status == "queued"
 
 
-def test_offline_target_record_removed(world: World) -> None:
+def test_offline_target_record_removed(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
     world.claude.outcome = Outcome("refused", "peer offline", offline=True)
+    # The socket refuses, and ps says that the process exited.
+    monkeypatch.setattr(service, "is_alive", lambda peer, starts=None: False)
     world.mesh.send(world.peers["xa"], "claude-b", "are you there")
     assert world.mesh.registry.get("claude:B") is None
+
+
+def test_a_refusing_socket_of_a_running_process_keeps_the_record(world: World) -> None:
+    world.claude.outcome = Outcome("refused", "peer offline", offline=True)
+    world.mesh.send(world.peers["xa"], "claude-b", "are you there")
+    assert world.mesh.registry.get("claude:B") is not None
 
 
 def test_ledger_write_failure_is_reported(world: World, monkeypatch: pytest.MonkeyPatch) -> None:

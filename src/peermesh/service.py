@@ -17,7 +17,7 @@ from peermesh.envelope import (
     new_message,
     render,
 )
-from peermesh.errors import PeerError, UnreadableRecord
+from peermesh.errors import PeerError, ProcessCheckError, UnreadableRecord
 from peermesh.inbox import Inbox, Waiting
 from peermesh.ledger import Ledger
 from peermesh.registry import (
@@ -134,30 +134,32 @@ class Mesh:
     ) -> Peer:
         """Register peer, the session of the calling process, which read its record as `seen`.
 
-        The record gets a new generation. It replaces the stored record when that is gone,
-        when peer's process already owns it, when peer's process started after its owner's,
-        or when it is still the registration in `seen` and that owner exited (`seen_dead`) and
-        peer's process is not older than it. Only a SessionStart (`resume`), the runtime's own
-        word that peer's process hosts the session now, moves a session from an exited owner
-        to an older process, as when a Codex thread opens again in a long-lived app-server.
-        No other case lets an older process take a session back. When the stored record stays,
-        its live view is returned. Raises UnreadableRecord when the stored record exists but
-        cannot be read: that is not absence.
+        The record gets a new generation. It replaces the stored record when that is gone, or
+        when the stored record is still the registration in `seen` and one of these is true:
+        peer's process already owns it, peer's process started after its owner's, or that
+        owner exited (`seen_dead`) and peer's process is not older than it. A registration
+        stored after the read is newer than what the caller saw, so it stays, whatever the
+        ages of the processes. Only a SessionStart (`resume`), the runtime's own word that
+        peer's process hosts the session now, moves a session from an exited owner to an older
+        process, as when a Codex thread opens again in a long-lived app-server. When the stored
+        record stays, its live view is returned. Raises UnreadableRecord when the stored record
+        exists but cannot be read: that is not absence.
         """
         given = (seen.auto_name or seen.name) if seen else None
         peer.name = given or self.registry.unique_name(peer)
         peer.generation = uuid.uuid4().hex
         with self.ledger.locked():
             current = self.registry.read(peer.id)
-            if (
-                current is None
-                or owner(current) == owner(peer)
-                or started_after(peer.proc_start, current.proc_start)
-                or (
-                    seen_dead
-                    and seen is not None
-                    and _same(current, seen)
-                    and (resume or not started_after(current.proc_start, peer.proc_start))
+            if current is None or (
+                seen is not None
+                and _same(current, seen)
+                and (
+                    owner(current) == owner(peer)
+                    or started_after(peer.proc_start, current.proc_start)
+                    or (
+                        seen_dead
+                        and (resume or not started_after(current.proc_start, peer.proc_start))
+                    )
                 )
             ):
                 peer.registered = time.time()
@@ -204,15 +206,19 @@ class Mesh:
 
     def prune(self) -> None:
         """Retire the registrations of exited processes, and expire the inboxes that no record
-        has. Which processes run is read first, with ps; retire checks each one again."""
+        has. Which processes run is read first, with ps; retire checks each one again. When ps
+        gives no trusted answer, no process is known to have exited, so none is retired."""
         records = self.registry.records()
-        starts = proc_starts([peer.pid for peer in records])
+        try:
+            starts: dict[int, str] | None = proc_starts([peer.pid for peer in records])
+        except ProcessCheckError:
+            starts = None
         for peer in records:
             if peer.status == "paused":
                 # A paused record ends when the app archives or deletes its session.
                 if not app_keeps(peer):
                     self.retire(peer.id, peer, keep_if_kept=False)
-            elif not is_alive(peer, starts):
+            elif starts is not None and not is_alive(peer, starts):
                 self.retire(peer.id, peer)
         # A record that cannot be read or parsed stays, with its inbox: it is not a session
         # that ended.
@@ -585,7 +591,7 @@ class Mesh:
             tools=target.has_tools,
         )
         outcome = self.transports[target.runtime].deliver(target, rendered, msg)
-        if outcome.offline:
+        if outcome.offline and _ended(target):
             # The record ends only if it is still the registration that the send tried.
             self.retire(target.id, target)
         entry = {"id": msg.id, "outcome": outcome.status, "note": outcome.note, "at": self.clock()}
@@ -720,6 +726,18 @@ def _wants_inbox(target: Peer, msg: Message) -> bool:
     if msg.urgency == "now":
         return target.runtime == "codex" and target.host != "daemon" and target.status == "busy"
     return target.status == "busy" or msg.kind == "info"
+
+
+def _ended(target: Peer) -> bool:
+    """True when a target that refused a delivery has ended: Codex said that its thread has no
+    rollout, or ps says that its process exited. A socket that refuses a connection while its
+    process runs does not end the session."""
+    if target.runtime == "codex":
+        return True
+    try:
+        return not is_alive(target)
+    except ProcessCheckError:
+        return False
 
 
 def _same(record: Peer, seen: Peer) -> bool:

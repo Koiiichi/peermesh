@@ -852,9 +852,10 @@ def test_adopt_lets_a_newer_process_take_a_session_and_never_an_older_one(
     assert world.mesh.adopt(process(newer, "/tmp/new.sock")).endpoint == "/tmp/new.sock"  # gone
     # An older process never takes the session back from a newer owner.
     assert world.mesh.adopt(process(older, "/tmp/old.sock")).endpoint == "/tmp/new.sock"
-    # A newer process takes it from an older owner.
+    # A newer process takes it from an older owner, when the record is the one it read.
     world.mesh.registry.put(process(older, "/tmp/old.sock"))
-    assert world.mesh.adopt(process(newer, "/tmp/new.sock")).endpoint == "/tmp/new.sock"
+    seen = world.mesh.registry.read("claude:B")
+    assert world.mesh.adopt(process(newer, "/tmp/new.sock"), seen).endpoint == "/tmp/new.sock"
     # A paused record whose newer owner still runs stays: pausing is no takeover for an older
     # process.
     record = world.mesh.registry.read("claude:B")
@@ -1350,3 +1351,62 @@ def test_a_record_with_a_wrong_field_type_is_unreadable_and_contained(
     assert world.mesh.registry.resolve("claude-a") is not None
     world.mesh.prune()
     assert world.mesh.registry._file("claude:B").exists()
+
+
+def test_a_delayed_registration_does_not_replace_a_resume_made_after_its_read(
+    world: World, older_and_newer: tuple[int, int]
+) -> None:
+    # A hook of a newer process reads the record and detects its session, then stalls before
+    # the lock. The session opens again meanwhile in an older, long-lived app-server.
+    old, new = older_and_newer
+    world.put("x", status="idle")
+    seen = world.mesh.registry.read("codex:X")
+    assert seen is not None
+    candidate = Peer.from_json(seen.to_record())
+    candidate.pid, candidate.proc_start = new, proc_start(new) or ""
+    payload = {"session_id": "X", "cwd": os.getcwd()}
+    hooks.handle(world.mesh, "session-start", "codex", payload, env={}, host_pid=old, inbox=True)
+    world.mesh.adopt(candidate, seen, seen_dead=True)
+    stored = world.mesh.registry.read("codex:X")
+    assert stored is not None and stored.pid == old
+
+
+def _ps_fails(monkeypatch: pytest.MonkeyPatch, how: str) -> None:
+    run = subprocess.run
+
+    def failing(args: list[str], *rest: Any, **kwargs: Any) -> Any:
+        if args[0] != "ps":
+            return run(args, *rest, **kwargs)
+        if how == "missing":
+            raise FileNotFoundError("ps")
+        return subprocess.CompletedProcess(args, 1, "", "ps: sysctl: Operation not permitted\n")
+
+    monkeypatch.setattr(registry.subprocess, "run", failing)
+
+
+@pytest.mark.parametrize("how", ["missing", "error"])
+def test_a_failed_process_check_ends_no_session_and_expires_no_message(
+    world: World, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    world.put("x", status="busy")
+    [res] = world.mesh.send(world.peers["a"], "codex:X", "Note for later.", kind="info")
+    assert res.status == "pending"
+    _ps_fails(monkeypatch, how)
+    world.mesh.prune()
+    hooks._remove_stale_state(world.mesh)
+    assert world.mesh.registry.read("codex:X") is not None
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+def test_a_session_end_with_an_unknown_start_removes_no_registration(world: World) -> None:
+    world.put("x", status="idle")
+    hooks.handle(
+        world.mesh,
+        "session-end",
+        "codex",
+        {"session_id": "X", "cwd": os.getcwd()},
+        env={},
+        host_pid=os.getpid(),
+        began=hooks.UNKNOWN_START,
+    )
+    assert world.mesh.registry.read("codex:X") is not None

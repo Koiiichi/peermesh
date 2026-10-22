@@ -13,5 +13,10 @@ class NoInboxError(PeerError):
     """The Claude Code session has no inbox socket yet, so it cannot receive messages."""
 
 
+class ProcessCheckError(PeerError):
+    """`ps` gave no trusted answer about which processes run: that is not a sign that a
+    process exited."""
+
+
 class UnreadableRecord(PeerError):
     """A registry record exists but cannot be read or parsed: that is not absence."""
