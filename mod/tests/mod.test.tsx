@@ -79,6 +79,25 @@ test('a peer message is a short row on every surface', async $ => {
   }
 })
 
+test('a row fills the room of a graphical surface and keeps the cell width on the terminal', async $ => {
+  const text = 'Another Claude session sent a message:\n' + (FRAMES[0]?.text ?? '')
+  const widths: Record<string, unknown> = {}
+  for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
+    const ui = await $.ui.mount({
+      plugin: 'peermesh',
+      surface,
+      component: 'UserMessage',
+      props: { text, origin: { kind: 'peer' }, isExpanded: false },
+      viewport: { columns: 120, rows: 40 },
+    })
+    widths[surface] = ((await ui.drawn()) as { props: { width?: unknown } }).props.width
+    await ui.unmount()
+  }
+  // A graphical surface lays the row out in its own column, whose width in cells it does not
+  // know exactly; a fixed cell width runs past a narrow window and is cut there.
+  expect(widths).toEqual({ terminal: 120, desktop: '100%', vscode: '100%', mobile: '100%' })
+})
+
 test('a sent message shows the state that the ledger has, not a guess', async ($, on) => {
   mock.env(on, { HOME: '/home/user' })
   on('session.id', () => ({ value: 'me' }))

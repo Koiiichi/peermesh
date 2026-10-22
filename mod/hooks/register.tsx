@@ -547,7 +547,8 @@ export const register: Register = on => {
         }
       })
 
-      return messageRows($.ui.resolve(e), rows, await fold($, e), e.viewport?.columns ?? WIDTH)
+      const columns = e.viewport?.columns ?? WIDTH
+      return messageRows($.ui.resolve(e), rows, await fold($, e), columns, e.surface === 'terminal')
     },
   )
 
@@ -563,7 +564,7 @@ export const register: Register = on => {
     const T = $.ui.resolve(e)
     const folded = await fold($, e)
     if (sends.length === e.props.calls.length) {
-      return messageRows(T, rows, folded, columns)
+      return messageRows(T, rows, folded, columns, e.surface === 'terminal')
     }
     // The group has other calls. The line that Claude Code draws for the group stays, because
     // it shows which of them run and which of them failed.
@@ -571,7 +572,7 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        {messageRows(T, rows, folded, columns)}
+        {messageRows(T, rows, folded, columns, e.surface === 'terminal')}
         {await next(e)}
       </Box>
     )
