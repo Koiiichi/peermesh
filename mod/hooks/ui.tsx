@@ -67,7 +67,7 @@ export function messageRows(
   // The blank line above is the one that Claude Code puts above each block of its own.
   return (
     <Box flexDirection="column" marginTop={1} width={isTerminal ? columns : '100%'}>
-      {rows.map((row, index) => messageRow(T, row, index, fold, share, columns))}
+      {rows.map((row, index) => messageRow(T, row, index, fold, share, columns, isTerminal))}
     </Box>
   )
 }
@@ -83,6 +83,7 @@ function messageRow(
   fold: Fold,
   share: { rows: number; chars: number },
   columns: number,
+  isTerminal: boolean,
 ): RenderElement {
   const { Box, Button, Text } = T
   const room = Math.min(row.isIncoming ? INCOMING_ROWS : OUTGOING_ROWS, share.rows)
@@ -152,7 +153,8 @@ function messageRow(
           </Text>
         </Box>
       )}
-      <Box justifyContent="space-between">
+      {/* A graphical column can be narrower than `columns`: its first line wraps there. */}
+      <Box justifyContent="space-between" flexWrap={isTerminal ? 'nowrap' : 'wrap'}>
         <Box flexShrink={1}>
           <Text wrap="truncate-end">
             <Text color={color}>{row.isIncoming ? '←' : '→'} </Text>
