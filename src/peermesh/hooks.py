@@ -267,9 +267,11 @@ def handle(
                 mesh.registry.put(peer)
                 return None
             mesh.registry.remove(peer_id)
+            # Under the same lock, so a resume cannot register between the two and lose the
+            # messages that wait for it.
+            mesh.expire_inbox(peer_id, locked=True)
         _seen_file(peer_id).unlink(missing_ok=True)
         paths.state_file(peer_id, SHORT_IDS).unlink(missing_ok=True)
-        mesh.expire_inbox(peer_id)
         return None
     if event == "post-tool":
         return _post_tool(mesh, peer_id, env, emit)
