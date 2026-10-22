@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 import uuid
@@ -21,14 +22,18 @@ from peermesh.errors import PeerError
 from peermesh.inbox import Inbox, Waiting
 from peermesh.ledger import Ledger
 from peermesh.registry import (
+    Owner,
     Peer,
     Registry,
     Scope,
+    app_keeps,
     claude_native_state,
     codex_native_state,
     is_alive,
-    same_record,
+    owner,
+    proc_starts,
     scoped,
+    started_after,
 )
 from peermesh.transports import Transport
 from peermesh.transports.claude import ClaudeSocketTransport
@@ -108,28 +113,90 @@ class Mesh:
         )
 
     def register(self, peer: Peer) -> Peer:
-        existing = self.registry.get(peer.id)
-        given = (existing.auto_name or existing.name) if existing else None
-        peer.name = given or self.registry.unique_name(peer)
-        self.registry.put(peer)
-        return self.registry.get(peer.id) or peer
+        return self.adopt(peer, self.registry.get(peer.id))
 
-    def adopt(self, peer: Peer, seen: Peer | None) -> Peer:
+    # Registry invariant. A record names the process that owns its session: the newest
+    # running process that hosts it. Every write, removal and inbox expiry re-reads the record
+    # under the ledger lock and commits only for the owner that the writer saw; work that runs
+    # a subprocess (ps, git, detect) comes before the lock. adopt, update and retire are the
+    # only writers of records.
+
+    def adopt(self, peer: Peer, seen: Peer | None = None, *, seen_dead: bool = False) -> Peer:
         """Register peer, the session of the calling process, which read its record as `seen`.
 
-        The record is replaced only when it is gone, paused or still `seen`; when another
-        process registered the session after that read, its record stays and is returned. The
-        check and the write hold the ledger lock, which SessionEnd holds while it changes a
-        record. Everything that runs a subprocess, choosing the name among them, comes first.
+        The record is replaced when it is gone or paused, when peer's process already owns it,
+        when its owner is still the one in `seen` and that process has exited (`seen_dead`), or
+        when peer's process started after its owner's: an older process never takes a session
+        back. Otherwise the stored record stays and is returned.
         """
         given = (seen.auto_name or seen.name) if seen else None
         peer.name = given or self.registry.unique_name(peer)
         with self.ledger.locked():
             current = self.registry.read(peer.id)
-            if current is None or current.status == "paused" or same_record(current, seen):
+            if (
+                current is None
+                or current.status == "paused"
+                or owner(current) == owner(peer)
+                or (seen_dead and seen is not None and owner(current) == owner(seen))
+                or started_after(peer.proc_start, current.proc_start)
+            ):
                 self.registry.put(peer)
         # Outside the lock: the live view, with the user's name, runs ps.
         return self.registry.get(peer.id) or peer
+
+    def update(self, peer_id: str, me: Owner | None, change: Callable[[Peer], None]) -> Peer | None:
+        """Apply change to the stored record, under the lock, when `me` owns it. None when the
+        record is gone or another process owns it; `me` None means the caller's process is
+        unknown and acts as the owner. change only sets fields: it runs under the lock."""
+        with self.ledger.locked():
+            current = self.registry.read(peer_id)
+            if current is None or (me is not None and owner(current) != me):
+                return None
+            change(current)
+            self.registry.put(current)
+            return current
+
+    def retire(self, peer_id: str, expected: Owner, *, keep_if_kept: bool = True) -> None:
+        """End the record of the process `expected`, under the lock: pause it while the Claude
+        app keeps its session (and `keep_if_kept`), else remove it and expire its inbox in the
+        same step. A record that another process owns by then stays as it is."""
+        with self.ledger.locked():
+            current = self.registry.read(peer_id)
+            if current is None or owner(current) != expected:
+                return
+            if keep_if_kept and app_keeps(current):
+                current.status = "paused"
+                self.registry.put(current)
+                return
+            self.registry.remove(peer_id)
+            self.expire_inbox(peer_id, locked=True)
+
+    def prune(self) -> None:
+        """Remove the records of exited processes and the inboxes that no record has.
+
+        Which processes run is read first, with ps; under the lock each record is read again,
+        and only a record whose owner is still the exited process is retired.
+        """
+        records = self.registry.records()
+        starts = proc_starts([peer.pid for peer in records])
+        dead = [p for p in records if p.status != "paused" and not is_alive(p, starts)]
+        for peer in dead:
+            self.retire(peer.id, owner(peer))
+        for peer in [p for p in records if p.status == "paused"]:
+            # A paused record ends when the app archives or deletes its session.
+            if not app_keeps(peer):
+                self.retire(peer.id, owner(peer), keep_if_kept=False)
+        with self.ledger.locked():
+            for path in self.registry.dir.glob("*.json") if self.registry.dir.is_dir() else []:
+                try:
+                    json.loads(path.read_text())
+                except ValueError:
+                    path.unlink(missing_ok=True)  # a record that does not parse
+                except OSError:
+                    continue
+            for peer_id in self.inbox.peer_ids():
+                if self.registry.read(peer_id) is None:
+                    self.expire_inbox(peer_id, locked=True)
 
     def whoami(
         self,
@@ -154,7 +221,8 @@ class Mesh:
         if unregistered is not None:
             raise PeerError(unregistered)
         peer = identity.detect(runtime, session_id, cwd or os.getcwd(), env, host_pid)
-        return self.adopt(peer, existing)
+        dead = existing is not None and existing.status != "paused" and not is_alive(existing)
+        return self.adopt(peer, existing, seen_dead=dead)
 
     def _enrich(self, peer: Peer) -> Peer:
         """Use the runtime's own status unless a peermesh hook recorded a newer one."""
@@ -479,7 +547,8 @@ class Mesh:
         )
         outcome = self.transports[target.runtime].deliver(target, rendered, msg)
         if outcome.offline:
-            self.registry.remove(target.id)
+            # The record ends only if the process that the send tried still owns it.
+            self.retire(target.id, owner(target))
         entry = {"id": msg.id, "outcome": outcome.status, "note": outcome.note, "at": self.clock()}
         try:
             with self.ledger.locked():

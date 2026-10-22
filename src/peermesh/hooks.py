@@ -15,14 +15,15 @@ from peermesh.identity import detect, find_host
 from peermesh.inbox import Waiting
 from peermesh.install import HOOK_EVENTS, hooks_installed
 from peermesh.registry import (
+    Owner,
     Peer,
     Runtime,
-    app_keeps,
     current_branch,
     is_alive,
+    owner,
     proc_start,
     repo_info,
-    same_record,
+    started_after,
 )
 from peermesh.service import SHORT_IDS, Mesh, accepts_short_ids
 from peermesh.views import printable
@@ -71,23 +72,26 @@ def _refresh(peer: Peer, cwd: str) -> None:
 
 
 def _remove_stale_state(mesh: Mesh) -> None:
-    """Clear the state files and inboxes of sessions that have no registry record."""
+    """Prune the records of exited processes, then clear the state files of sessions that have
+    no registry record."""
+    mesh.prune()
     live = {p.stem for p in mesh.registry.dir.glob("*.json")}
     for state in (paths.home() / "state").glob("*.*"):
         if state.stem not in live:
             state.unlink(missing_ok=True)
-    for name in mesh.inbox.peer_ids():
-        if name not in live:
-            mesh.expire_inbox(name)
 
 
 def _post_tool(
-    mesh: Mesh, peer_id: str, env: Mapping[str, str], emit: Emit
+    mesh: Mesh, peer_id: str, env: Mapping[str, str], emit: Emit, me: Callable[[], Owner | None]
 ) -> dict[str, Any] | None:
-    peer = mesh.registry.get(peer_id)
-    if peer is None:
+    if not mesh.inbox.waiting(peer_id):
         return None
+    caller = me()
     with mesh.ledger.locked():
+        peer = mesh.registry.read(peer_id)
+        if peer is None or not _is_owner(peer, caller):
+            # A process that no longer owns the session leaves its messages to the owner.
+            return None
         items = mesh.take_waiting(peer)
         if not items:
             return None
@@ -154,7 +158,9 @@ def _continue_turn(runtime: Runtime, body: str) -> dict[str, Any]:
     return {"decision": "block", "reason": body}
 
 
-def _stop(mesh: Mesh, peer: Peer, payload: Mapping[str, Any], emit: Emit) -> dict[str, Any] | None:
+def _stop(
+    mesh: Mesh, peer_id: str, caller: Owner | None, payload: Mapping[str, Any], emit: Emit
+) -> dict[str, Any] | None:
     """Decide what the end of a turn does with waiting messages.
 
     Information waits for the next prompt or tool call. Actionable messages continue the turn
@@ -162,6 +168,9 @@ def _stop(mesh: Mesh, peer: Peer, payload: Mapping[str, Any], emit: Emit) -> dic
     continued is not continued again; its actionable messages start a new turn instead.
     """
     with mesh.ledger.locked():
+        peer = mesh.registry.read(peer_id)
+        if peer is None or not _is_owner(peer, caller):
+            return None
         # The status and the claim are one step under the lock, so a sender sees either a busy
         # peer whose inbox a hook still reads, or an idle peer. A continued turn stays busy.
         items = mesh.take_waiting(peer)
@@ -193,18 +202,19 @@ def _host(runtime: Runtime, session_id: str, host_pid: int | None) -> int | None
     return found[0] if found else None
 
 
-def _owns(peer: Peer, pid: int) -> bool:
-    return pid == peer.pid and proc_start(pid) == peer.proc_start
-
-
-def _ending(runtime: Runtime, session_id: str, host_pid: int | None) -> tuple[int, str] | None:
-    """The pid and the start time of the process whose session ends, or None when no ancestor
-    names the session. Both come from subprocesses, so SessionEnd reads them before the lock."""
+def _caller(runtime: Runtime, session_id: str, host_pid: int | None) -> Owner | None:
+    """The pid and the start time of the process that fired the hook, or None when no ancestor
+    names the session. Both come from subprocesses, so hooks read them before the lock."""
     pid = _host(runtime, session_id, host_pid)
     return None if pid is None else (pid, proc_start(pid) or "")
 
 
-def _ends_its_process(peer: Peer, ending: tuple[int, str] | None, owner_gone: bool) -> bool:
+def _is_owner(peer: Peer, caller: Owner | None) -> bool:
+    """True when the hook's process owns the record; an unknown process acts as the owner."""
+    return caller is None or owner(peer) == caller
+
+
+def _ends_its_process(peer: Peer, ending: Owner | None, owner_gone: bool) -> bool:
     """True when the process whose session ends is the one that the record names.
 
     When that process cannot be found, the end is the recorded process's when that process has
@@ -213,20 +223,17 @@ def _ends_its_process(peer: Peer, ending: tuple[int, str] | None, owner_gone: bo
     """
     if ending is None:
         return peer.host_session is None or owner_gone
-    return ending == (peer.pid, peer.proc_start)
+    return ending == owner(peer)
 
 
-def _needs_registration(
-    peer: Peer | None, event: str, runtime: Runtime, session_id: str, host_pid: int | None
-) -> bool:
-    """True when the hook's process must register: no live record, a paused one, or, for a
-    Claude app session, a record of another process, which the app can still be ending."""
+def _needs_registration(peer: Peer | None, caller: Owner | None) -> bool:
+    """True when the hook's process must register: no live record, a paused one, or a record
+    of an older process, which can still be ending after the session ran again."""
     if peer is None or peer.status == "paused" or not is_alive(peer):
         return True
-    if peer.host_session is None or event not in ("session-start", "prompt"):
-        return False
-    pid = _host(runtime, session_id, host_pid)
-    return pid is not None and not _owns(peer, pid)
+    return (
+        caller is not None and caller != owner(peer) and started_after(caller[1], peer.proc_start)
+    )
 
 
 def handle(
@@ -261,45 +268,53 @@ def handle(
     peer_id = f"{runtime}:{session_id}"
     if event == "session-end":
         # Both run subprocesses, so they come before the lock.
-        ending = _ending(runtime, session_id, host_pid)
-        # A raw read: the live list would prune a record whose process is gone before this
-        # SessionEnd can pause it.
+        ending = _caller(runtime, session_id, host_pid)
         seen = mesh.registry.read(peer_id)
-        gone = seen is not None and not is_alive(seen)
-        # Registration takes the same lock, so a resume cannot change the record between the
-        # check of its owner and the change.
-        with mesh.ledger.locked():
-            peer = mesh.registry.read(peer_id)
-            owner_gone = gone and peer is not None and same_record(peer, seen)
-            if peer is not None and not _ends_its_process(peer, ending, owner_gone):
-                # The app ran the session again in a new process before this one ended: the
-                # record and the waiting messages belong to the new process.
-                return None
-            if peer is not None and payload.get("reason") != "clear" and app_keeps(peer):
-                # The Claude app ended the process of an idle session and keeps the session to
-                # run it again, so its record and its waiting messages stay.
-                peer.status = "paused"
-                mesh.registry.put(peer)
-                return None
-            mesh.registry.remove(peer_id)
-            # Under the same lock, so a resume cannot register between the two and lose the
-            # messages that wait for it.
-            mesh.expire_inbox(peer_id, locked=True)
-        _seen_file(peer_id).unlink(missing_ok=True)
-        paths.state_file(peer_id, SHORT_IDS).unlink(missing_ok=True)
+        if seen is None:
+            # No record: the inbox that is left, if any, has no owner. A resume can register
+            # meanwhile, so the check and the expiry hold the lock.
+            with mesh.ledger.locked():
+                if mesh.registry.read(peer_id) is None:
+                    mesh.expire_inbox(peer_id, locked=True)
+            _seen_file(peer_id).unlink(missing_ok=True)
+            paths.state_file(peer_id, SHORT_IDS).unlink(missing_ok=True)
+            return None
+        if not _ends_its_process(seen, ending, owner_gone=not is_alive(seen)):
+            # The app ran the session again in a new process before this one ended: the record
+            # and the waiting messages belong to the new process.
+            return None
+        # The Claude app ends the process of an idle session and keeps the session to run it
+        # again: a pause keeps the record and its waiting messages. /clear ends the session id.
+        # retire re-reads the record under the lock and leaves it to a process that took it.
+        mesh.retire(peer_id, owner(seen), keep_if_kept=payload.get("reason") != "clear")
+        if mesh.registry.read(peer_id) is None:
+            _seen_file(peer_id).unlink(missing_ok=True)
+            paths.state_file(peer_id, SHORT_IDS).unlink(missing_ok=True)
         return None
+    caller: list[Owner | None] = []
+
+    def me() -> Owner | None:
+        if not caller:
+            caller.append(_caller(runtime, session_id, host_pid))
+        return caller[0]
+
     if event == "post-tool":
-        return _post_tool(mesh, peer_id, env, emit)
+        return _post_tool(mesh, peer_id, env, emit, me)
     if runtime == "codex" and "transcript_path" in payload and not payload["transcript_path"]:
         # Codex gives a null path for an ephemeral thread, such as a one-time review. It has
         # no rollout file, so `codex queue` cannot reach it and nothing shows when it closes.
         return None
     cwd = str(payload.get("cwd") or os.getcwd())
     peer = mesh.registry.get(peer_id)
-    registers = _needs_registration(peer, event, runtime, session_id, host_pid)
+    registers = _needs_registration(peer, me())
+    if peer is not None and not registers and not _is_owner(peer, me()):
+        # An older process of a session that a newer process owns changes nothing, and leaves
+        # the waiting messages to the owner.
+        return None
     if registers:
+        dead = peer is not None and peer.status != "paused" and not is_alive(peer)
         try:
-            peer = mesh.adopt(detect(runtime, session_id, cwd, env, host_pid), peer)
+            peer = mesh.adopt(detect(runtime, session_id, cwd, env, host_pid), peer, seen_dead=dead)
         except NoInboxError:
             # Claude Code can run SessionStart before it writes the inbox socket path. The
             # next prompt registers the session; the rules apply from the start.
@@ -310,20 +325,33 @@ def handle(
             raise
     # A record that needs no registration exists, and registration returns one.
     assert peer is not None
+    # The new values come first, from git and the payload; update applies them to the stored
+    # record under the lock, and only while this hook's process owns it.
+    probe = Peer.from_json(peer.to_record())
     if not registers and event in ("session-start", "prompt"):
-        _refresh(peer, cwd)
+        _refresh(probe, cwd)
     transcript = str(payload.get("transcript_path") or "")
     if runtime == "codex" and transcript and Path(transcript).exists():
-        peer.transcript = transcript
+        probe.transcript = transcript
     if event in ("session-start", "prompt"):
         flags = {"inbox": inbox, "mcp_tools": plugin}
-        others = [c for c in peer.capabilities if c not in flags]
-        peer.capabilities = [*others, *(c for c, on in flags.items() if on)]
+        others = [c for c in probe.capabilities if c not in flags]
+        probe.capabilities = [*others, *(c for c, on in flags.items() if on)]
+    now = mesh.clock()
+
+    def change(record: Peer) -> None:
+        for name in ("cwd", "git_root", "worktree", "branch", "repo_key", "transcript"):
+            setattr(record, name, getattr(probe, name))
+        record.capabilities = probe.capabilities
+        if event != "stop":
+            record.status, record.last_seen = ("busy" if event == "prompt" else "idle"), now
+
+    updated = mesh.update(peer_id, me(), change)
+    if updated is None:
+        return None  # another process took the session after this hook read it
+    peer = mesh.registry.get(peer_id) or updated
     if event == "stop":
-        return _stop(mesh, peer, payload, emit)
-    peer.status = "busy" if event == "prompt" else "idle"
-    peer.last_seen = mesh.clock()
-    mesh.registry.put(peer)
+        return _stop(mesh, peer_id, me(), payload, emit)
     peers = mesh.list_peers(peer, "repo")
     if event == "session-start":
         _changed(peer.id, peers)
@@ -333,6 +361,9 @@ def handle(
         return out
     parts = [text.change_text(peer, peers)] if _changed(peer.id, peers) else []
     with mesh.ledger.locked():
+        current = mesh.registry.read(peer_id)
+        if current is None or not _is_owner(current, me()):
+            return None
         items = mesh.take_waiting(peer)
         if items:
             parts.append(_render(peer, items))

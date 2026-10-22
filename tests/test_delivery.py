@@ -3,14 +3,16 @@ from __future__ import annotations
 import json
 import multiprocessing
 import os
-from collections.abc import Callable
+import subprocess
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 import pytest
 
-from peermesh import hooks, install, paths, registry
+from peermesh import hooks, install, paths, registry, service
 from peermesh.envelope import ENDINGS, INFO_NOTE, Message
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry, is_alive, proc_start
@@ -158,12 +160,19 @@ def test_failed_emit_leaves_messages_for_a_retry(world: World) -> None:
     )
 
 
-def _concurrent_hook(home: str, result: Any) -> None:
+def _concurrent_hook(home: str, result: Any, host_pid: int) -> None:
     os.environ["PEERMESH_HOME"] = home
     mesh = Mesh(Registry(), Ledger(), {})
     emitted: list[Any] = []
+    # Parallel hooks of one session: each runs for the process that owns the record.
     hooks.handle(
-        mesh, "post-tool", "codex", {"session_id": "X"}, env={}, host_pid=1, emit=emitted.append
+        mesh,
+        "post-tool",
+        "codex",
+        {"session_id": "X"},
+        env={},
+        host_pid=host_pid,
+        emit=emitted.append,
     )
     result.put([e["hookSpecificOutput"]["additionalContext"] for e in emitted])
 
@@ -174,7 +183,9 @@ def test_parallel_post_tool_hooks_inject_each_message_once(world: World) -> None
     ctx = multiprocessing.get_context("spawn")
     result = ctx.Queue()
     procs = [
-        ctx.Process(target=_concurrent_hook, args=(os.environ["PEERMESH_HOME"], result))
+        ctx.Process(
+            target=_concurrent_hook, args=(os.environ["PEERMESH_HOME"], result, os.getpid())
+        )
         for _ in range(4)
     ]
     for p in procs:
@@ -596,25 +607,51 @@ def test_a_resume_registers_again_while_the_old_process_still_runs(world: World)
     assert resumed.status == "idle"
 
 
-def _owned_by_another_process(world: World, peer_id: str) -> None:
-    """Make the record belong to a running process other than the one that ends in the test."""
-    record = world.mesh.registry.get(peer_id)
+@pytest.fixture
+def older_and_newer() -> Iterator[tuple[int, int]]:
+    """Two running processes, the second started in a later second than the first: `ps` gives
+    start times to the second, and only a later start takes a session over."""
+    older = subprocess.Popen(["sleep", "300"])
+    time.sleep(1.1)
+    newer = subprocess.Popen(["sleep", "300"])
+    try:
+        yield older.pid, newer.pid
+    finally:
+        for helper in (older, newer):
+            helper.kill()
+            helper.wait()
+
+
+def _owned_by(world: World, peer_id: str, pid: int) -> None:
+    """Make the record belong to the running process pid."""
+    record = world.mesh.registry.read(peer_id)
     assert record is not None
-    record.pid = os.getppid()
-    record.proc_start = proc_start(os.getppid()) or ""
+    record.pid, record.proc_start = pid, proc_start(pid) or ""
     world.mesh.registry.put(record)
 
 
-def test_the_end_of_an_old_process_leaves_the_resumed_session_alone(world: World) -> None:
+def _socket_of(pid: int, path: str) -> None:
+    """Write the Claude session file of process pid, as Claude Code does for session B."""
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / f"{pid}.json").write_text(
+        json.dumps({"sessionId": "B", "messagingSocketPath": path})
+    )
+
+
+def test_the_end_of_an_old_process_leaves_the_resumed_session_alone(
+    world: World, older_and_newer: tuple[int, int]
+) -> None:
     # The app ran the session again in a new process, which registered, before the old one ended.
+    _, new = older_and_newer
     world.put("b", host_session="local_b", status="idle")
     _app_session("local_b", "worker-b")
     [res] = world.mesh.send(world.peers["a"], "claude-b", "Note for later.", kind="info")
-    _owned_by_another_process(world, "claude:B")
+    _owned_by(world, "claude:B", new)
     for reason in ("other", "clear"):
         _hook(world, "session-end", "b", reason=reason)
         record = world.mesh.registry.get("claude:B")
-        assert record is not None and record.status == "idle" and record.pid == os.getppid()
+        assert record is not None and record.status == "idle" and record.pid == new
     assert world.mesh.inbox.waiting("claude:B") != []
     assert _outcomes(world, str(res.msg_id)) == ["pending"]
 
@@ -645,30 +682,24 @@ def test_an_unknown_ending_process_leaves_an_app_session_alone(
     assert _outcomes(world, str(res.msg_id)) == ["pending"]
 
 
-def test_a_resume_before_the_old_process_ends_takes_the_record(world: World) -> None:
+def test_a_resume_before_the_old_process_ends_takes_the_record(
+    world: World, older_and_newer: tuple[int, int]
+) -> None:
     # The old process still runs and its record is not paused yet when the new one starts.
+    old, new = older_and_newer
     world.put("b", host_session="local_b", status="idle", endpoint="/tmp/old.sock")
     _app_session("local_b", "worker-b")
-    _owned_by_another_process(world, "claude:B")
-    sessions = paths.claude_dir() / "sessions"
-    sessions.mkdir(parents=True)
-    (sessions / f"{os.getpid()}.json").write_text(
-        json.dumps({"sessionId": "B", "messagingSocketPath": "/tmp/new.sock"})
-    )
-    _hook(world, "session-start", "b", source="resume")
+    _owned_by(world, "claude:B", old)
+    _socket_of(new, "/tmp/new.sock")
+    resume = {"session_id": "B", "cwd": os.getcwd(), "source": "resume"}
+    hooks.handle(world.mesh, "session-start", "claude", resume, env={}, host_pid=new)
     record = world.mesh.registry.get("claude:B")
-    assert record is not None and record.pid == os.getpid() and record.endpoint == "/tmp/new.sock"
+    assert record is not None and record.pid == new and record.endpoint == "/tmp/new.sock"
     # The old process ends now; the record is the new process's.
-    hooks.handle(
-        world.mesh,
-        "session-end",
-        "claude",
-        {"session_id": "B", "reason": "other"},
-        env={},
-        host_pid=os.getppid(),
-    )
+    end = {"session_id": "B", "reason": "other"}
+    hooks.handle(world.mesh, "session-end", "claude", end, env={}, host_pid=old)
     record = world.mesh.registry.get("claude:B")
-    assert record is not None and record.status == "idle" and record.pid == os.getpid()
+    assert record is not None and record.status == "idle" and record.pid == new
 
 
 def _end_or_resume(event: str, host_pid: int, reason: str, gate: Any) -> None:
@@ -679,20 +710,18 @@ def _end_or_resume(event: str, host_pid: int, reason: str, gate: Any) -> None:
     hooks.handle(mesh, event, "claude", payload, env={}, host_pid=host_pid)
 
 
-def test_concurrent_end_and_resume_leave_the_session_with_the_new_process(world: World) -> None:
+def test_concurrent_end_and_resume_leave_the_session_with_the_new_process(
+    world: World, older_and_newer: tuple[int, int]
+) -> None:
     # Two processes run at once: the SessionEnd of the process that the app ends (pid `old`),
     # and the SessionStart of the process that runs the session again (pid `new`).
-    old, new = os.getppid(), os.getpid()
+    old, new = older_and_newer
     _app_session("local_b", "worker-b")
-    sessions = paths.claude_dir() / "sessions"
-    sessions.mkdir(parents=True)
-    (sessions / f"{new}.json").write_text(
-        json.dumps({"sessionId": "B", "messagingSocketPath": "/tmp/new.sock"})
-    )
+    _socket_of(new, "/tmp/new.sock")
     ctx = multiprocessing.get_context("spawn")
     for round_ in range(20):
         world.put("b", host_session="local_b", status="idle", endpoint="/tmp/old.sock")
-        _owned_by_another_process(world, "claude:B")
+        _owned_by(world, "claude:B", old)
         [res] = world.mesh.send(world.peers["a"], "claude-b", f"Note {round_}.", kind="info")
         gate = ctx.Barrier(2)
         reason = "clear" if round_ % 2 else "other"
@@ -808,25 +837,33 @@ def test_session_end_finds_its_process_outside_the_ledger_lock(world: World) -> 
     )
 
 
-def test_adopt_replaces_a_record_only_when_it_is_gone_paused_or_unchanged(world: World) -> None:
-    def candidate() -> Peer:
+def test_adopt_lets_a_newer_process_take_a_session_and_never_an_older_one(
+    world: World, older_and_newer: tuple[int, int]
+) -> None:
+    def process(pid: int, endpoint: str) -> Peer:
         peer = Peer.from_json(world.peers["b"].to_record())
-        peer.endpoint = "/tmp/new.sock"
+        peer.pid, peer.proc_start, peer.endpoint = pid, proc_start(pid) or "", endpoint
         return peer
 
+    older, newer = older_and_newer
     world.mesh.registry.remove("claude:B")
-    assert world.mesh.adopt(candidate(), None).endpoint == "/tmp/new.sock"  # gone
-    seen = world.put("b", endpoint="/tmp/seen.sock")
-    assert world.mesh.adopt(candidate(), seen).endpoint == "/tmp/new.sock"  # unchanged
-    world.put("b", endpoint="/tmp/other.sock")
-    _owned_by_another_process(world, "claude:B")
-    # Another process registered the session after this one read it: its record stays.
-    assert world.mesh.adopt(candidate(), seen).endpoint == "/tmp/other.sock"
-    record = world.mesh.registry.get("claude:B")
+    assert world.mesh.adopt(process(newer, "/tmp/new.sock")).endpoint == "/tmp/new.sock"  # gone
+    # An older process never takes the session back from a newer owner.
+    assert world.mesh.adopt(process(older, "/tmp/old.sock")).endpoint == "/tmp/new.sock"
+    # A newer process takes it from an older owner.
+    world.mesh.registry.put(process(older, "/tmp/old.sock"))
+    assert world.mesh.adopt(process(newer, "/tmp/new.sock")).endpoint == "/tmp/new.sock"
+    # A paused record, and the record of an owner that exited, give way to any process.
+    record = world.mesh.registry.read("claude:B")
     assert record is not None
     record.status = "paused"
     world.mesh.registry.put(record)
-    assert world.mesh.adopt(candidate(), seen).endpoint == "/tmp/new.sock"  # paused
+    assert world.mesh.adopt(process(older, "/tmp/old.sock")).endpoint == "/tmp/old.sock"
+    dead = process(newer, "/tmp/dead.sock")
+    dead.proc_start = "a process that ended"
+    world.mesh.registry.put(dead)
+    taken = world.mesh.adopt(process(older, "/tmp/old.sock"), dead, seen_dead=True)
+    assert taken.endpoint == "/tmp/old.sock"
 
 
 def test_an_unknown_ending_process_pauses_a_record_whose_process_is_gone(
@@ -855,3 +892,102 @@ def test_adopt_replaces_a_record_whose_status_alone_changed(world: World) -> Non
     peer = Peer.from_json(world.peers["b"].to_record())
     peer.endpoint = "/tmp/new.sock"
     assert world.mesh.adopt(peer, seen).endpoint == "/tmp/new.sock"
+
+
+def _start_in_child(runtime: str, session_id: str, host_pid: int) -> None:
+    """The SessionStart hook of another process, which registers the session."""
+    payload = {"session_id": session_id, "cwd": os.getcwd(), "source": "resume"}
+    mesh = Mesh(Registry(), Ledger(), {})
+    hooks.handle(mesh, "session-start", runtime, payload, env={}, host_pid=host_pid, inbox=True)
+
+
+def _in_child(*args: Any) -> None:
+    ctx = multiprocessing.get_context("spawn")
+    child = ctx.Process(target=_start_in_child, args=args)
+    child.start()
+    child.join(timeout=60)
+    assert child.exitcode == 0
+
+
+def test_stale_cleanup_keeps_a_session_that_registers_after_its_snapshot(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Race 1: the cleanup lists the records, then another process registers a new session and
+    # a message is queued for it, then the cleanup commits.
+    sent: list[str] = []
+    snapshot = service.proc_starts
+
+    def snapshot_then_register(pids: list[int]) -> dict[int, str]:
+        starts = snapshot(pids)
+        _in_child("codex", "Y", os.getpid())
+        [res] = world.mesh.send(world.peers["a"], "codex:Y", "Note for later.", kind="info")
+        sent.append(str(res.msg_id))
+        return starts
+
+    monkeypatch.setattr(service, "proc_starts", snapshot_then_register)
+    hooks._remove_stale_state(world.mesh)
+    assert world.mesh.registry.read("codex:Y") is not None
+    assert _outcomes(world, sent[0]) == ["pending"]
+
+
+def test_pruning_keeps_a_record_that_a_resume_wrote_after_the_dead_check(
+    world: World, monkeypatch: pytest.MonkeyPatch, older_and_newer: tuple[int, int]
+) -> None:
+    # Race 2: pruning judges the record of an exited process dead, then the session runs again
+    # in a new process, which registers, and a message is queued; then pruning commits.
+    _, new = older_and_newer
+    world.put("b", status="idle", proc_start="a process that ended")
+    _socket_of(new, "/tmp/new.sock")
+    sent: list[str] = []
+    snapshot = service.proc_starts
+
+    def snapshot_then_resume(pids: list[int]) -> dict[int, str]:
+        starts = snapshot(pids)
+        _in_child("claude", "B", new)
+        [res] = world.mesh.send(world.peers["a"], "claude:B", "Note for later.", kind="info")
+        sent.append(str(res.msg_id))
+        return starts
+
+    monkeypatch.setattr(service, "proc_starts", snapshot_then_resume)
+    world.mesh.prune()
+    record = world.mesh.registry.read("claude:B")
+    assert record is not None and (record.pid, record.endpoint) == (new, "/tmp/new.sock")
+    assert _outcomes(world, sent[0]) == ["pending"]
+
+
+@pytest.mark.parametrize("event", ["prompt", "stop", "post-tool"])
+def test_an_old_process_hook_neither_restores_its_record_nor_takes_messages(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    older_and_newer: tuple[int, int],
+    event: str,
+) -> None:
+    # Race 3: a hook of the old process reads the record, then the session runs again in a new
+    # process, which registers, and a message is queued; then the old hook goes on.
+    old, new = older_and_newer
+    world.put("b", status="busy", endpoint="/tmp/old.sock")
+    _owned_by(world, "claude:B", old)
+    _socket_of(new, "/tmp/new.sock")
+    sent: list[str] = []
+    if event == "post-tool":
+        # The post-tool hook reads nothing for an empty inbox; give it a message to take.
+        [first] = world.mesh.send(world.peers["a"], "claude-b", "First.", kind="info")
+        sent.append(str(first.msg_id))
+    caller = hooks._caller
+
+    def read_then_resume(*args: Any) -> Any:
+        found = caller(*args)
+        _in_child("claude", "B", new)
+        [res] = world.mesh.send(world.peers["a"], "claude:B", "Note for later.", kind="info")
+        sent.append(str(res.msg_id))
+        return found
+
+    monkeypatch.setattr(hooks, "_caller", read_then_resume)
+    payload = {"session_id": "B", "cwd": os.getcwd()}
+    out = hooks.handle(world.mesh, event, "claude", payload, env={}, host_pid=old)
+    assert out is None
+    record = world.mesh.registry.read("claude:B")
+    # The record is the new process's as its SessionStart wrote it, status included.
+    assert record is not None
+    assert (record.pid, record.endpoint, record.status) == (new, "/tmp/new.sock", "idle")
+    assert all(_outcomes(world, msg_id) == ["pending"] for msg_id in sent)

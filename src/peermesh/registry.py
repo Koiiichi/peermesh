@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
@@ -318,10 +319,24 @@ def _typeable(name: object) -> str | None:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-")[:40] or None
 
 
-def same_record(record: Peer, seen: Peer | None) -> bool:
-    """True when record names the process that seen names: the same pid and start time. A
-    status change alone, such as a Stop hook's, leaves the record the same."""
-    return seen is not None and (record.pid, record.proc_start) == (seen.pid, seen.proc_start)
+# The process that hosts a session: its pid and its start time, as `ps` prints it.
+Owner = tuple[int, str]
+
+
+def owner(peer: Peer) -> Owner:
+    return peer.pid, peer.proc_start
+
+
+def started_after(start: str, other: str) -> bool:
+    """True when the process that started at `start` started after the one at `other`. Both are
+    `ps` start times, to the second, so two processes of the same second are neither; a time
+    that does not parse is never later."""
+    try:
+        return time.strptime(start, "%a %b %d %H:%M:%S %Y") > time.strptime(
+            other, "%a %b %d %H:%M:%S %Y"
+        )
+    except ValueError:
+        return False
 
 
 def claude_user_name(pid: int) -> str | None:
@@ -387,26 +402,33 @@ class Registry:
     def remove(self, peer_id: str) -> None:
         self._file(peer_id).unlink(missing_ok=True)
 
-    def live(self) -> list[Peer]:
-        """Live peers. Records of dead processes, reused pids and corrupt files are deleted."""
+    def records(self) -> list[Peer]:
+        """Every stored record that parses, live or not. Reading deletes nothing."""
         if not self.dir.is_dir():
             return []
-        records: list[tuple[Path, Peer]] = []
+        found: list[Peer] = []
         for path in sorted(self.dir.glob("*.json")):
             try:
-                records.append((path, Peer.from_json(json.loads(path.read_text()))))
+                found.append(Peer.from_json(json.loads(path.read_text())))
             except (OSError, ValueError, TypeError):
-                path.unlink(missing_ok=True)
-        starts = proc_starts([peer.pid for _, peer in records])
+                continue
+        return found
+
+    def live(self) -> list[Peer]:
+        """Live peers: records whose process runs, and records of a Claude app session that the
+        app keeps, which show as paused. Reading deletes nothing; Mesh.prune removes the rest.
+        """
+        records = self.records()
+        starts = proc_starts([peer.pid for peer in records])
         peers: list[Peer] = []
-        for path, peer in records:
-            # A paused record stays while the app keeps its session, whether or not its old
-            # process has exited yet.
-            keep = app_keeps(peer) if peer.status == "paused" else is_alive(peer, starts)
-            if keep:
+        for peer in records:
+            if peer.status != "paused" and is_alive(peer, starts):
                 peers.append(peer)
-            else:
-                path.unlink(missing_ok=True)
+            elif app_keeps(peer):
+                # Its process ended, and the app runs the session again later, also when no
+                # SessionEnd marked it paused.
+                peer.status = "paused"
+                peers.append(peer)
         _apply_user_names(peers)
         return peers
 
