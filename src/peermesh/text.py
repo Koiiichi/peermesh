@@ -69,6 +69,11 @@ ONE_CHANNEL = (
     "Use SendMessage only for an agent that this session started."
 )
 
+SUPERSEDED = (
+    "A newer process of this session owns its peermesh record now, so this process cannot act "
+    "as the session. Use peermesh from the newer process of the session."
+)
+
 UNKNOWN_FOLDER = (
     "peermesh did not register this Codex thread, and the call does not give its folder. "
     "Make sure that the user trusts the peermesh hooks. "

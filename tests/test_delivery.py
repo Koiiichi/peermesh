@@ -853,12 +853,14 @@ def test_adopt_lets_a_newer_process_take_a_session_and_never_an_older_one(
     # A newer process takes it from an older owner.
     world.mesh.registry.put(process(older, "/tmp/old.sock"))
     assert world.mesh.adopt(process(newer, "/tmp/new.sock")).endpoint == "/tmp/new.sock"
-    # A paused record, and the record of an owner that exited, give way to any process.
+    # A paused record whose newer owner still runs stays: pausing is no takeover for an older
+    # process.
     record = world.mesh.registry.read("claude:B")
     assert record is not None
     record.status = "paused"
     world.mesh.registry.put(record)
-    assert world.mesh.adopt(process(older, "/tmp/old.sock")).endpoint == "/tmp/old.sock"
+    assert world.mesh.adopt(process(older, "/tmp/old.sock")).endpoint == "/tmp/new.sock"
+    # The registration of an owner that exited gives way to any process that read it.
     dead = process(newer, "/tmp/dead.sock")
     dead.proc_start = "a process that ended"
     world.mesh.registry.put(dead)
@@ -991,3 +993,159 @@ def test_an_old_process_hook_neither_restores_its_record_nor_takes_messages(
     assert record is not None
     assert (record.pid, record.endpoint, record.status) == (new, "/tmp/new.sock", "idle")
     assert all(_outcomes(world, msg_id) == ["pending"] for msg_id in sent)
+
+
+def _end_in_child(host_pid: int) -> None:
+    """The SessionEnd hook of the owner process, which the app pauses."""
+    payload = {"session_id": "B", "reason": "other"}
+    hooks.handle(
+        Mesh(Registry(), Ledger(), {}), "session-end", "claude", payload, env={}, host_pid=host_pid
+    )
+
+
+@pytest.mark.parametrize("pause", ["after the read", "before the read"])
+def test_an_older_process_does_not_take_a_session_that_its_running_owner_paused(
+    world: World, monkeypatch: pytest.MonkeyPatch, older_and_newer: tuple[int, int], pause: str
+) -> None:
+    # The newer owner's own SessionEnd pauses the record while that owner still runs, after or
+    # before an old process's prompt hook reads it; then the old hook goes on.
+    old, new = older_and_newer
+    world.put("b", host_session="local_b", status="idle", endpoint="/tmp/new.sock")
+    _app_session("local_b", "worker-b")
+    _owned_by(world, "claude:B", new)
+    [res] = world.mesh.send(world.peers["a"], "claude-b", "Note for later.", kind="info")
+    caller = hooks._caller
+
+    def read_then_pause(*args: Any) -> Any:
+        found = caller(*args)
+        ctx = multiprocessing.get_context("spawn")
+        child = ctx.Process(target=_end_in_child, args=(new,))
+        child.start()
+        child.join(timeout=60)
+        assert child.exitcode == 0
+        return found
+
+    _socket_of(old, "/tmp/old.sock")  # the old process still runs, with its session file
+    if pause == "after the read":
+        monkeypatch.setattr(hooks, "_caller", read_then_pause)
+    else:
+        read_then_pause("claude", "B", new)
+    payload = {"session_id": "B", "cwd": os.getcwd()}
+    assert hooks.handle(world.mesh, "prompt", "claude", payload, env={}, host_pid=old) is None
+    record = world.mesh.registry.read("claude:B")
+    assert record is not None and (record.pid, record.status) == (new, "paused")
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+@pytest.mark.parametrize("event", ["prompt", "stop", "post-tool"])
+def test_a_hook_that_cannot_tell_its_process_changes_nothing(
+    world: World, monkeypatch: pytest.MonkeyPatch, event: str
+) -> None:
+    world.put("b", status="busy", endpoint="/tmp/own.sock")
+    before = world.mesh.registry.read("claude:B")
+    [res] = world.mesh.send(world.peers["a"], "claude-b", "Note for later.", kind="info")
+    monkeypatch.setattr(hooks, "find_host", lambda *a, **k: None)
+    payload = {"session_id": "B", "cwd": os.getcwd()}
+    assert hooks.handle(world.mesh, event, "claude", payload, env={}) is None
+    assert world.mesh.registry.read("claude:B") == before
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+def _codex_start_in_child(transcript: str) -> None:
+    payload = {"session_id": "X", "cwd": os.getcwd(), "transcript_path": transcript}
+    mesh = Mesh(Registry(), Ledger(), {})
+    hooks.handle(mesh, "session-start", "codex", payload, env={}, host_pid=os.getppid(), inbox=True)
+
+
+def test_pruning_keeps_a_codex_thread_that_opened_again_in_the_same_process(
+    world: World, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    # An app-server hosts many threads: a closed thread's record is dead by its missing rollout,
+    # then the thread opens again in the same process before pruning commits.
+    world.put("x", status="idle", transcript=str(tmp_path / "closed.jsonl"))
+    rollout = tmp_path / "open.jsonl"
+    rollout.write_text("")
+    sent: list[str] = []
+    snapshot = service.proc_starts
+
+    def snapshot_then_reopen(pids: list[int]) -> dict[int, str]:
+        starts = snapshot(pids)
+        ctx = multiprocessing.get_context("spawn")
+        child = ctx.Process(target=_codex_start_in_child, args=(str(rollout),))
+        child.start()
+        child.join(timeout=60)
+        assert child.exitcode == 0
+        [res] = world.mesh.send(world.peers["a"], "codex:X", "Note for later.", kind="info")
+        sent.append(str(res.msg_id))
+        return starts
+
+    monkeypatch.setattr(service, "proc_starts", snapshot_then_reopen)
+    world.mesh.prune()
+    record = world.mesh.registry.read("codex:X")
+    assert record is not None and record.transcript == str(rollout)
+    assert _outcomes(world, sent[0]) == ["pending"]
+
+
+def test_no_subprocess_runs_under_the_ledger_lock(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from contextlib import contextmanager
+
+    depth = [0]
+    under_lock: list[Any] = []
+    locked, run, popen = Ledger.locked, subprocess.run, subprocess.Popen
+
+    @contextmanager
+    def counted(self: Ledger) -> Iterator[None]:
+        with locked(self):
+            depth[0] += 1
+            try:
+                yield
+            finally:
+                depth[0] -= 1
+
+    def watched_run(*args: Any, **kwargs: Any) -> Any:
+        if depth[0]:
+            under_lock.append(args[0] if args else kwargs.get("args"))
+        return run(*args, **kwargs)
+
+    def watched_popen(*args: Any, **kwargs: Any) -> Any:
+        if depth[0]:
+            under_lock.append(args[0] if args else kwargs.get("args"))
+        return popen(*args, **kwargs)
+
+    monkeypatch.setattr(Ledger, "locked", counted)
+    monkeypatch.setattr(subprocess, "run", watched_run)
+    monkeypatch.setattr(subprocess, "Popen", watched_popen)
+    world.put("b", host_session="local_b", status="busy")
+    _app_session("local_b", "worker-b")
+    world.mesh.send(world.peers["a"], "claude-b", "To a busy peer.", kind="request")
+    world.put("x", status="idle")
+    world.mesh.send(world.peers["a"], "codex-x", "To an idle peer.", kind="request")
+    for event in ("session-start", "prompt", "post-tool", "stop"):
+        _hook(world, event, "b")
+    world.mesh.send(world.peers["a"], "claude-b", "Note.", kind="info")
+    _hook(world, "prompt", "b")
+    _hook(world, "session-end", "b", reason="other")
+    world.mesh.prune()
+    world.mesh.whoami(env={"CODEX_THREAD_ID": "NEW"}, host_pid=os.getpid())
+    assert under_lock == []
+
+
+def test_only_adopt_claim_and_retire_write_records() -> None:
+    import ast
+    from pathlib import Path
+
+    src = Path(service.__file__).parent
+    for path in src.glob("*.py"):
+        if path.name in ("service.py", "registry.py"):
+            continue
+        code = path.read_text()
+        assert "registry.put(" not in code and "registry.remove(" not in code, path.name
+    writers = set()
+    for node in ast.walk(ast.parse(Path(service.__file__).read_text())):
+        if isinstance(node, ast.FunctionDef):
+            body = ast.unparse(node)
+            if "self.registry.put(" in body or "self.registry.remove(" in body:
+                writers.add(node.name)
+    assert writers == {"adopt", "claim", "retire"}
