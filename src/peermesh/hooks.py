@@ -184,15 +184,41 @@ def _context(event: str, body: str) -> dict[str, Any]:
     return {"hookSpecificOutput": {"hookEventName": _HOOK_NAMES[event], "additionalContext": body}}
 
 
+def _host(runtime: Runtime, session_id: str, host_pid: int | None) -> int | None:
+    """The process that fired the hook, or None when no ancestor names the session."""
+    if host_pid is not None:
+        return host_pid
+    found = find_host(runtime, session_id)
+    return found[0] if found else None
+
+
+def _owns(peer: Peer, pid: int) -> bool:
+    return pid == peer.pid and proc_start(pid) == peer.proc_start
+
+
 def _ends_its_process(peer: Peer, runtime: Runtime, session_id: str, host_pid: int | None) -> bool:
-    """True when the process whose session ends is the one that the record names, or when that
-    process cannot be found, as before records knew which process ends."""
-    if host_pid is None:
-        found = find_host(runtime, session_id)
-        if found is None:
-            return True
-        host_pid = found[0]
-    return host_pid == peer.pid and proc_start(host_pid) == peer.proc_start
+    """True when the process whose session ends is the one that the record names.
+
+    When that process cannot be found, a Claude app session keeps its record, because the app
+    can already run it in a new process; any other session ends, as before.
+    """
+    pid = _host(runtime, session_id, host_pid)
+    if pid is None:
+        return peer.host_session is None
+    return _owns(peer, pid)
+
+
+def _needs_registration(
+    peer: Peer | None, event: str, runtime: Runtime, session_id: str, host_pid: int | None
+) -> bool:
+    """True when the hook's process must register: no live record, a paused one, or, for a
+    Claude app session, a record of another process, which the app can still be ending."""
+    if peer is None or peer.status == "paused" or not is_alive(peer):
+        return True
+    if peer.host_session is None or event not in ("session-start", "prompt"):
+        return False
+    pid = _host(runtime, session_id, host_pid)
+    return pid is not None and not _owns(peer, pid)
 
 
 def handle(
@@ -226,18 +252,21 @@ def handle(
         return None
     peer_id = f"{runtime}:{session_id}"
     if event == "session-end":
-        peer = mesh.registry.get(peer_id)
-        if peer is not None and not _ends_its_process(peer, runtime, session_id, host_pid):
-            # The app ran the session again in a new process before this one ended: the record
-            # and the waiting messages belong to the new process.
-            return None
-        if peer is not None and payload.get("reason") != "clear" and app_keeps(peer):
-            # The Claude app ended the process of an idle session and keeps the session to run
-            # it again, so its record and its waiting messages stay.
-            peer.status = "paused"
-            mesh.registry.put(peer)
-            return None
-        mesh.registry.remove(peer_id)
+        # Registration takes the same lock, so a resume cannot change the record between the
+        # check of its owner and the change.
+        with mesh.ledger.locked():
+            peer = mesh.registry.get(peer_id)
+            if peer is not None and not _ends_its_process(peer, runtime, session_id, host_pid):
+                # The app ran the session again in a new process before this one ended: the
+                # record and the waiting messages belong to the new process.
+                return None
+            if peer is not None and payload.get("reason") != "clear" and app_keeps(peer):
+                # The Claude app ended the process of an idle session and keeps the session to
+                # run it again, so its record and its waiting messages stay.
+                peer.status = "paused"
+                mesh.registry.put(peer)
+                return None
+            mesh.registry.remove(peer_id)
         _seen_file(peer_id).unlink(missing_ok=True)
         paths.state_file(peer_id, SHORT_IDS).unlink(missing_ok=True)
         mesh.expire_inbox(peer_id)
@@ -250,10 +279,14 @@ def handle(
         return None
     cwd = str(payload.get("cwd") or os.getcwd())
     peer = mesh.registry.get(peer_id)
-    # A paused record names the process that the app ended, which can still be exiting.
-    if peer is None or peer.status == "paused" or not is_alive(peer):
+    registers = _needs_registration(peer, event, runtime, session_id, host_pid)
+    if registers:
         try:
-            peer = mesh.register(detect(runtime, session_id, cwd, env, host_pid))
+            # The SessionEnd of the process that the app ends takes the same lock.
+            with mesh.ledger.locked():
+                peer = mesh.registry.get(peer_id)
+                if _needs_registration(peer, event, runtime, session_id, host_pid):
+                    peer = mesh.register(detect(runtime, session_id, cwd, env, host_pid))
         except NoInboxError:
             # Claude Code can run SessionStart before it writes the inbox socket path. The
             # next prompt registers the session; the rules apply from the start.
@@ -262,7 +295,9 @@ def handle(
                 emit(out)
                 return out
             raise
-    elif event in ("session-start", "prompt"):
+    # A record that needs no registration exists, and registration returns one.
+    assert peer is not None
+    if not registers and event in ("session-start", "prompt"):
         _refresh(peer, cwd)
     transcript = str(payload.get("transcript_path") or "")
     if runtime == "codex" and transcript and Path(transcript).exists():
