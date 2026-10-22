@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from peermesh import paths, registry
+from peermesh.ledger import Ledger
 from peermesh.registry import (
     Peer,
     Registry,
@@ -23,6 +24,7 @@ from peermesh.registry import (
     repo_info,
     scoped,
 )
+from peermesh.service import Mesh
 
 
 def dead_pid() -> int:
@@ -42,7 +44,9 @@ def test_put_get_roundtrip_private_mode(make_peer: Callable[..., Peer]) -> None:
     assert stat.S_IMODE(reg.dir.stat().st_mode) == 0o700
 
 
-def test_live_prunes_dead_reused_and_corrupt(make_peer: Callable[..., Peer]) -> None:
+def test_live_skips_dead_reused_and_corrupt_and_prune_removes_them(
+    make_peer: Callable[..., Peer],
+) -> None:
     reg = Registry()
     alive = make_peer(id="claude:alive")
     reg.put(alive)
@@ -50,6 +54,9 @@ def test_live_prunes_dead_reused_and_corrupt(make_peer: Callable[..., Peer]) -> 
     reg.put(make_peer(id="codex:reused", runtime="codex", proc_start="Thu Jan  1 00:00:00 1970"))
     (reg.dir / "broken.json").write_text("{not json")
     assert [p.id for p in reg.live()] == ["claude:alive"]
+    # Reading deletes nothing; the locked prune step removes the records.
+    assert len(list(reg.dir.glob("*.json"))) == 4
+    Mesh(reg, Ledger(), {}).prune()
     assert sorted(f.name for f in reg.dir.glob("*.json")) == ["claude_alive.json"]
 
 
@@ -254,6 +261,7 @@ def test_codex_record_without_rollout_is_pruned(
     reg.put(make_peer(id="codex:open", runtime="codex", transcript=str(rollout)))
     reg.put(make_peer(id="codex:closed", runtime="codex", transcript=str(tmp_path / "gone")))
     assert [p.id for p in reg.live()] == ["codex:open"]
+    Mesh(reg, Ledger(), {}).prune()
     assert reg.get("codex:closed") is None
 
 
