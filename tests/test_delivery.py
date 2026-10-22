@@ -1379,12 +1379,14 @@ def _ps_fails(monkeypatch: pytest.MonkeyPatch, how: str) -> None:
             return run(args, *rest, **kwargs)
         if how == "missing":
             raise FileNotFoundError("ps")
+        if how == "stuck":
+            raise subprocess.TimeoutExpired(args, kwargs.get("timeout") or 0)
         return subprocess.CompletedProcess(args, 1, "", "ps: sysctl: Operation not permitted\n")
 
     monkeypatch.setattr(registry.subprocess, "run", failing)
 
 
-@pytest.mark.parametrize("how", ["missing", "error"])
+@pytest.mark.parametrize("how", ["missing", "error", "stuck"])
 def test_a_failed_process_check_ends_no_session_and_expires_no_message(
     world: World, monkeypatch: pytest.MonkeyPatch, how: str
 ) -> None:
