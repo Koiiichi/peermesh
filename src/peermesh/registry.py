@@ -387,7 +387,10 @@ class Registry:
         starts = proc_starts([peer.pid for _, peer in records])
         peers: list[Peer] = []
         for path, peer in records:
-            if is_alive(peer, starts) or (peer.status == "paused" and app_keeps(peer)):
+            # A paused record stays while the app keeps its session, whether or not its old
+            # process has exited yet.
+            keep = app_keeps(peer) if peer.status == "paused" else is_alive(peer, starts)
+            if keep:
                 peers.append(peer)
             else:
                 path.unlink(missing_ok=True)
