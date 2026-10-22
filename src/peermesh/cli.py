@@ -265,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
                 [p.to_json() for p in peers],
                 [
                     f"{p.name:28} {p.runtime:6} "
-                    f"{_style(f'{p.status:5}', 'yellow' if p.status == 'busy' else 'dim')} "
+                    f"{_style(f'{p.status:6}', 'yellow' if p.status == 'busy' else 'dim')} "
                     f"{p.branch or '-':20} {p.worktree or p.cwd}"
                     for p in peers
                 ]

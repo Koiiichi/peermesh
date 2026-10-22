@@ -14,7 +14,7 @@ from peermesh.errors import NoInboxError
 from peermesh.identity import detect
 from peermesh.inbox import Waiting
 from peermesh.install import HOOK_EVENTS, hooks_installed
-from peermesh.registry import Peer, Runtime, current_branch, is_alive, repo_info
+from peermesh.registry import Peer, Runtime, app_keeps, current_branch, is_alive, repo_info
 from peermesh.service import SHORT_IDS, Mesh, accepts_short_ids
 from peermesh.views import printable
 
@@ -207,6 +207,13 @@ def handle(
         return None
     peer_id = f"{runtime}:{session_id}"
     if event == "session-end":
+        peer = mesh.registry.get(peer_id)
+        if peer is not None and payload.get("reason") != "clear" and app_keeps(peer):
+            # The Claude app ended the process of an idle session and keeps the session to run
+            # it again, so its record and its waiting messages stay.
+            peer.status = "paused"
+            mesh.registry.put(peer)
+            return None
         mesh.registry.remove(peer_id)
         _seen_file(peer_id).unlink(missing_ok=True)
         paths.state_file(peer_id, SHORT_IDS).unlink(missing_ok=True)

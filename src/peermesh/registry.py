@@ -15,7 +15,7 @@ from typing import Any, Literal
 from peermesh import paths
 
 Runtime = Literal["claude", "codex"]
-Status = Literal["busy", "idle", "offline"]
+Status = Literal["busy", "idle", "paused", "offline"]
 Scope = Literal["repo", "worktree", "all"]
 
 
@@ -42,6 +42,10 @@ class Peer:
     # The name that peermesh gave the session, set when a user rename replaces `name`. The
     # rename exists only in memory, so the record keeps the given name as a stable address.
     auto_name: str | None = None
+    # The Claude app session that hosts this Claude Code session (`hostSessionId`). The app ends
+    # the process of an idle session to free memory and runs the session again later under the
+    # same session id, so a record with this field can outlive its process as "paused".
+    host_session: str | None = None
 
     @property
     def has_tools(self) -> bool:
@@ -259,6 +263,45 @@ def codex_native_state(rollout: str) -> tuple[Status, float] | None:
     return None
 
 
+def claude_app_session(host_session: str) -> dict[str, Any] | None:
+    """The Claude app's record of one of its sessions. The format is internal; failure is normal."""
+    if not re.fullmatch(r"local_[0-9a-f-]+", host_session):
+        return None
+    pattern = f"claude-code-sessions/*/*/{host_session}.json"
+    for path in paths.claude_app_dir().glob(pattern):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
+def _app_record(peer: Peer) -> dict[str, Any] | None:
+    """The Claude app's record of the session of peer. A child Claude process inherits the
+    hostSessionId of its parent, and /clear maps the app session to a new session id, so the
+    record counts only when it names this session."""
+    if peer.host_session is None:
+        return None
+    data = claude_app_session(peer.host_session)
+    if data is None or data.get("cliSessionId") != peer.id.split(":", 1)[1]:
+        return None
+    return data
+
+
+def app_keeps(peer: Peer) -> bool:
+    """True when the Claude app keeps the session of peer to run it again: not archived."""
+    data = _app_record(peer)
+    return data is not None and data.get("isArchived") is False
+
+
+def _typeable(name: object) -> str | None:
+    if not isinstance(name, str):
+        return None
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-")[:40] or None
+
+
 def claude_user_name(pid: int) -> str | None:
     """The name that the user gave the Claude session, made safe to type, or None.
 
@@ -270,9 +313,17 @@ def claude_user_name(pid: int) -> str | None:
     data = claude_session(pid)
     if data is None or data.get("nameSource") not in (None, "user", "peer"):
         return None
-    if not isinstance(data.get("name"), str):
+    return _typeable(data.get("name"))
+
+
+def _user_name(peer: Peer) -> str | None:
+    """The name that the user gave a Claude session. A paused session has no session file, so
+    its name is the title that the Claude app shows."""
+    if peer.runtime != "claude":
         return None
-    return re.sub(r"[^A-Za-z0-9_.-]+", "-", data["name"]).strip("-")[:40] or None
+    if peer.status == "paused":
+        return _typeable((_app_record(peer) or {}).get("title"))
+    return claude_user_name(peer.pid)
 
 
 class Registry:
@@ -317,10 +368,10 @@ class Registry:
         starts = proc_starts([peer.pid for _, peer in records])
         peers: list[Peer] = []
         for path, peer in records:
-            if not is_alive(peer, starts):
+            if is_alive(peer, starts) or (peer.status == "paused" and app_keeps(peer)):
+                peers.append(peer)
+            else:
                 path.unlink(missing_ok=True)
-                continue
-            peers.append(peer)
         _apply_user_names(peers)
         return peers
 
@@ -358,7 +409,7 @@ def _apply_user_names(peers: list[Peer]) -> None:
     automatic = {p.name for p in peers}
     claims: dict[str, list[Peer]] = {}
     for peer in peers:
-        wanted = claude_user_name(peer.pid) if peer.runtime == "claude" else None
+        wanted = _user_name(peer)
         if wanted is not None and wanted != peer.name:
             claims.setdefault(wanted, []).append(peer)
     for wanted, owners in claims.items():

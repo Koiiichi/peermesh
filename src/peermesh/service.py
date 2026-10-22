@@ -53,6 +53,11 @@ NO_DETOUR = "Do not send the message through a different channel."
 # The kind of state file that a session writes when its peermesh resolves a short message id.
 SHORT_IDS = "short-ids"
 PENDING_NOTE = "The peer reads the message at its next tool call or prompt."
+PAUSED_NOTE = (
+    "The Claude app paused this idle session to free memory. The message waits, and the "
+    "session reads it at its next prompt after the app runs it again. peermesh cannot run it; "
+    "the user can, by opening the session."
+)
 # How a ledger outcome reads for a person or an agent that tracks one message.
 STATES = {
     "sending": "sending: the delivery did not finish",
@@ -135,6 +140,9 @@ class Mesh:
 
     def _enrich(self, peer: Peer) -> Peer:
         """Use the runtime's own status unless a peermesh hook recorded a newer one."""
+        if peer.status == "paused":
+            # Its process ended, so its pid can belong to another session now.
+            return peer
         if peer.runtime == "claude":
             native = claude_native_state(peer.pid)
         else:
@@ -420,7 +428,7 @@ class Mesh:
                     | {
                         "sent_at": now,
                         "outcome": "pending" if to_inbox else "sending",
-                        "note": PENDING_NOTE if to_inbox else "",
+                        "note": _pending_note(target) if to_inbox else "",
                     }
                 )
                 if to_inbox:
@@ -440,7 +448,7 @@ class Mesh:
                     "The ledger or the inbox cannot be written. The message was not sent.",
                 )
         if to_inbox:
-            return SendResult(msg.id, target.name, "pending", PENDING_NOTE)
+            return SendResult(msg.id, target.name, "pending", _pending_note(target))
         return self._deliver_native(target, msg, after_completion=_can_reopen(target, msg))
 
     def _deliver_native(self, target: Peer, msg: Message, *, after_completion: bool) -> SendResult:
@@ -575,11 +583,17 @@ def _wants_inbox(target: Peer, msg: Message) -> bool:
     a turn through the native path. An urgent request uses the native path, except on a busy
     Codex session that cannot be steered, where the next tool call is the fastest way in.
     """
+    if target.status == "paused":
+        return True
     if "inbox" not in target.capabilities:
         return False
     if msg.urgency == "now":
         return target.runtime == "codex" and target.host != "daemon" and target.status == "busy"
     return target.status == "busy" or msg.kind == "info"
+
+
+def _pending_note(target: Peer) -> str:
+    return PAUSED_NOTE if target.status == "paused" else PENDING_NOTE
 
 
 def _can_reopen(target: Peer, msg: Message) -> bool:

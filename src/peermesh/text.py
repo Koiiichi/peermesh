@@ -60,7 +60,7 @@ TOOL_TRACK = (
 )
 
 TOOL_STATUS = (
-    "Get the status of one peer: busy or idle, the seconds since it was last seen, "
+    "Get the status of one peer: busy, idle or paused, the seconds since it was last seen, "
     "its branch and worktree, and the number of messages queued for it."
 )
 

@@ -127,7 +127,9 @@ def detect(
                 "Use Claude Code 2.1.224 or later on macOS or Linux."
             )
         capabilities.append("urgent_interrupt")
+        host_session = native.get("hostSessionId")
     else:
+        host_session = None
         endpoint = session_id
         command = command_of(host_pid)
         if "app-server" in command:
@@ -154,4 +156,5 @@ def detect(
         endpoint=endpoint,
         host=host,
         capabilities=capabilities,
+        host_session=host_session if isinstance(host_session, str) else None,
     )
