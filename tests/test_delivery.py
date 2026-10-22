@@ -1149,3 +1149,52 @@ def test_only_adopt_claim_and_retire_write_records() -> None:
             if "self.registry.put(" in body or "self.registry.remove(" in body:
                 writers.add(node.name)
     assert writers == {"adopt", "claim", "retire"}
+
+
+def test_a_session_start_makes_a_new_registration_in_the_same_process(world: World) -> None:
+    # A Codex thread that opens again in the same app-server, with the same rollout: a removal
+    # that read the earlier registration must not end the new one.
+    world.put("x", status="idle")
+    earlier = world.mesh.registry.read("codex:X")
+    assert earlier is not None
+    payload = {"session_id": "X", "cwd": os.getcwd()}
+    hooks.handle(
+        world.mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid(), inbox=True
+    )
+    [res] = world.mesh.send(world.peers["a"], "codex:X", "Note for later.", kind="info")
+    world.mesh.retire("codex:X", earlier)
+    assert world.mesh.registry.read("codex:X") is not None
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+@pytest.mark.parametrize("path", ["prune", "session-end"])
+def test_an_unreadable_record_keeps_its_inbox(
+    world: World, monkeypatch: pytest.MonkeyPatch, path: str
+) -> None:
+    world.put("x", status="busy")
+    [res] = world.mesh.send(world.peers["a"], "codex-x", "Note for later.", kind="info")
+    read = Registry.read
+
+    def unreadable(self: Registry, peer_id: str) -> Peer | None:
+        if peer_id == "codex:X":
+            # As Registry.read sees a PermissionError: no record object.
+            return None
+        return read(self, peer_id)
+
+    monkeypatch.setattr(Registry, "read", unreadable)
+    monkeypatch.setattr(Registry, "absent", lambda self, peer_id: False)
+    if path == "prune":
+        world.mesh.prune()
+    else:
+        _hook(world, "session-end", "x")
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+def test_a_request_to_an_exited_app_session_waits_without_a_session_end(world: World) -> None:
+    # The app ended the process, and no SessionEnd marked the record paused.
+    world.put("b", host_session="local_b", status="idle")
+    _app_session("local_b", "worker-b")
+    _process_ended(world, "claude:B")
+    [res] = world.mesh.send(world.peers["a"], "worker-b", "Run the tests.", kind="request")
+    assert res.status == "pending" and "paused" in res.note
+    assert world.claude.calls == []

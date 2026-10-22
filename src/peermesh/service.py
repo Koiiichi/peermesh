@@ -200,7 +200,7 @@ class Mesh:
                 except OSError:
                     continue
             for peer_id in self.inbox.peer_ids():
-                if self.registry.read(peer_id) is None:
+                if self.registry.absent(peer_id):
                     self.expire_inbox(peer_id, locked=True)
 
     def whoami(
@@ -518,6 +518,10 @@ class Mesh:
             # resolve() gave.
             fresh = self.registry.read(target.id)
             if fresh is not None:
+                if target.status == "paused" and _same(fresh, target):
+                    # The live view saw this registration's process exit while the Claude app
+                    # keeps the session; the stored status can still say idle.
+                    fresh.status = "paused"
                 fresh.name, fresh.auto_name = target.name, target.auto_name
                 target = fresh
             target = self._enrich(target)
