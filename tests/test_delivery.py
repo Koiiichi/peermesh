@@ -13,7 +13,9 @@ from typing import Any
 import pytest
 
 from peermesh import hooks, install, paths, registry, service
+from peermesh import inbox as inbox_module
 from peermesh.envelope import ENDINGS, INFO_NOTE, Message
+from peermesh.errors import PeerError
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry, is_alive, proc_start
 from peermesh.service import Mesh, accepts_short_ids, announce_short_ids
@@ -1149,6 +1151,15 @@ def test_only_adopt_claim_and_retire_write_records() -> None:
             if "self.registry.put(" in body or "self.registry.remove(" in body:
                 writers.add(node.name)
     assert writers == {"adopt", "claim", "retire"}
+    # No reader deletes: the service deletes no file itself, only Registry.remove deletes a
+    # record file, and reading an inbox deletes nothing.
+    assert "unlink(" not in Path(service.__file__).read_text()
+    deleting = set()
+    for module in (registry, inbox_module):
+        for node in ast.walk(ast.parse(Path(module.__file__).read_text())):
+            if isinstance(node, ast.FunctionDef) and "unlink(" in ast.unparse(node):
+                deleting.add(node.name)
+    assert deleting == {"remove", "done"}
 
 
 def test_a_session_start_makes_a_new_registration_in_the_same_process(world: World) -> None:
@@ -1198,3 +1209,45 @@ def test_a_request_to_an_exited_app_session_waits_without_a_session_end(world: W
     [res] = world.mesh.send(world.peers["a"], "worker-b", "Run the tests.", kind="request")
     assert res.status == "pending" and "paused" in res.note
     assert world.claude.calls == []
+
+
+def test_adopt_does_not_overwrite_a_record_that_it_cannot_read(
+    world: World, older_and_newer: tuple[int, int]
+) -> None:
+    older, newer = older_and_newer
+    _owned_by(world, "claude:B", newer)
+    path = world.mesh.registry._file("claude:B")
+    path.chmod(0)
+    try:
+        candidate = Peer.from_json(world.peers["b"].to_record())
+        candidate.pid, candidate.proc_start = older, proc_start(older) or ""
+        with pytest.raises(PeerError, match="cannot read"):
+            world.mesh.adopt(candidate)
+    finally:
+        path.chmod(0o600)
+    record = world.mesh.registry.read("claude:B")
+    assert record is not None and record.pid == newer
+
+
+def test_reading_an_inbox_keeps_a_message_that_it_cannot_read(world: World) -> None:
+    world.put("b", status="busy")
+    [res] = world.mesh.send(world.peers["a"], "claude-b", "Note for later.", kind="info")
+    [path] = list(world.mesh.inbox.dir("claude:B").iterdir())
+    path.chmod(0)
+    try:
+        assert world.mesh.inbox.waiting("claude:B") == []
+        assert path.exists()
+        _hook(world, "post-tool", "b")
+        assert path.exists()
+    finally:
+        path.chmod(0o600)
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+def test_pruning_keeps_a_record_that_does_not_parse_and_its_inbox(world: World) -> None:
+    world.put("b", status="busy")
+    [res] = world.mesh.send(world.peers["a"], "claude-b", "Note for later.", kind="info")
+    world.mesh.registry._file("claude:B").write_text("{not json")
+    world.mesh.prune()
+    assert world.mesh.registry._file("claude:B").exists()
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]

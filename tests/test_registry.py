@@ -44,7 +44,7 @@ def test_put_get_roundtrip_private_mode(make_peer: Callable[..., Peer]) -> None:
     assert stat.S_IMODE(reg.dir.stat().st_mode) == 0o700
 
 
-def test_live_skips_dead_reused_and_corrupt_and_prune_removes_them(
+def test_live_skips_dead_reused_and_corrupt_and_prune_removes_the_exited(
     make_peer: Callable[..., Peer],
 ) -> None:
     reg = Registry()
@@ -57,7 +57,8 @@ def test_live_skips_dead_reused_and_corrupt_and_prune_removes_them(
     # Reading deletes nothing; the locked prune step removes the records.
     assert len(list(reg.dir.glob("*.json"))) == 4
     Mesh(reg, Ledger(), {}).prune()
-    assert sorted(f.name for f in reg.dir.glob("*.json")) == ["claude_alive.json"]
+    # A record that does not parse stays: it is not a session that ended.
+    assert sorted(f.name for f in reg.dir.glob("*.json")) == ["broken.json", "claude_alive.json"]
 
 
 @pytest.mark.parametrize(

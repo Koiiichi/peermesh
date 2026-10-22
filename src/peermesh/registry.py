@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from peermesh import paths
+from peermesh.errors import UnreadableRecord
 
 Runtime = Literal["claude", "codex"]
 Status = Literal["busy", "idle", "paused", "offline"]
@@ -327,6 +328,12 @@ def _typeable(name: object) -> str | None:
 Owner = tuple[int, str]
 
 
+_UNREADABLE = (
+    "peermesh cannot read the registry record {path}, so it does not change the session. "
+    "Check the permissions and the content of the file."
+)
+
+
 def owner(peer: Peer) -> Owner:
     return peer.pid, peer.proc_start
 
@@ -388,11 +395,20 @@ class Registry:
 
     def read(self, peer_id: str) -> Peer | None:
         """The stored record, as it is: no user name, and no pruning, so no subprocess runs.
-        A caller that holds the ledger lock reads with this."""
+        A caller that holds the ledger lock reads with this. None means that no record exists;
+        a record that exists and cannot be read or parsed raises UnreadableRecord, because a
+        caller must not take it for absence."""
+        path = self._file(peer_id)
         try:
-            return Peer.from_json(json.loads(self._file(peer_id).read_text()))
-        except (OSError, ValueError, TypeError):
+            text = path.read_text()
+        except FileNotFoundError:
             return None
+        except OSError as exc:
+            raise UnreadableRecord(_UNREADABLE.format(path=path)) from exc
+        try:
+            return Peer.from_json(json.loads(text))
+        except (ValueError, TypeError) as exc:
+            raise UnreadableRecord(_UNREADABLE.format(path=path)) from exc
 
     def absent(self, peer_id: str) -> bool:
         """True only when the record is known not to exist. A read error, such as a denied
@@ -406,7 +422,10 @@ class Registry:
         return False
 
     def get(self, peer_id: str) -> Peer | None:
-        peer = self.read(peer_id)
+        try:
+            peer = self.read(peer_id)
+        except UnreadableRecord:
+            return None
         if peer is None:
             return None
         if peer.runtime == "claude":
