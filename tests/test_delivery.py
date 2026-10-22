@@ -846,3 +846,12 @@ def test_an_unknown_ending_process_pauses_a_record_whose_process_is_gone(
     assert record is not None and record.status == "paused"
     assert "claude:B" in {p.id for p in world.mesh.registry.live()}
     assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+def test_adopt_replaces_a_record_whose_status_alone_changed(world: World) -> None:
+    # The old process's Stop hook turned busy into idle while the new process ran detect.
+    seen = world.put("b", status="busy", endpoint="/tmp/old.sock")
+    world.put("b", status="idle")
+    peer = Peer.from_json(world.peers["b"].to_record())
+    peer.endpoint = "/tmp/new.sock"
+    assert world.mesh.adopt(peer, seen).endpoint == "/tmp/new.sock"

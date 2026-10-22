@@ -319,12 +319,9 @@ def _typeable(name: object) -> str | None:
 
 
 def same_record(record: Peer, seen: Peer | None) -> bool:
-    """True when record is the record that was read as seen: the same process and status."""
-    return seen is not None and (record.pid, record.proc_start, record.status) == (
-        seen.pid,
-        seen.proc_start,
-        seen.status,
-    )
+    """True when record names the process that seen names: the same pid and start time. A
+    status change alone, such as a Stop hook's, leaves the record the same."""
+    return seen is not None and (record.pid, record.proc_start) == (seen.pid, seen.proc_start)
 
 
 def claude_user_name(pid: int) -> str | None:
