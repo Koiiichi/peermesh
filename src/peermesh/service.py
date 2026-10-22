@@ -20,7 +20,15 @@ from peermesh.envelope import (
 from peermesh.errors import PeerError
 from peermesh.inbox import Inbox, Waiting
 from peermesh.ledger import Ledger
-from peermesh.registry import Peer, Registry, Scope, claude_native_state, is_alive, scoped
+from peermesh.registry import (
+    Peer,
+    Registry,
+    Scope,
+    claude_native_state,
+    codex_native_state,
+    is_alive,
+    scoped,
+)
 from peermesh.transports import Transport
 from peermesh.transports.claude import ClaudeSocketTransport
 from peermesh.transports.codex import CodexTransport
@@ -126,11 +134,13 @@ class Mesh:
         return self.register(peer)
 
     def _enrich(self, peer: Peer) -> Peer:
-        """Use Claude Code's own status unless a peermesh hook recorded a newer one."""
+        """Use the runtime's own status unless a peermesh hook recorded a newer one."""
         if peer.runtime == "claude":
             native = claude_native_state(peer.pid)
-            if native is not None and native[1] >= peer.last_seen:
-                peer.status = native[0]
+        else:
+            native = codex_native_state(peer.transcript) if peer.transcript else None
+        if native is not None and native[1] >= peer.last_seen:
+            peer.status = native[0]
         return peer
 
     def all_peers(self) -> list[Peer]:

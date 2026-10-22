@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from peermesh.install import MIN_CLAUDE, _version
+from peermesh.registry import codex_native_state
 
 pytestmark = pytest.mark.contract
 REAL_HOME = Path(os.path.expanduser("~"))
@@ -111,3 +112,19 @@ def test_claude_session_record_fields() -> None:
     assert all({"pid", "sessionId", "status"} <= set(r) for r in records)
     # Some live sessions have no inbox socket, so one record with every field shows the format.
     assert any("messagingSocketPath" in r for r in records)
+
+
+def test_codex_rollout_turn_events() -> None:
+    rollouts = sorted(
+        glob.glob(str(REAL_HOME / ".codex" / "sessions" / "*" / "*" / "*" / "rollout-*.jsonl")),
+        key=os.path.getmtime,
+    )
+    if not rollouts:
+        pytest.skip("no Codex rollout")
+    # The newest rollout with a finished top-level turn shows the fields that peermesh reads.
+    for rollout in reversed(rollouts[-20:]):
+        state = codex_native_state(rollout)
+        if state is not None:
+            assert state[0] in ("busy", "idle") and state[1] > 0
+            return
+    pytest.fail("no recent Codex rollout has a top-level task_started or task_complete event")
