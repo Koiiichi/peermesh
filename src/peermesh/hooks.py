@@ -329,7 +329,9 @@ def handle(
     if registers:
         dead = seen is not None and not is_alive(seen)
         try:
-            seen = mesh.adopt(detect(runtime, session_id, cwd, env, host_pid), seen, seen_dead=dead)
+            candidate = detect(runtime, session_id, cwd, env, host_pid)
+            resume = event == "session-start"
+            seen = mesh.adopt(candidate, seen, seen_dead=dead, resume=resume)
         except NoInboxError:
             # Claude Code can run SessionStart before it writes the inbox socket path. The
             # next prompt registers the session; the rules apply from the start.
