@@ -218,7 +218,7 @@ def claude_native_state(pid: int) -> tuple[Status, float] | None:
 # A turn writes much more than its start and end, so the tail holds the last turn events of a
 # rollout unless one tool output is larger than this.
 ROLLOUT_TAIL = 1 << 20
-_TURN_EVENTS = (b"task_started", b"task_complete", b"turn_aborted")
+_TURN_EVENTS = ("task_started", "task_complete", "turn_aborted")
 
 
 def codex_native_state(rollout: str) -> tuple[Status, float] | None:
@@ -236,23 +236,25 @@ def codex_native_state(rollout: str) -> tuple[Status, float] | None:
     except OSError:
         return None
     for line in reversed(tail.splitlines()):
-        kind = next((k for k in _TURN_EVENTS if b'"' + k + b'"' in line), None)
-        if kind is None:
+        # Most lines name no turn event, and parsing every line of a large tail is slow. A name
+        # can also stand in a message text, so only the parsed payload type decides.
+        if not any(name.encode() in line for name in _TURN_EVENTS):
             continue
         try:
             event = json.loads(line)
         except ValueError:
             continue  # the first line of the tail can be a part of a line
         payload = event.get("payload") if isinstance(event, dict) else None
-        if not isinstance(payload, dict) or payload.get("type") != kind.decode():
+        if not isinstance(payload, dict) or payload.get("type") not in _TURN_EVENTS:
             continue
+        kind = payload["type"]
         if payload.get("root_turn_id", payload.get("turn_id")) != payload.get("turn_id"):
             continue
         try:
             when = datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00"))
         except ValueError:
             continue
-        status: Status = "busy" if kind == b"task_started" else "idle"
+        status: Status = "busy" if kind == "task_started" else "idle"
         return status, when.timestamp()
     return None
 

@@ -465,3 +465,20 @@ def test_codex_native_state_reads_only_the_tail_of_a_large_rollout(tmp_path: Any
     state = registry.codex_native_state(str(path))
     assert state is not None and state[0] == "busy"
     assert registry.codex_native_state(str(tmp_path / "missing.jsonl")) is None
+
+
+def test_a_turn_event_counts_by_its_type_not_by_text_in_it(tmp_path: Any) -> None:
+    # A completion carries the agent's last message, which can name another turn event.
+    path = tmp_path / "r.jsonl"
+    _rollout(path, (START, "task_started", "R", "R"))
+    payload = {
+        "type": "task_complete",
+        "turn_id": "R",
+        "root_turn_id": "R",
+        # As JSON, the value is "task_started" in quotes, as an event type is.
+        "last_agent_message": "task_started",
+    }
+    with path.open("a") as fh:
+        fh.write(json.dumps({"timestamp": END, "type": "event_msg", "payload": payload}) + "\n")
+    state = registry.codex_native_state(str(path))
+    assert state is not None and state[0] == "idle"
