@@ -1420,6 +1420,8 @@ def test_a_session_end_with_an_unknown_start_removes_no_registration(world: Worl
         {"cliSessionId": "B", "isArchived": "no"},
         {"isArchived": False},
         {"cliSessionId": 7, "isArchived": False},
+        {"cliSessionId": "", "isArchived": False},
+        {"cliSessionId": "  ", "isArchived": False},
     ],
 )
 @pytest.mark.parametrize("path", ["prune", "session-end"])

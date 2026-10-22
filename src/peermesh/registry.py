@@ -400,7 +400,7 @@ def _app_record(peer: Peer) -> dict[str, Any] | None:
     if data is None:
         return None
     named = data.get("cliSessionId")
-    if not isinstance(named, str):
+    if not isinstance(named, str) or not named.strip():
         raise ValueError(f"the app record {peer.host_session} names no Claude session")
     return data if named == peer.id.split(":", 1)[1] else None
 
