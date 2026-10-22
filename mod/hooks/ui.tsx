@@ -164,7 +164,7 @@ function messageRow(
             {row.kind !== undefined && <Text dimColor> · {row.kind}</Text>}
           </Text>
         </Box>
-        <Box flexShrink={0} marginLeft={2}>
+        <Box flexShrink={isTerminal ? 0 : 1} flexWrap={isTerminal ? 'nowrap' : 'wrap'} marginLeft={2}>
           {right.map((part, at) => [at > 0 && <Text dimColor> · </Text>, part.draw])}
         </Box>
       </Box>
