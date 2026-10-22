@@ -196,16 +196,22 @@ def _owns(peer: Peer, pid: int) -> bool:
     return pid == peer.pid and proc_start(pid) == peer.proc_start
 
 
-def _ends_its_process(peer: Peer, runtime: Runtime, session_id: str, host_pid: int | None) -> bool:
+def _ending(runtime: Runtime, session_id: str, host_pid: int | None) -> tuple[int, str] | None:
+    """The pid and the start time of the process whose session ends, or None when no ancestor
+    names the session. Both come from subprocesses, so SessionEnd reads them before the lock."""
+    pid = _host(runtime, session_id, host_pid)
+    return None if pid is None else (pid, proc_start(pid) or "")
+
+
+def _ends_its_process(peer: Peer, ending: tuple[int, str] | None) -> bool:
     """True when the process whose session ends is the one that the record names.
 
     When that process cannot be found, a Claude app session keeps its record, because the app
     can already run it in a new process; any other session ends, as before.
     """
-    pid = _host(runtime, session_id, host_pid)
-    if pid is None:
+    if ending is None:
         return peer.host_session is None
-    return _owns(peer, pid)
+    return ending == (peer.pid, peer.proc_start)
 
 
 def _needs_registration(
@@ -252,11 +258,12 @@ def handle(
         return None
     peer_id = f"{runtime}:{session_id}"
     if event == "session-end":
+        ending = _ending(runtime, session_id, host_pid)
         # Registration takes the same lock, so a resume cannot change the record between the
         # check of its owner and the change.
         with mesh.ledger.locked():
             peer = mesh.registry.get(peer_id)
-            if peer is not None and not _ends_its_process(peer, runtime, session_id, host_pid):
+            if peer is not None and not _ends_its_process(peer, ending):
                 # The app ran the session again in a new process before this one ended: the
                 # record and the waiting messages belong to the new process.
                 return None
@@ -284,11 +291,7 @@ def handle(
     registers = _needs_registration(peer, event, runtime, session_id, host_pid)
     if registers:
         try:
-            # The SessionEnd of the process that the app ends takes the same lock.
-            with mesh.ledger.locked():
-                peer = mesh.registry.get(peer_id)
-                if _needs_registration(peer, event, runtime, session_id, host_pid):
-                    peer = mesh.register(detect(runtime, session_id, cwd, env, host_pid))
+            peer = mesh.adopt(detect(runtime, session_id, cwd, env, host_pid), peer)
         except NoInboxError:
             # Claude Code can run SessionStart before it writes the inbox socket path. The
             # next prompt registers the session; the rules apply from the start.

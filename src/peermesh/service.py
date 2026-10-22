@@ -113,6 +113,23 @@ class Mesh:
         self.registry.put(peer)
         return self.registry.get(peer.id) or peer
 
+    def adopt(self, peer: Peer, seen: Peer | None) -> Peer:
+        """Register peer, the session of the calling process, which read its record as `seen`.
+
+        The record is replaced only when it is gone, paused or still `seen`; when another
+        process registered the session after that read, its record stays and is returned. The
+        check and the write hold the ledger lock, which SessionEnd holds while it changes a
+        record. Everything that runs a subprocess, choosing the name among them, comes first.
+        """
+        given = (seen.auto_name or seen.name) if seen else None
+        peer.name = given or self.registry.unique_name(peer)
+        with self.ledger.locked():
+            current = self.registry.get(peer.id)
+            if current is not None and current.status != "paused" and not _same(current, seen):
+                return current
+            self.registry.put(peer)
+        return self.registry.get(peer.id) or peer
+
     def whoami(
         self,
         env: Mapping[str, str] | None = None,
@@ -136,7 +153,7 @@ class Mesh:
         if unregistered is not None:
             raise PeerError(unregistered)
         peer = identity.detect(runtime, session_id, cwd or os.getcwd(), env, host_pid)
-        return self.register(peer)
+        return self.adopt(peer, existing)
 
     def _enrich(self, peer: Peer) -> Peer:
         """Use the runtime's own status unless a peermesh hook recorded a newer one."""
@@ -594,6 +611,15 @@ def _wants_inbox(target: Peer, msg: Message) -> bool:
     if msg.urgency == "now":
         return target.runtime == "codex" and target.host != "daemon" and target.status == "busy"
     return target.status == "busy" or msg.kind == "info"
+
+
+def _same(record: Peer, seen: Peer | None) -> bool:
+    """True when record is the record that was read as seen: the same process and status."""
+    return seen is not None and (record.pid, record.proc_start, record.status) == (
+        seen.pid,
+        seen.proc_start,
+        seen.status,
+    )
 
 
 def _pending_note(target: Peer) -> str:
