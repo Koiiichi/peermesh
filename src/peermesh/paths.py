@@ -15,6 +15,12 @@ def claude_dir() -> Path:
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 
 
+def claude_app_dir() -> Path:
+    """The data folder of the Claude desktop app, which keeps its own record of each session."""
+    default = Path.home() / "Library" / "Application Support" / "Claude"
+    return Path(os.environ.get("PEERMESH_CLAUDE_APP") or default)
+
+
 def codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 

@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from peermesh.install import MIN_CLAUDE, _version
-from peermesh.registry import codex_native_state
+from peermesh.registry import claude_app_session, codex_native_state
 
 pytestmark = pytest.mark.contract
 REAL_HOME = Path(os.path.expanduser("~"))
@@ -128,3 +128,28 @@ def test_codex_rollout_turn_events() -> None:
             assert state[0] in ("busy", "idle") and state[1] > 0
             return
     pytest.fail("no recent Codex rollout has a top-level task_started or task_complete event")
+
+
+def test_claude_app_session_record_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PEERMESH_CLAUDE_APP", raising=False)
+    hosts = []
+    for name in glob.glob(str(REAL_HOME / ".claude" / "sessions" / "*.json")):
+        try:
+            data = json.loads(Path(name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("hostSessionId"), str):
+            hosts.append((data["hostSessionId"], data.get("sessionId")))
+    if not hosts:
+        pytest.skip("no live Claude desktop session")
+    # The app keeps a record of each of its sessions, which peermesh reads when the app pauses
+    # one. A child Claude process inherits a hostSessionId, so not every live record matches.
+    matching = []
+    for host, session in hosts:
+        record = claude_app_session(host)
+        if record is not None and record.get("cliSessionId") == session:
+            matching.append(record)
+    assert matching, "no Claude app record names a live desktop session"
+    for record in matching:
+        assert isinstance(record.get("isArchived"), bool)
+        assert isinstance(record.get("title"), str)

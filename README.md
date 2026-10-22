@@ -85,7 +85,7 @@ Nobody runs these by hand in normal use. The session-start hook tells each agent
 | `peers_list` | `peers list [--scope repo\|worktree\|all]` | Live peers, same worktree first |
 | `peers_send` | `peers send NAME... --body TEXT [--kind K] [--urgent]` | Send; more than one name is a broadcast |
 | `peers_reply` | `peers reply MSG --body TEXT [--done]` | Reply in the same thread; `--done` reports that the requested work is complete |
-| `peers_status` | `peers status NAME` | Busy or idle, branch, queued and waiting messages |
+| `peers_status` | `peers status NAME` | Busy, idle or paused, branch, queued and waiting messages |
 | `peers_track` | `peers track MSG` | Delivery state of one message you sent |
 
 Each session gets a name such as `claude-shop-4b`. A Claude Code session that you name uses your name instead, whether you name it when it starts, as in the Claude desktop app, or later with `/rename`. `peers_list` shows both names, and the first one still works as an address. When two live sessions have the same name, both keep their first names. The hooks do not register an ephemeral Codex thread, such as a one-time review: it has no rollout file, so it cannot be woken. Such a thread still registers if its agent runs a `peers` command.
@@ -101,7 +101,10 @@ With `peers install`, Codex gets the commands, which the sandbox rule lets run. 
 | idle, request, handoff, review or reply | the socket write starts a turn | `codex queue` starts a turn |
 | turn ends with messages waiting | information keeps waiting; a request continues the turn once | the same |
 | busy, `--urgent` request | sent with Claude's `now` priority | `turn/steer` when the shared app-server daemon hosts the thread, else injected at the next tool call. codex-cli 0.162 hosts terminal sessions on the daemon; the Codex app and the IDE extensions run a private app-server |
+| paused by the Claude app | waits; injected at the next prompt after the app runs the session again | not applicable |
 | gone | refused; the stale record is removed | refused when its process is gone or its thread is archived; the record is removed |
+
+The Claude desktop app ends the process of an idle session when it needs memory, and runs the session again when you open it or when another session messages it through the app. peermesh keeps such a session in `peers list` as `paused` while the app keeps it and has not archived it, and its messages wait for it. peermesh cannot run a paused session itself.
 
 Agents send finished work that a peer waits for as `handoff`, which wakes an idle peer; `info` is for facts a peer can read later. A message that can reach an agent after it finished its task, at the end of a turn or as a new turn, tells it to write its final report again as its last message if it does work for them, so the report for the user is not buried under the peer exchange. If the messages need no work, the agent writes one short sentence instead. A turn continues for peer messages at most once. Waiting messages of a session that ends are marked undelivered.
 

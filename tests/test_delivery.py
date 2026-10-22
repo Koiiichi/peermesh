@@ -13,7 +13,7 @@ import pytest
 from peermesh import hooks, install, paths, registry
 from peermesh.envelope import ENDINGS, INFO_NOTE, Message
 from peermesh.ledger import Ledger
-from peermesh.registry import Peer, Registry
+from peermesh.registry import Peer, Registry, is_alive
 from peermesh.service import Mesh, accepts_short_ids, announce_short_ids
 from peermesh.transports import Outcome
 
@@ -482,3 +482,81 @@ def test_a_turn_event_counts_by_its_type_not_by_text_in_it(tmp_path: Any) -> Non
         fh.write(json.dumps({"timestamp": END, "type": "event_msg", "payload": payload}) + "\n")
     state = registry.codex_native_state(str(path))
     assert state is not None and state[0] == "idle"
+
+
+def _app_session(host: str, title: str, *, archived: bool = False, cli_session: str = "B") -> None:
+    """Write the Claude app's record of its session `host`, which runs Claude session B."""
+    folder = paths.claude_app_dir() / "claude-code-sessions" / "account" / "org"
+    folder.mkdir(parents=True, exist_ok=True)
+    record = {
+        "sessionId": host,
+        "cliSessionId": cli_session,
+        "title": title,
+        "isArchived": archived,
+    }
+    (folder / f"{host}.json").write_text(json.dumps(record))
+
+
+def _process_ended(world: World, peer_id: str) -> None:
+    record = world.mesh.registry.get(peer_id)
+    assert record is not None
+    record.proc_start = "a process that ended"
+    world.mesh.registry.put(record)
+
+
+def test_a_session_that_the_claude_app_paused_stays_reachable(world: World) -> None:
+    world.put("b", host_session="local_b", status="idle")
+    _app_session("local_b", "worker-b")
+    _hook(world, "session-end", "b", reason="other")
+    _process_ended(world, "claude:B")
+    [paused] = [p for p in world.mesh.all_peers() if p.id == "claude:B"]
+    assert paused.status == "paused" and paused.name == "worker-b"
+    [res] = world.mesh.send(world.peers["a"], "worker-b", "Run the tests.", kind="request")
+    assert res.status == "pending" and "paused" in res.note
+    assert world.claude.calls == []
+    # The app runs the session again in a new process; its next prompt reads the message.
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{os.getpid()}.json").write_text(
+        json.dumps({"sessionId": "B", "messagingSocketPath": "/tmp/b.sock"})
+    )
+    _hook(world, "session-start", "b", source="resume")
+    resumed = world.mesh.registry.get("claude:B")
+    assert resumed is not None and resumed.status == "idle" and is_alive(resumed)
+    _hook(world, "prompt", "b")
+    assert _outcomes(world, str(res.msg_id)) == ["pending", "injected"]
+
+
+def test_a_session_that_the_claude_app_archived_ends(world: World) -> None:
+    world.put("b", host_session="local_b", status="busy")
+    _app_session("local_b", "worker-b", archived=True)
+    [res] = world.mesh.send(world.peers["a"], "claude-b", "too late", kind="request")
+    _hook(world, "session-end", "b", reason="other")
+    assert world.mesh.registry.get("claude:B") is None
+    assert _outcomes(world, str(res.msg_id)) == ["pending", "undelivered"]
+
+
+def test_clear_ends_the_old_session_of_a_claude_app_session(world: World) -> None:
+    world.put("b", host_session="local_b")
+    _app_session("local_b", "worker-b")
+    _hook(world, "session-end", "b", reason="clear")
+    assert world.mesh.registry.get("claude:B") is None
+
+
+def test_a_paused_session_leaves_when_the_app_archives_it(world: World) -> None:
+    world.put("b", host_session="local_b")
+    _app_session("local_b", "worker-b")
+    _hook(world, "session-end", "b", reason="other")
+    _process_ended(world, "claude:B")
+    assert "claude:B" in {p.id for p in world.mesh.registry.live()}
+    _app_session("local_b", "worker-b", archived=True)
+    assert "claude:B" not in {p.id for p in world.mesh.registry.live()}
+
+
+def test_a_child_claude_process_of_an_app_session_is_not_kept(world: World) -> None:
+    # A child Claude process inherits the hostSessionId of its parent, whose session the app
+    # record names; /clear maps the app session to a new session id the same way.
+    world.put("b", host_session="local_b")
+    _app_session("local_b", "orchestrator", cli_session="PARENT")
+    _hook(world, "session-end", "b", reason="other")
+    assert world.mesh.registry.get("claude:B") is None
