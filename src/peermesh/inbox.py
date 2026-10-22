@@ -71,7 +71,9 @@ class Inbox:
             try:
                 found.append(Waiting(path, json.loads(path.read_text())))
             except (OSError, ValueError):
-                path.unlink(missing_ok=True)
+                # A message that cannot be read now stays: reading never deletes. put writes
+                # each message whole, so a file does not parse only after damage.
+                continue
         return found
 
     def claim(self, peer_id: str) -> list[Waiting]:

@@ -11,3 +11,7 @@ class NoSessionError(PeerError):
 
 class NoInboxError(PeerError):
     """The Claude Code session has no inbox socket yet, so it cannot receive messages."""
+
+
+class UnreadableRecord(PeerError):
+    """A registry record exists but cannot be read or parsed: that is not absence."""

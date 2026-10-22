@@ -11,7 +11,7 @@ from typing import Any
 
 from peermesh import paths, text
 from peermesh.envelope import Ending, render
-from peermesh.errors import NoInboxError
+from peermesh.errors import NoInboxError, UnreadableRecord
 from peermesh.identity import detect, find_host
 from peermesh.inbox import Waiting
 from peermesh.install import HOOK_EVENTS, hooks_installed
@@ -97,7 +97,10 @@ def _post_tool(
 ) -> dict[str, Any] | None:
     if not mesh.inbox.waiting(peer_id):
         return None
-    seen = mesh.registry.read(peer_id)
+    try:
+        seen = mesh.registry.read(peer_id)
+    except UnreadableRecord:
+        return None
     if seen is None:
         return None
 
@@ -277,7 +280,11 @@ def handle(
         ending = _caller(runtime, session_id, host_pid)
         if ending is None:
             _note(f"{runtime} session-end: no ancestor process names {peer_id}; pruning ends it")
-        seen = mesh.registry.read(peer_id)
+        try:
+            seen = mesh.registry.read(peer_id)
+        except UnreadableRecord as exc:
+            _note(f"{runtime} session-end: {exc}")
+            return None
         if seen is None:
             # No record: the inbox that is left, if any, has no owner. A resume can register
             # meanwhile, and a record that cannot be read is not absent, so the check and the

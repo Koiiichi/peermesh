@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import time
 import uuid
@@ -18,7 +17,7 @@ from peermesh.envelope import (
     new_message,
     render,
 )
-from peermesh.errors import PeerError
+from peermesh.errors import PeerError, UnreadableRecord
 from peermesh.inbox import Inbox, Waiting
 from peermesh.ledger import Ledger
 from peermesh.registry import (
@@ -131,7 +130,8 @@ class Mesh:
         when peer's process already owns it, when peer's process started after its owner's,
         or when it is still the registration in `seen` and that owner exited (`seen_dead`). An
         older process never takes a session back. Otherwise the stored record stays, and the
-        live view of the stored record is returned.
+        live view of the stored record is returned. Raises UnreadableRecord when the stored
+        record exists but cannot be read: that is not absence.
         """
         given = (seen.auto_name or seen.name) if seen else None
         peer.name = given or self.registry.unique_name(peer)
@@ -157,7 +157,10 @@ class Mesh:
         if caller is None:
             return None
         with self.ledger.locked():
-            current = self.registry.read(peer_id)
+            try:
+                current = self.registry.read(peer_id)
+            except UnreadableRecord:
+                return None
             if current is None or not _same(current, seen) or owner(current) != caller:
                 return None
             result = change(current)
@@ -169,7 +172,10 @@ class Mesh:
         its session (and `keep_if_kept`), else remove the record and expire its inbox in the
         same step. A newer registration, of any process, stays as it is."""
         with self.ledger.locked():
-            current = self.registry.read(peer_id)
+            try:
+                current = self.registry.read(peer_id)
+            except UnreadableRecord:
+                return
             if current is None or not _same(current, seen):
                 return
             if keep_if_kept and app_keeps(current):
@@ -191,14 +197,9 @@ class Mesh:
                     self.retire(peer.id, peer, keep_if_kept=False)
             elif not is_alive(peer, starts):
                 self.retire(peer.id, peer)
+        # A record that cannot be read or parsed stays, with its inbox: it is not a session
+        # that ended.
         with self.ledger.locked():
-            for path in self.registry.dir.glob("*.json") if self.registry.dir.is_dir() else []:
-                try:
-                    json.loads(path.read_text())
-                except ValueError:
-                    path.unlink(missing_ok=True)  # a record that does not parse
-                except OSError:
-                    continue
             for peer_id in self.inbox.peer_ids():
                 if self.registry.absent(peer_id):
                     self.expire_inbox(peer_id, locked=True)
@@ -516,7 +517,10 @@ class Mesh:
             # under this lock, so the inbox decision sees the status that the hook wrote.
             # A raw read: the live view would run ps under the lock. The name stays the one that
             # resolve() gave.
-            fresh = self.registry.read(target.id)
+            try:
+                fresh = self.registry.read(target.id)
+            except UnreadableRecord:
+                fresh = None  # decide by the record that resolve() read
             if fresh is not None:
                 if target.status == "paused" and _same(fresh, target):
                     # The live view saw this registration's process exit while the Claude app
