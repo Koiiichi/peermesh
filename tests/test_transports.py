@@ -10,6 +10,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -66,6 +67,13 @@ def stub_codex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("PEERMESH_CODEX", str(exe))
     monkeypatch.setenv("STUB_LOG", str(log))
     return log
+
+
+def _codex(**options: Any) -> CodexTransport:
+    """A transport for the stub. On a loaded machine the stub can take longer to start and exit
+    than the 30 s default, and these tests check the commands, not their speed: the limit only
+    stops a hang."""
+    return CodexTransport(timeout=600.0, **options)
 
 
 def _log(path: Path) -> list[dict[str, object]]:
@@ -139,7 +147,7 @@ def test_claude_socket_missing_is_offline(make_peer: Callable[..., Peer]) -> Non
 
 def test_codex_queue_idle_is_delivered(make_peer: Callable[..., Peer], stub_codex: Path) -> None:
     a, b = _pair(make_peer, status="idle")
-    outcome = CodexTransport().deliver(b, "RENDERED", new_message(a, b, "hello"))
+    outcome = _codex().deliver(b, "RENDERED", new_message(a, b, "hello"))
     assert outcome.status == "delivered"
     assert _log(stub_codex) == [{"argv": ["queue", "--thread", "t-1", "--message", "RENDERED"]}]
 
@@ -163,7 +171,7 @@ def test_codex_queue_runs_in_the_folder_of_the_target(
     folder = tmp_path / "project"
     folder.mkdir()
     a, b = _pair(make_peer, status="idle", cwd=str(folder))
-    assert CodexTransport().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
+    assert _codex().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
     assert deleted_cwd.read_text() == f"queue {os.path.realpath(folder)}\n"
 
 
@@ -171,7 +179,7 @@ def test_codex_queue_runs_in_home_when_the_target_folder_is_gone(
     make_peer: Callable[..., Peer], stub_codex: Path, deleted_cwd: Path, tmp_path: Path
 ) -> None:
     a, b = _pair(make_peer, status="idle", cwd=str(tmp_path / "deleted-project"))
-    assert CodexTransport().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
+    assert _codex().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
     assert deleted_cwd.read_text() == f"queue {os.path.realpath(tmp_path)}\n"
 
 
@@ -184,7 +192,7 @@ def test_codex_queue_runs_in_root_when_home_is_gone(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "no-home"))
     a, b = _pair(make_peer, status="idle", cwd=str(tmp_path / "deleted-project"))
-    assert CodexTransport().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
+    assert _codex().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
     assert deleted_cwd.read_text() == "queue /\n"
 
 
@@ -202,7 +210,7 @@ def test_steer_proxy_runs_in_home(
     _daemon_socket()
     a, b = _pair(make_peer, status="busy")
     msg = new_message(a, b, "stop", kind="request", urgency="now")
-    assert CodexTransport().deliver(b, "R", msg).status == "delivered"
+    assert _codex().deliver(b, "R", msg).status == "delivered"
     assert deleted_cwd.read_text() == f"app-server {os.path.realpath(tmp_path)}\n"
 
 
@@ -224,17 +232,17 @@ def test_relative_codex_path_still_runs_in_another_folder(
     folder = tmp_path / "project"
     folder.mkdir()
     a, b = _pair(make_peer, status="idle", cwd=str(folder))
-    assert CodexTransport().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
+    assert _codex().deliver(b, "R", new_message(a, b, "hello")).status == "delivered"
     _daemon_socket()
     a, b = _pair(make_peer, status="busy", cwd=str(folder))
     msg = new_message(a, b, "stop", kind="request", urgency="now")
-    assert CodexTransport().deliver(b, "R", msg).status == "delivered"
+    assert _codex().deliver(b, "R", msg).status == "delivered"
     assert [next(iter(e)) for e in _log(stub_codex)] == ["argv", "steer"]
 
 
 def test_codex_queue_busy_is_queued(make_peer: Callable[..., Peer], stub_codex: Path) -> None:
     a, b = _pair(make_peer, status="busy")
-    outcome = CodexTransport().deliver(b, "R", new_message(a, b, "hello"))
+    outcome = _codex().deliver(b, "R", new_message(a, b, "hello"))
     assert outcome.status == "queued"
 
 
@@ -243,7 +251,7 @@ def test_codex_queue_failure_is_refused(
 ) -> None:
     monkeypatch.setenv("STUB_QUEUE_EXIT", "3")
     a, b = _pair(make_peer, status="idle")
-    assert CodexTransport().deliver(b, "R", new_message(a, b, "hello")).status == "refused"
+    assert _codex().deliver(b, "R", new_message(a, b, "hello")).status == "refused"
 
 
 def test_codex_missing_binary(
@@ -252,7 +260,7 @@ def test_codex_missing_binary(
     a, b = _pair(make_peer, status="idle")
     monkeypatch.setenv("PEERMESH_CODEX", "/nonexistent/codex")
     monkeypatch.setenv("PATH", "/nonexistent")
-    outcome = CodexTransport().deliver(b, "R", new_message(a, b, "hello"))
+    outcome = _codex().deliver(b, "R", new_message(a, b, "hello"))
     assert outcome.status == "refused" and "codex" in outcome.note
 
 
@@ -268,7 +276,7 @@ def test_urgent_busy_steers_through_daemon(
     _daemon_socket()
     a, b = _pair(make_peer, status="busy")
     msg = new_message(a, b, "stop: schema changed", kind="request", urgency="now")
-    outcome = CodexTransport().deliver(b, "RENDERED", msg)
+    outcome = _codex().deliver(b, "RENDERED", msg)
     assert outcome.status == "delivered" and "steered" in outcome.note
     assert _log(stub_codex) == [
         {
@@ -288,7 +296,7 @@ def test_urgent_without_active_turn_falls_back_to_queue(
     monkeypatch.setenv("STUB_TURN_STATUS", "completed")
     a, b = _pair(make_peer, status="busy")
     msg = new_message(a, b, "stop", kind="request", urgency="now")
-    outcome = CodexTransport().deliver(b, "R", msg)
+    outcome = _codex().deliver(b, "R", msg)
     assert outcome.status == "queued"
     assert [e.get("argv", [None])[0] for e in _log(stub_codex)] == ["queue"]  # type: ignore[index]
 
@@ -304,7 +312,7 @@ def test_unanswered_steer_is_not_queued_again(
     monkeypatch.setenv("STUB_STEER_HANG", "1")
     a, b = _pair(make_peer, status="busy")
     msg = new_message(a, b, "stop", kind="request", urgency="now")
-    transport = CodexTransport(steerer_factory=lambda exe: AppServerSteerer(exe, timeout=1.0))
+    transport = _codex(steerer_factory=lambda exe: AppServerSteerer(exe, timeout=1.0))
     outcome = transport.deliver(b, "R", msg)
     assert outcome.status == "refused" and "Do not resend" in outcome.note
     assert [list(e) for e in _log(stub_codex)] == [["steer"]]
@@ -350,7 +358,7 @@ def test_codex_queue_closed_thread_is_offline(
     fail.chmod(0o755)
     monkeypatch.setenv("PEERMESH_CODEX", str(fail))
     a, b = _pair(make_peer, status="idle")
-    outcome = CodexTransport().deliver(b, "R", new_message(a, b, "hello"))
+    outcome = _codex().deliver(b, "R", new_message(a, b, "hello"))
     assert outcome.status == "refused" and outcome.offline
 
 
@@ -443,7 +451,7 @@ def test_urgent_busy_steers_through_a_websocket_daemon(
     daemon = FakeDaemon(paths.codex_home())
     a, b = _pair(make_peer, status="busy")
     msg = new_message(a, b, "stop: schema changed", kind="request", urgency="now")
-    outcome = CodexTransport().deliver(b, "RENDERED " + "x" * 300, msg)
+    outcome = _codex().deliver(b, "RENDERED " + "x" * 300, msg)
     assert outcome.status == "delivered" and "steered" in outcome.note
     assert daemon.steers == [
         {
@@ -462,7 +470,7 @@ def test_websocket_daemon_without_active_turn_falls_back_to_queue(
     daemon = FakeDaemon(paths.codex_home(), turn_status="completed")
     a, b = _pair(make_peer, status="busy")
     msg = new_message(a, b, "stop", kind="request", urgency="now")
-    assert CodexTransport().deliver(b, "R", msg).status == "queued"
+    assert _codex().deliver(b, "R", msg).status == "queued"
     assert daemon.steers == [] and [list(e) for e in _log(stub_codex)] == [["argv"]]
 
 
@@ -472,7 +480,7 @@ def test_unanswered_websocket_steer_is_not_queued_again(
     daemon = FakeDaemon(paths.codex_home(), hang=True)
     a, b = _pair(make_peer, status="busy")
     msg = new_message(a, b, "stop", kind="request", urgency="now")
-    transport = CodexTransport(steerer_factory=lambda exe: AppServerSteerer(exe, timeout=1.0))
+    transport = _codex(steerer_factory=lambda exe: AppServerSteerer(exe, timeout=1.0))
     outcome = transport.deliver(b, "R", msg)
     assert outcome.status == "refused" and "Do not resend" in outcome.note
     assert len(daemon.steers) == 1 and _log(stub_codex) == []
@@ -484,7 +492,7 @@ def test_pings_do_not_extend_the_wait_for_a_steer_answer(
     daemon = FakeDaemon(paths.codex_home(), ping_forever=True)
     a, b = _pair(make_peer, status="busy")
     msg = new_message(a, b, "stop", kind="request", urgency="now")
-    transport = CodexTransport(steerer_factory=lambda exe: AppServerSteerer(exe, timeout=0.3))
+    transport = _codex(steerer_factory=lambda exe: AppServerSteerer(exe, timeout=0.3))
     started = time.monotonic()
     outcome = transport.deliver(b, "R", msg)
     assert time.monotonic() - started < 2.0
@@ -535,5 +543,5 @@ def test_daemon_that_does_not_upgrade_uses_the_proxy(
     (control / "app-server-control.sock").symlink_to(f"{folder}/d.sock")
     a, b = _pair(make_peer, status="busy")
     msg = new_message(a, b, "stop", kind="request", urgency="now")
-    outcome = CodexTransport().deliver(b, "R", msg)
+    outcome = _codex().deliver(b, "R", msg)
     assert outcome.status == "delivered" and [list(e) for e in _log(stub_codex)] == [["steer"]]
