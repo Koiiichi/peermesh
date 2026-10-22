@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- A request to a Codex session whose last turn ended with an error starts its next turn. When Codex ended a turn with an error, no Stop hook reached peermesh, so peermesh kept the session busy and left each later request in its inbox until someone typed into the session. peermesh now also reads the last turn event in the session's rollout file, the way it reads Claude Code's status file, and the newer of the two wins.
 - `peers install`, `peers uninstall` and `peers doctor` read and write `CLAUDE.md`, `AGENTS.md`, `settings.json` and `hooks.json` as UTF-8. Under a locale whose encoding cannot read a character in those files, such as `en_US.US-ASCII`, `peers install` refused a valid `settings.json` as "not a valid JSON object", and a write could change text outside ASCII.
 - peermesh reads Claude Code's session records as UTF-8. Under a locale with another encoding, such as `en_US.ISO8859-1`, a session name or an inbox socket path with a character outside ASCII was read wrong: a name that the user gave, such as `café`, became `cafÃ©`, and a message to a session with such a socket path could not be delivered.
 

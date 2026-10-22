@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 from dataclasses import asdict, dataclass, field, fields
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -212,6 +213,48 @@ def claude_native_state(pid: int) -> tuple[Status, float] | None:
         return None
     changed = data.get("statusUpdatedAt")
     return status, changed / 1000 if isinstance(changed, int | float) else float("inf")
+
+
+# A turn writes much more than its start and end, so the tail holds the last turn events of a
+# rollout unless one tool output is larger than this.
+ROLLOUT_TAIL = 1 << 20
+_TURN_EVENTS = (b"task_started", b"task_complete", b"turn_aborted")
+
+
+def codex_native_state(rollout: str) -> tuple[Status, float] | None:
+    """The status that the last top-level turn event of a Codex rollout shows, and its epoch second.
+
+    Codex writes the end of a turn also when it runs no Stop hook, as after a turn that ends with
+    an error. A nested turn, such as a guardian review, has another root_turn_id than its turn_id
+    and runs inside a top-level turn, so it is ignored. The rollout format is internal; None when
+    the file or the end of its tail shows no top-level turn event.
+    """
+    try:
+        with open(rollout, "rb") as fh:
+            fh.seek(max(0, os.fstat(fh.fileno()).st_size - ROLLOUT_TAIL))
+            tail = fh.read()
+    except OSError:
+        return None
+    for line in reversed(tail.splitlines()):
+        kind = next((k for k in _TURN_EVENTS if b'"' + k + b'"' in line), None)
+        if kind is None:
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue  # the first line of the tail can be a part of a line
+        payload = event.get("payload") if isinstance(event, dict) else None
+        if not isinstance(payload, dict) or payload.get("type") != kind.decode():
+            continue
+        if payload.get("root_turn_id", payload.get("turn_id")) != payload.get("turn_id"):
+            continue
+        try:
+            when = datetime.fromisoformat(str(event.get("timestamp")).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        status: Status = "busy" if kind == b"task_started" else "idle"
+        return status, when.timestamp()
+    return None
 
 
 def claude_user_name(pid: int) -> str | None:

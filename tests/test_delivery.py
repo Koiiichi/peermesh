@@ -5,11 +5,12 @@ import multiprocessing
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import pytest
 
-from peermesh import hooks, install, paths
+from peermesh import hooks, install, paths, registry
 from peermesh.envelope import ENDINGS, INFO_NOTE, Message
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry
@@ -397,3 +398,70 @@ def test_claude_receiver_gets_short_ids_only_after_its_server_supports_them(worl
     assert accepts_short_ids(world.peers["x"]) and not accepts_short_ids(world.peers["a"])
     _hook(world, "session-end", "b")
     assert not accepts_short_ids(world.peers["b"])
+
+
+def _rollout(path: Any, *events: tuple[str, str, str, str]) -> str:
+    """Write a Codex rollout with (timestamp, type, turn_id, root_turn_id) turn events."""
+    lines = [json.dumps({"timestamp": "2026-10-22T00:00:00.000Z", "type": "session_meta"})]
+    for when, kind, turn, root in events:
+        payload = {"type": kind, "turn_id": turn, "root_turn_id": root}
+        lines.append(json.dumps({"timestamp": when, "type": "event_msg", "payload": payload}))
+    path.write_text("\n".join(lines) + "\n")
+    return str(path)
+
+
+START = "2026-10-22T00:24:49.405Z"
+END = "2026-10-22T00:32:57.143Z"
+BETWEEN = datetime.fromisoformat("2026-10-22T00:30:00+00:00").timestamp()
+
+
+def test_codex_turn_that_ended_without_a_stop_hook_reads_idle(world: World, tmp_path: Any) -> None:
+    # Codex wrote the end of the turn, but no Stop hook ran, as after a turn ends with an error.
+    rollout = _rollout(
+        tmp_path / "r.jsonl", (START, "task_started", "R", "R"), (END, "task_complete", "R", "R")
+    )
+    world.put("x", status="busy", last_seen=BETWEEN - 300, transcript=rollout)
+    [res] = world.mesh.send(world.peers["a"], "codex-x", "Please review cart.py", kind="request")
+    assert res.status == "delivered"
+    assert [c[0] for c in world.codex.calls] == ["codex:X"]
+
+
+def test_nested_codex_turn_does_not_end_the_running_turn(world: World, tmp_path: Any) -> None:
+    rollout = _rollout(
+        tmp_path / "r.jsonl",
+        (START, "task_started", "R", "R"),
+        ("2026-10-22T00:25:00.000Z", "task_started", "G", "R"),
+        ("2026-10-22T00:25:03.000Z", "task_complete", "G", "R"),
+    )
+    world.put("x", status="busy", last_seen=BETWEEN - 600, transcript=rollout)
+    [res] = world.mesh.send(world.peers["a"], "codex-x", "Please review cart.py", kind="request")
+    assert res.status == "pending"
+
+
+def test_codex_hook_newer_than_the_rollout_wins(world: World, tmp_path: Any) -> None:
+    rollout = _rollout(
+        tmp_path / "r.jsonl", (START, "task_started", "R", "R"), (END, "task_complete", "R", "R")
+    )
+    world.put("x", status="busy", last_seen=BETWEEN + 3600, transcript=rollout)
+    [res] = world.mesh.send(world.peers["a"], "codex-x", "Please review cart.py", kind="request")
+    assert res.status == "pending"
+
+
+def test_codex_native_state_reads_only_the_tail_of_a_large_rollout(tmp_path: Any) -> None:
+    path = tmp_path / "r.jsonl"
+    _rollout(path, (START, "task_started", "R", "R"), (END, "task_complete", "R", "R"))
+    big = json.dumps({"type": "response_item", "payload": {"text": "x" * (2 << 20)}})
+    path.write_text(path.read_text() + big + "\n")
+    # The last top-level turn event is outside the tail, so the rollout says nothing.
+    assert registry.codex_native_state(str(path)) is None
+    with path.open("a") as fh:
+        payload = {"type": "task_started", "turn_id": "S", "root_turn_id": "S"}
+        fh.write(
+            json.dumps(
+                {"timestamp": "2026-10-22T01:00:00Z", "type": "event_msg", "payload": payload}
+            )
+            + "\n"
+        )
+    state = registry.codex_native_state(str(path))
+    assert state is not None and state[0] == "busy"
+    assert registry.codex_native_state(str(tmp_path / "missing.jsonl")) is None
