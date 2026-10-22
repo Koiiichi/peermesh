@@ -15,7 +15,7 @@ import pytest
 from peermesh import hooks, install, paths, registry, service
 from peermesh import inbox as inbox_module
 from peermesh.envelope import ENDINGS, INFO_NOTE, Message
-from peermesh.errors import PeerError
+from peermesh.errors import PeerError, UnreadableRecord
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry, is_alive, proc_start
 from peermesh.service import Mesh, accepts_short_ids, announce_short_ids
@@ -1251,3 +1251,53 @@ def test_pruning_keeps_a_record_that_does_not_parse_and_its_inbox(world: World) 
     world.mesh.prune()
     assert world.mesh.registry._file("claude:B").exists()
     assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+@pytest.mark.parametrize("event", ["prompt", "stop"])
+def test_an_older_process_does_not_reclaim_a_session_whose_newer_owner_exited(
+    world: World, older_and_newer: tuple[int, int], event: str
+) -> None:
+    old, new = older_and_newer
+    world.put("b", status="busy", endpoint="/tmp/new.sock")
+    _owned_by(world, "claude:B", new)
+    [res] = world.mesh.send(world.peers["a"], "claude-b", "Note for later.", kind="info")
+    record = world.mesh.registry.read("claude:B")
+    assert record is not None
+    record.proc_start = "Fri Jan  1 00:00:00 2100"  # the newer owner has exited
+    world.mesh.registry.put(record)
+    _socket_of(old, "/tmp/old.sock")
+    payload = {"session_id": "B", "cwd": os.getcwd()}
+    assert hooks.handle(world.mesh, event, "claude", payload, env={}, host_pid=old) is None
+    stored = world.mesh.registry.read("claude:B")
+    assert stored is not None and stored.endpoint == "/tmp/new.sock"
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+def test_a_session_start_moves_a_session_from_an_exited_owner_to_an_older_host(
+    world: World, older_and_newer: tuple[int, int]
+) -> None:
+    # A Codex thread that a newer process hosted opens again in a long-lived, older app-server.
+    old, new = older_and_newer
+    world.put("x", status="idle")
+    _owned_by(world, "codex:X", new)
+    record = world.mesh.registry.read("codex:X")
+    assert record is not None
+    record.proc_start = "Fri Jan  1 00:00:00 2100"  # the newer host has exited
+    world.mesh.registry.put(record)
+    payload = {"session_id": "X", "cwd": os.getcwd()}
+    hooks.handle(world.mesh, "session-start", "codex", payload, env={}, host_pid=old, inbox=True)
+    stored = world.mesh.registry.read("codex:X")
+    assert stored is not None and stored.pid == old
+
+
+@pytest.mark.parametrize("damage", [b"[]", b"null", b"\xff\xfe not utf-8"])
+def test_a_damaged_record_is_unreadable_and_leaves_other_sessions_alone(
+    world: World, damage: bytes
+) -> None:
+    world.mesh.registry._file("claude:B").write_bytes(damage)
+    with pytest.raises(UnreadableRecord):
+        world.mesh.registry.read("claude:B")
+    assert "claude:A" in {p.id for p in world.mesh.registry.live()}
+    assert world.mesh.registry.resolve("claude-a") is not None
+    world.mesh.prune()
+    assert world.mesh.registry._file("claude:B").exists()

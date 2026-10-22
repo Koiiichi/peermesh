@@ -334,6 +334,20 @@ _UNREADABLE = (
 )
 
 
+def _load(path: Path) -> Peer:
+    """The record in path. Raises FileNotFoundError when there is none, and UnreadableRecord
+    for a record that cannot be read, decoded or parsed into a Peer."""
+    try:
+        data = json.loads(path.read_bytes().decode("utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("a record is a JSON object")
+        return Peer.from_json(data)
+    except FileNotFoundError:
+        raise
+    except (OSError, ValueError, TypeError) as exc:
+        raise UnreadableRecord(_UNREADABLE.format(path=path)) from exc
+
+
 def owner(peer: Peer) -> Owner:
     return peer.pid, peer.proc_start
 
@@ -398,17 +412,10 @@ class Registry:
         A caller that holds the ledger lock reads with this. None means that no record exists;
         a record that exists and cannot be read or parsed raises UnreadableRecord, because a
         caller must not take it for absence."""
-        path = self._file(peer_id)
         try:
-            text = path.read_text()
+            return _load(self._file(peer_id))
         except FileNotFoundError:
             return None
-        except OSError as exc:
-            raise UnreadableRecord(_UNREADABLE.format(path=path)) from exc
-        try:
-            return Peer.from_json(json.loads(text))
-        except (ValueError, TypeError) as exc:
-            raise UnreadableRecord(_UNREADABLE.format(path=path)) from exc
 
     def absent(self, peer_id: str) -> bool:
         """True only when the record is known not to exist. A read error, such as a denied
@@ -443,9 +450,9 @@ class Registry:
         found: list[Peer] = []
         for path in sorted(self.dir.glob("*.json")):
             try:
-                found.append(Peer.from_json(json.loads(path.read_text())))
-            except (OSError, ValueError, TypeError):
-                continue
+                found.append(_load(path))
+            except (FileNotFoundError, UnreadableRecord):
+                continue  # gone meanwhile, or damaged: it does not stop the other records
         return found
 
     def live(self) -> list[Peer]:

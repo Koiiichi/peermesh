@@ -123,15 +123,25 @@ class Mesh:
     # cannot tell who it is owns nothing. Work that runs a subprocess (ps, git, detect) comes
     # before the lock.
 
-    def adopt(self, peer: Peer, seen: Peer | None = None, *, seen_dead: bool = False) -> Peer:
+    def adopt(
+        self,
+        peer: Peer,
+        seen: Peer | None = None,
+        *,
+        seen_dead: bool = False,
+        resume: bool = False,
+    ) -> Peer:
         """Register peer, the session of the calling process, which read its record as `seen`.
 
         The record gets a new generation. It replaces the stored record when that is gone,
         when peer's process already owns it, when peer's process started after its owner's,
-        or when it is still the registration in `seen` and that owner exited (`seen_dead`). An
-        older process never takes a session back. Otherwise the stored record stays, and the
-        live view of the stored record is returned. Raises UnreadableRecord when the stored
-        record exists but cannot be read: that is not absence.
+        or when it is still the registration in `seen` and that owner exited (`seen_dead`) and
+        peer's process is not older than it. Only a SessionStart (`resume`), the runtime's own
+        word that peer's process hosts the session now, moves a session from an exited owner
+        to an older process, as when a Codex thread opens again in a long-lived app-server.
+        No other case lets an older process take a session back. When the stored record stays,
+        its live view is returned. Raises UnreadableRecord when the stored record exists but
+        cannot be read: that is not absence.
         """
         given = (seen.auto_name or seen.name) if seen else None
         peer.name = given or self.registry.unique_name(peer)
@@ -142,7 +152,12 @@ class Mesh:
                 current is None
                 or owner(current) == owner(peer)
                 or started_after(peer.proc_start, current.proc_start)
-                or (seen_dead and seen is not None and _same(current, seen))
+                or (
+                    seen_dead
+                    and seen is not None
+                    and _same(current, seen)
+                    and (resume or not started_after(current.proc_start, peer.proc_start))
+                )
             ):
                 self.registry.put(peer)
         # Outside the lock: the live view, with the user's name, runs ps.
