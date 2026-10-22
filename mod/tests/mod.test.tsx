@@ -93,7 +93,8 @@ test('a row fills the room of a graphical surface and keeps the cell width on th
     })
     const drawn = await ui.drawn()
     widths[surface] = (drawn as { props: { width?: unknown } }).props.width
-    wraps[surface] = JSON.stringify(drawn).includes('"flexWrap":"wrap"')
+    // The first line wraps, and so does the group of parts at its right end.
+    wraps[surface] = JSON.stringify(drawn).split('"flexWrap":"wrap"').length - 1 === 2
     await ui.unmount()
   }
   // A graphical surface lays the row out in its own column, whose width in cells it does not
