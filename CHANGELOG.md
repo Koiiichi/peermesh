@@ -70,7 +70,7 @@ Sessions find each other by the names that you gave them.
 
 ### Fixed
 
-- A Claude Code session that you named when it started, as the Claude desktop app does, now uses that name in peermesh. peermesh read only a name that Claude Code marked as a rename, so such a session kept a name like `claude-rotom-d5`, and other sessions could not find it by the name you gave it.
+- A Claude Code session that you named when it started, as the Claude desktop app does, now uses that name in peermesh. peermesh read only a name that Claude Code marked as a rename, so such a session kept a name like `claude-alpha-d5`, and other sessions could not find it by the name you gave it.
 - `peers_list` and `peers --json list` show the name that you gave a session, with the name that peermesh gave it as `auto_name`. They showed only the name from peermesh, so an agent did not see a rename. Both names still work as an address.
 - A name goes to a session only while no other live session wants the same name. When two sessions want it, both keep their automatic names, and a message to the shared name is refused with both automatic names in the note. So an address never moves from one live session to another. A new automatic name never repeats the automatic name of a renamed session.
 

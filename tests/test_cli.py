@@ -165,8 +165,8 @@ def test_log_line_never_wraps_in_a_narrow_terminal(monkeypatch: pytest.MonkeyPat
     entry = {
         "id": "0" * 32,
         "ts": "2026-10-10T09:33:12+00:00",
-        "from_name": "rotom-housekeeping-alpha",
-        "to_name": "rotom-infra",
+        "from_name": "alpha-housekeeping-omega",
+        "to_name": "alpha-infra",
         "kind": "review_request",
         "outcome": "undelivered",
         "body": "a long body " * 10,
