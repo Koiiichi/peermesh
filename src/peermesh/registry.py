@@ -392,25 +392,31 @@ def claude_app_session(host_session: str) -> dict[str, Any] | None:
 def _app_record(peer: Peer) -> dict[str, Any] | None:
     """The Claude app's record of the session of peer. A child Claude process inherits the
     hostSessionId of its parent, and /clear maps the app session to a new session id, so the
-    record counts only when it names this session. Raises as claude_app_session does."""
+    record counts only when it names this session. Raises as claude_app_session does, and
+    ValueError for a record that names no session: that does not show which session it is."""
     if peer.host_session is None:
         return None
     data = claude_app_session(peer.host_session)
-    if data is None or data.get("cliSessionId") != peer.id.split(":", 1)[1]:
+    if data is None:
         return None
-    return data
+    named = data.get("cliSessionId")
+    if not isinstance(named, str):
+        raise ValueError(f"the app record {peer.host_session} names no Claude session")
+    return data if named == peer.id.split(":", 1)[1] else None
 
 
 def app_keeps(peer: Peer) -> bool:
-    """True when the Claude app keeps the session of peer to run it again: not archived. A
-    record that cannot be read keeps the session; only a readable answer ends it."""
+    """True when the Claude app keeps the session of peer to run it again. Only a clear answer
+    ends it: the app has no record of the session, its record names another session, or the
+    record says `isArchived: true`. A record that cannot be read, or that lacks a field or has
+    one of another type, keeps the session."""
     if peer.host_session is None:
         return False
     try:
         data = _app_record(peer)
     except (OSError, ValueError):
         return True
-    return data is not None and data.get("isArchived") is False
+    return data is not None and data.get("isArchived") is not True
 
 
 def _typeable(name: object) -> str | None:

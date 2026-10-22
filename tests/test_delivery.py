@@ -1410,3 +1410,34 @@ def test_a_session_end_with_an_unknown_start_removes_no_registration(world: Worl
         began=hooks.UNKNOWN_START,
     )
     assert world.mesh.registry.read("codex:X") is not None
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"cliSessionId": "B"},
+        {"cliSessionId": "B", "isArchived": None},
+        {"cliSessionId": "B", "isArchived": "no"},
+        {"isArchived": False},
+        {"cliSessionId": 7, "isArchived": False},
+    ],
+)
+@pytest.mark.parametrize("path", ["prune", "session-end"])
+def test_an_incomplete_app_record_ends_no_paused_session(
+    world: World, record: dict[str, Any], path: str
+) -> None:
+    # The app's record format is internal; a record without a clear answer is unknown evidence.
+    world.put("b", host_session="local_b", status="busy")
+    [res] = world.mesh.send(world.peers["a"], "claude:B", "Note for later.", kind="info")
+    assert res.status == "pending"
+    folder = paths.claude_app_dir() / "claude-code-sessions" / "account" / "org"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "local_b.json").write_text(json.dumps(record))
+    if path == "session-end":
+        _hook(world, "session-end", "b", reason="other")
+    else:
+        _process_ended(world, "claude:B")
+        world.mesh.prune()
+        world.mesh.prune()
+    assert world.mesh.registry.read("claude:B") is not None
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]
