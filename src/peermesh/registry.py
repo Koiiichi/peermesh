@@ -271,13 +271,20 @@ def claude_app_session(host_session: str) -> dict[str, Any] | None:
     """
     if not re.fullmatch(r"local_[0-9a-f-]+", host_session):
         return None
-    root = paths.claude_app_dir() / "claude-code-sessions"
-    os.listdir(root)
-    for path in root.glob(f"*/*/{host_session}.json"):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError(f"{path} does not hold a JSON object")
-        return data
+    # The records are in <account>/<organization>/. Path.glob skips a folder that it cannot
+    # read, so each level is listed here, and an error leaves the answer unknown.
+    with os.scandir(paths.claude_app_dir() / "claude-code-sessions") as accounts:
+        for account in [e for e in accounts if e.is_dir(follow_symlinks=False)]:
+            with os.scandir(account.path) as orgs:
+                for org in [e for e in orgs if e.is_dir(follow_symlinks=False)]:
+                    path = Path(org.path) / f"{host_session}.json"
+                    try:
+                        data = json.loads(path.read_text(encoding="utf-8"))
+                    except FileNotFoundError:
+                        continue
+                    if not isinstance(data, dict):
+                        raise ValueError(f"{path} does not hold a JSON object")
+                    return data
     return None
 
 
