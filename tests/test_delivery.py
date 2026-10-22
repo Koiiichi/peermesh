@@ -626,3 +626,46 @@ def test_a_paused_session_leaves_when_archived_while_its_old_process_runs(world:
     # The old process (this test's pid) has not exited yet.
     _app_session("local_b", "worker-b", archived=True)
     assert "claude:B" not in {p.id for p in world.mesh.registry.live()}
+
+
+def test_an_unknown_ending_process_leaves_an_app_session_alone(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The old process's hook can run after its parent exited, so no ancestor names the session.
+    world.put("b", host_session="local_b", status="idle")
+    _app_session("local_b", "worker-b")
+    [res] = world.mesh.send(world.peers["a"], "claude-b", "Note for later.", kind="info")
+    monkeypatch.setattr(hooks, "find_host", lambda *a, **k: None)
+    for reason in ("other", "clear"):
+        hooks.handle(
+            world.mesh, "session-end", "claude", {"session_id": "B", "reason": reason}, env={}
+        )
+        record = world.mesh.registry.get("claude:B")
+        assert record is not None and record.status == "idle"
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+def test_a_resume_before_the_old_process_ends_takes_the_record(world: World) -> None:
+    # The old process still runs and its record is not paused yet when the new one starts.
+    world.put("b", host_session="local_b", status="idle", endpoint="/tmp/old.sock")
+    _app_session("local_b", "worker-b")
+    _owned_by_another_process(world, "claude:B")
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{os.getpid()}.json").write_text(
+        json.dumps({"sessionId": "B", "messagingSocketPath": "/tmp/new.sock"})
+    )
+    _hook(world, "session-start", "b", source="resume")
+    record = world.mesh.registry.get("claude:B")
+    assert record is not None and record.pid == os.getpid() and record.endpoint == "/tmp/new.sock"
+    # The old process ends now; the record is the new process's.
+    hooks.handle(
+        world.mesh,
+        "session-end",
+        "claude",
+        {"session_id": "B", "reason": "other"},
+        env={},
+        host_pid=os.getppid(),
+    )
+    record = world.mesh.registry.get("claude:B")
+    assert record is not None and record.status == "idle" and record.pid == os.getpid()
