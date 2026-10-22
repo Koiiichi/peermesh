@@ -394,6 +394,17 @@ class Registry:
         except (OSError, ValueError, TypeError):
             return None
 
+    def absent(self, peer_id: str) -> bool:
+        """True only when the record is known not to exist. A read error, such as a denied
+        permission, is not absence: what is left of the session then stays."""
+        try:
+            os.lstat(self._file(peer_id))
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
+
     def get(self, peer_id: str) -> Peer | None:
         peer = self.read(peer_id)
         if peer is None:

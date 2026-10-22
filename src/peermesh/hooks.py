@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -79,6 +80,16 @@ def _remove_stale_state(mesh: Mesh) -> None:
     for state in (paths.home() / "state").glob("*.*"):
         if state.stem not in live:
             state.unlink(missing_ok=True)
+
+
+def _note(line: str) -> None:
+    """Record why a hook did nothing, where `peers doctor` and a person can find it."""
+    try:
+        paths.ensure_private_dir(paths.home())
+        with (paths.home() / "hook-errors.log").open("a") as fh:
+            fh.write(f"{time.ctime()} {line}\n")
+    except OSError:
+        pass
 
 
 def _post_tool(
@@ -264,12 +275,15 @@ def handle(
     if event == "session-end":
         # Both run subprocesses, so they come before the lock.
         ending = _caller(runtime, session_id, host_pid)
+        if ending is None:
+            _note(f"{runtime} session-end: no ancestor process names {peer_id}; pruning ends it")
         seen = mesh.registry.read(peer_id)
         if seen is None:
             # No record: the inbox that is left, if any, has no owner. A resume can register
-            # meanwhile, so the check and the expiry hold the lock.
+            # meanwhile, and a record that cannot be read is not absent, so the check and the
+            # expiry hold the lock and need confirmed absence.
             with mesh.ledger.locked():
-                if mesh.registry.read(peer_id) is None:
+                if mesh.registry.absent(peer_id):
                     mesh.expire_inbox(peer_id, locked=True)
             _seen_file(peer_id).unlink(missing_ok=True)
             paths.state_file(peer_id, SHORT_IDS).unlink(missing_ok=True)
@@ -290,6 +304,8 @@ def handle(
     def me() -> Owner | None:
         if not caller:
             caller.append(_caller(runtime, session_id, host_pid))
+            if caller[0] is None:
+                _note(f"{runtime} {event}: no ancestor process names {peer_id}; nothing changed")
         return caller[0]
 
     if event == "post-tool":
@@ -300,7 +316,9 @@ def handle(
         return None
     cwd = str(payload.get("cwd") or os.getcwd())
     seen = mesh.registry.get(peer_id)
-    registers = _needs_registration(seen, me())
+    # Each SessionStart begins a registration, with a new generation, also in the same process:
+    # a Codex thread can open again in the app-server that hosted it, with the same rollout.
+    registers = event == "session-start" or _needs_registration(seen, me())
     if registers:
         dead = seen is not None and not is_alive(seen)
         try:

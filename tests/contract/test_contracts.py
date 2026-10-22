@@ -13,11 +13,15 @@ from typing import Any
 
 import pytest
 
+from peermesh import identity
+from peermesh.errors import PeerError
 from peermesh.install import MIN_CLAUDE, _version
-from peermesh.registry import claude_app_session, codex_native_state
+from peermesh.registry import claude_app_session, claude_session, codex_native_state
 
 pytestmark = pytest.mark.contract
 REAL_HOME = Path(os.path.expanduser("~"))
+# The environment before the fixtures, which remove the session variables for each test.
+REAL_ENV = dict(os.environ)
 
 
 def _defs(schema_dir: Path) -> dict[str, Any]:
@@ -153,3 +157,20 @@ def test_claude_app_session_record_fields(monkeypatch: pytest.MonkeyPatch) -> No
     for record in matching:
         assert isinstance(record.get("isArchived"), bool)
         assert isinstance(record.get("title"), str)
+
+
+def test_a_hook_process_finds_the_process_of_its_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Hooks own a record only when they find the process of their session, so a failed
+    # lookup leaves the session's messages waiting. A hook is a child process of its
+    # session, as this test is when it runs from one.
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    try:
+        runtime, session_id = identity.session_from_env(REAL_ENV)
+    except PeerError:
+        pytest.skip("not run from a Claude Code or Codex session")
+    found = identity.find_host(runtime, session_id)
+    assert found is not None, f"no ancestor process hosts the {runtime} session"
+    if runtime == "claude":
+        record = claude_session(found[0])
+        assert record is not None and record.get("sessionId") == session_id
