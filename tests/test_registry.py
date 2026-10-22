@@ -163,21 +163,21 @@ def rename(pid: int, name: str, source: str | None = "user") -> None:
 
 
 def test_claude_user_name_reads_only_user_renames() -> None:
-    rename(21, "rotom-infra")
-    rename(22, "rotom-09", source="derived")
-    rename(23, " Task gen / beta ")
-    assert claude_user_name(21) == "rotom-infra"
+    rename(21, "alpha-infra")
+    rename(22, "alpha-09", source="derived")
+    rename(23, " Docs pass / beta ")
+    assert claude_user_name(21) == "alpha-infra"
     assert claude_user_name(22) is None
-    assert claude_user_name(23) == "Task-gen-beta"
+    assert claude_user_name(23) == "Docs-pass-beta"
     assert claude_user_name(24) is None
 
 
 def test_claude_user_name_reads_a_name_given_at_start_and_a_peer_rename() -> None:
     # The Claude desktop app records a name given when the session starts with no source.
-    rename(31, "rotom-arch", source=None)
-    rename(32, "rotom-review", source="peer")
-    assert claude_user_name(31) == "rotom-arch"
-    assert claude_user_name(32) == "rotom-review"
+    rename(31, "alpha-arch", source=None)
+    rename(32, "alpha-review", source="peer")
+    assert claude_user_name(31) == "alpha-arch"
+    assert claude_user_name(32) == "alpha-review"
     for pid, source in enumerate(("auto", "hook", "collision", "derived"), start=33):
         rename(pid, "not-a-user-name", source=source)
         assert claude_user_name(pid) is None, source
@@ -187,18 +187,18 @@ def test_user_rename_replaces_name_and_keeps_given_name(make_peer: Callable[...,
     reg = Registry()
     peer = make_peer()
     reg.put(peer)
-    rename(peer.pid, "rotom-infra")
+    rename(peer.pid, "alpha-infra")
     [live] = reg.live()
-    assert (live.name, live.auto_name) == ("rotom-infra", "claude-a-aa")
+    assert (live.name, live.auto_name) == ("alpha-infra", "claude-a-aa")
     got = reg.get(peer.id)
-    assert got is not None and got.name == "rotom-infra"
-    for ref in ("rotom-infra", "claude-a-aa", peer.id):
+    assert got is not None and got.name == "alpha-infra"
+    for ref in ("alpha-infra", "claude-a-aa", peer.id):
         found = reg.resolve(ref)
         assert found is not None and found.id == peer.id
     reg.put(got)
     assert json.loads(reg._file(peer.id).read_text())["name"] == "claude-a-aa"
     # Callers see the name that the user gave; the record keeps the name that peermesh gave.
-    assert (got.to_json()["name"], got.to_json()["auto_name"]) == ("rotom-infra", "claude-a-aa")
+    assert (got.to_json()["name"], got.to_json()["auto_name"]) == ("alpha-infra", "claude-a-aa")
 
 
 def test_a_name_that_two_sessions_want_names_neither(make_peer: Callable[..., Peer]) -> None:
@@ -206,13 +206,13 @@ def test_a_name_that_two_sessions_want_names_neither(make_peer: Callable[..., Pe
     reg = Registry()
     reg.put(make_peer(id="claude:one", name="claude-a-01"))
     reg.put(make_peer(id="claude:two", name="claude-a-02"))
-    rename(make_peer().pid, "rotom-infra")
+    rename(make_peer().pid, "alpha-infra")
     assert {p.id: p.name for p in reg.live()} == {
         "claude:one": "claude-a-01",
         "claude:two": "claude-a-02",
     }
-    assert reg.resolve("rotom-infra") is None
-    assert {p.id for p in reg.claimants("rotom-infra")} == {"claude:one", "claude:two"}
+    assert reg.resolve("alpha-infra") is None
+    assert {p.id for p in reg.claimants("alpha-infra")} == {"claude:one", "claude:two"}
 
 
 def test_liveness_ignores_locale_and_timezone(

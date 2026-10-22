@@ -16,7 +16,7 @@ const QUEUE_NOTE = 'codex queue timed out. The message can be in the queue. Do n
 const SNAPSHOT = JSON.stringify({
   me: ME,
   peers: [
-    { id: ME, name: 'rotom-infra', runtime: 'claude', status: 'busy', branch: 'main', worktree: '/w/rotom', waiting: 0 },
+    { id: ME, name: 'alpha-infra', runtime: 'claude', status: 'busy', branch: 'main', worktree: '/w/alpha', waiting: 0 },
     { id: PEER, name: 'codex-x', runtime: 'codex', status: 'idle', branch: 'fix/cart', worktree: '/w/shop', waiting: 1 },
   ],
   messages: [
@@ -25,7 +25,7 @@ const SNAPSHOT = JSON.stringify({
       from: PEER,
       from_name: 'codex-x',
       to: ME,
-      to_name: 'rotom-infra',
+      to_name: 'alpha-infra',
       kind: 'request',
       body: 'Which branch has the cart fix?',
       sent_at: 1791936000,
@@ -36,7 +36,7 @@ const SNAPSHOT = JSON.stringify({
     {
       id: TIMED_OUT,
       from: ME,
-      from_name: 'rotom-infra',
+      from_name: 'alpha-infra',
       to: PEER,
       to_name: 'codex-x',
       kind: 'request',
@@ -69,7 +69,7 @@ test('a peer message is a short row on every surface', async $ => {
       component: 'UserMessage',
       props: { text, origin: { kind: 'peer' }, isExpanded: false },
     })
-    expect(await ui.find({ type: 'Text', text: /rotom-infra/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /alpha-infra/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Check docs\/schema\.md\./ })).toBeDefined()
     // The row has the blank line above that each block of Claude Code has.
     expect(await ui.drawn()).toMatchObject({ type: 'Box', props: { marginTop: 1 } })
@@ -608,7 +608,7 @@ test('the hooks keep their notice where the mod draws nothing, and the timer wai
   })
   await $.prompt.submit({ text: 'hello', wait: false, origin: { kind: 'sdk' } })
   surface = 'terminal'
-  await $.session.start({ cwd: '/w/rotom', surface: 'terminal', isInteractive: true })
+  await $.session.start({ cwd: '/w/alpha', surface: 'terminal', isInteractive: true })
   expect(marks).toEqual([undefined, 'me'])
   // The pane is open and the first read is slow: five ticks pass during it.
   await clock.advance(15000)
@@ -765,7 +765,7 @@ test('a thread of the largest messages still draws with its reply field', async 
     from: PEER,
     from_name: 'codex-x',
     to: ME,
-    to_name: 'rotom-infra',
+    to_name: 'alpha-infra',
     kind: 'request',
     body: 'x'.repeat(8192),
     sent_at: 1791936000 + i,
@@ -983,8 +983,8 @@ test('the option in the first line of a row opens the full message, and folds it
 
 test('a reply quotes the message that it answers, apart from its own text', async ($, on) => {
   const answer = 'dd'.repeat(16)
-  const asked = { ...JSON.parse(SNAPSHOT).messages[0], id: TIMED_OUT, from: ME, from_name: 'rotom-infra', to: PEER, to_name: 'codex-x', body: 'Which branch has the cart fix? ' + 'It matters for the release. '.repeat(6), thread: TIMED_OUT }
-  const reply = { ...asked, id: answer, from: PEER, from_name: 'codex-x', to: ME, to_name: 'rotom-infra', kind: 'reply', body: 'It is main.', in_reply_to: TIMED_OUT }
+  const asked = { ...JSON.parse(SNAPSHOT).messages[0], id: TIMED_OUT, from: ME, from_name: 'alpha-infra', to: PEER, to_name: 'codex-x', body: 'Which branch has the cart fix? ' + 'It matters for the release. '.repeat(6), thread: TIMED_OUT }
+  const reply = { ...asked, id: answer, from: PEER, from_name: 'codex-x', to: ME, to_name: 'alpha-infra', kind: 'reply', body: 'It is main.', in_reply_to: TIMED_OUT }
   mock.env(on, { HOME: '/home/user' })
   on('session.id', () => ({ value: 'me' }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -1074,7 +1074,7 @@ test('a reply quotes the message that it answers, apart from its own text', asyn
 })
 
 test('a peer has one color in each row', () => {
-  expect(accent('rotom-arch')).toBe(accent('rotom-arch'))
+  expect(accent('alpha-arch')).toBe(accent('alpha-arch'))
   const colors = new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(accent))
   expect(colors.size).toBe(3)
   // The colors of a state and of the option are not colors of a peer.
@@ -1117,7 +1117,7 @@ test('a message that a hook gives the agent is one line, with the word that its 
   // A request, then a reply whose sender reports that the work is complete.
   await give(FRAMES[0]?.text ?? '', 'row-1')
   await give(FRAMES[1]?.text ?? '', 'row-2')
-  expect(logs).toEqual(['← rotom-infra · request  Check docs/schema.md.', '← codex-rotom-12 · done  It is correct.'])
+  expect(logs).toEqual(['← alpha-infra · request  Check docs/schema.md.', '← codex-alpha-12 · done  It is correct.'])
   // Each delivery starts a read of the ledger. The command waits for the reads to end.
   await $.command.run({
     command: 'mesh',

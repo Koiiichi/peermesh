@@ -194,10 +194,10 @@ def test_peers_list_shows_the_name_that_the_user_gave(
         mesh.registry.put(peer)
     sessions = paths.claude_dir() / "sessions"
     sessions.mkdir(parents=True)
-    (sessions / f"{os.getppid()}.json").write_text(json.dumps({"name": "rotom-arch"}))
+    (sessions / f"{os.getppid()}.json").write_text(json.dumps({"name": "alpha-arch"}))
     monkeypatch.setattr(tools, "_context", lambda env, codex_thread, cwd: (mesh, me))
     [row] = [p for p in mcp_server.peers_list("all") if p["id"] == "claude:OTHER"]
-    assert (row["name"], row["auto_name"]) == ("rotom-arch", "claude-other")
+    assert (row["name"], row["auto_name"]) == ("alpha-arch", "claude-other")
 
 
 def _call(name: str, arguments: dict[str, Any]) -> Any:

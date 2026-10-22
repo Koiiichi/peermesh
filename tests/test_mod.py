@@ -58,7 +58,7 @@ def _case(
 
 
 def frames() -> list[dict[str, Any]]:
-    claude, codex = _peer("rotom-infra", "claude"), _peer("codex-rotom-12", "codex")
+    claude, codex = _peer("alpha-infra", "claude"), _peer("codex-alpha-12", "codex")
     request = new_message(claude, codex, "Check docs/schema.md.", "request", msg_id="1a" * 16)
     reply = new_message(
         codex,

@@ -324,13 +324,13 @@ def test_user_rename_names_the_sender_and_keeps_the_record(
     sessions = paths.claude_dir() / "sessions"
     sessions.mkdir(parents=True)
     (sessions / f"{world.peers['ca'].pid}.json").write_text(
-        json.dumps({"name": "rotom-infra", "nameSource": "user"})
+        json.dumps({"name": "alpha-infra", "nameSource": "user"})
     )
     me = world.mesh.register(make_peer(id="claude:A", name="", repo_key="k", worktree="/w1"))
-    assert me.name == "rotom-infra"
+    assert me.name == "alpha-infra"
     world.mesh.send(me, "codex-a", "the rename is live")
     _, rendered, msg = world.codex.calls[-1]
-    assert msg.from_name == "rotom-infra" and "from rotom-infra (claude)" in rendered
+    assert msg.from_name == "alpha-infra" and "from alpha-infra (claude)" in rendered
     assert world.mesh.registry.resolve("claude-a") is not None
     stored = world.mesh.registry._file("claude:A").read_text()
     assert json.loads(stored)["name"] == "claude-a"
