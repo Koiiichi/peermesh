@@ -227,7 +227,8 @@ def handle(
         return None
     cwd = str(payload.get("cwd") or os.getcwd())
     peer = mesh.registry.get(peer_id)
-    if peer is None or not is_alive(peer):
+    # A paused record names the process that the app ended, which can still be exiting.
+    if peer is None or peer.status == "paused" or not is_alive(peer):
         try:
             peer = mesh.register(detect(runtime, session_id, cwd, env, host_pid))
         except NoInboxError:

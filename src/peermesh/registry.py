@@ -264,24 +264,27 @@ def codex_native_state(rollout: str) -> tuple[Status, float] | None:
 
 
 def claude_app_session(host_session: str) -> dict[str, Any] | None:
-    """The Claude app's record of one of its sessions. The format is internal; failure is normal."""
+    """The Claude app's record of one of its sessions, or None when the app has none.
+
+    The format is internal. Raises OSError or ValueError when the records cannot be read, which
+    does not show that the session ended: a sandbox can hide the app's folder.
+    """
     if not re.fullmatch(r"local_[0-9a-f-]+", host_session):
         return None
-    pattern = f"claude-code-sessions/*/*/{host_session}.json"
-    for path in paths.claude_app_dir().glob(pattern):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return data
+    root = paths.claude_app_dir() / "claude-code-sessions"
+    os.listdir(root)
+    for path in root.glob(f"*/*/{host_session}.json"):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"{path} does not hold a JSON object")
+        return data
     return None
 
 
 def _app_record(peer: Peer) -> dict[str, Any] | None:
     """The Claude app's record of the session of peer. A child Claude process inherits the
     hostSessionId of its parent, and /clear maps the app session to a new session id, so the
-    record counts only when it names this session."""
+    record counts only when it names this session. Raises as claude_app_session does."""
     if peer.host_session is None:
         return None
     data = claude_app_session(peer.host_session)
@@ -291,8 +294,14 @@ def _app_record(peer: Peer) -> dict[str, Any] | None:
 
 
 def app_keeps(peer: Peer) -> bool:
-    """True when the Claude app keeps the session of peer to run it again: not archived."""
-    data = _app_record(peer)
+    """True when the Claude app keeps the session of peer to run it again: not archived. A
+    record that cannot be read keeps the session; only a readable answer ends it."""
+    if peer.host_session is None:
+        return False
+    try:
+        data = _app_record(peer)
+    except (OSError, ValueError):
+        return True
     return data is not None and data.get("isArchived") is False
 
 
@@ -322,7 +331,10 @@ def _user_name(peer: Peer) -> str | None:
     if peer.runtime != "claude":
         return None
     if peer.status == "paused":
-        return _typeable((_app_record(peer) or {}).get("title"))
+        try:
+            return _typeable((_app_record(peer) or {}).get("title"))
+        except (OSError, ValueError):
+            return None
     return claude_user_name(peer.pid)
 
 

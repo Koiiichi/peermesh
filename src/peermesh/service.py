@@ -126,7 +126,7 @@ class Mesh:
         env = os.environ if env is None else env
         runtime, session_id = identity.session_from_env(env)
         existing = self.registry.get(f"{runtime}:{session_id}")
-        if existing is not None and is_alive(existing):
+        if existing is not None and existing.status != "paused" and is_alive(existing):
             if existing.pid not in identity.ancestors(os.getpid()):
                 raise PeerError(
                     f"The session {existing.name} is not an ancestor of this process. "

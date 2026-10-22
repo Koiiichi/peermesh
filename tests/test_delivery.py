@@ -560,3 +560,36 @@ def test_a_child_claude_process_of_an_app_session_is_not_kept(world: World) -> N
     _app_session("local_b", "orchestrator", cli_session="PARENT")
     _hook(world, "session-end", "b", reason="other")
     assert world.mesh.registry.get("claude:B") is None
+
+
+def test_an_unreadable_app_record_keeps_a_paused_session(world: World) -> None:
+    # A sandboxed process can be unable to read the app's folder; that is not a sign that the
+    # session ended.
+    world.put("b", host_session="local_b")
+    _app_session("local_b", "worker-b")
+    _hook(world, "session-end", "b", reason="other")
+    _process_ended(world, "claude:B")
+    sessions = paths.claude_app_dir() / "claude-code-sessions"
+    sessions.chmod(0)
+    try:
+        assert "claude:B" in {p.id for p in world.mesh.registry.live()}
+    finally:
+        sessions.chmod(0o700)
+    (sessions / "account" / "org" / "local_b.json").write_text("{not json")
+    assert "claude:B" in {p.id for p in world.mesh.registry.live()}
+
+
+def test_a_resume_registers_again_while_the_old_process_still_runs(world: World) -> None:
+    world.put("b", host_session="local_b", endpoint="/tmp/old.sock")
+    _app_session("local_b", "worker-b")
+    _hook(world, "session-end", "b", reason="other")
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{os.getpid()}.json").write_text(
+        json.dumps({"sessionId": "B", "messagingSocketPath": "/tmp/new.sock"})
+    )
+    # The old process (this test's pid) has its recorded start time: it has not exited yet.
+    _hook(world, "session-start", "b", source="resume")
+    resumed = world.mesh.registry.get("claude:B")
+    assert resumed is not None and resumed.endpoint == "/tmp/new.sock"
+    assert resumed.status == "idle"
