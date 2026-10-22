@@ -22,6 +22,7 @@ from peermesh.registry import (
     is_alive,
     proc_start,
     repo_info,
+    same_record,
 )
 from peermesh.service import SHORT_IDS, Mesh, accepts_short_ids
 from peermesh.views import printable
@@ -203,14 +204,15 @@ def _ending(runtime: Runtime, session_id: str, host_pid: int | None) -> tuple[in
     return None if pid is None else (pid, proc_start(pid) or "")
 
 
-def _ends_its_process(peer: Peer, ending: tuple[int, str] | None) -> bool:
+def _ends_its_process(peer: Peer, ending: tuple[int, str] | None, owner_gone: bool) -> bool:
     """True when the process whose session ends is the one that the record names.
 
-    When that process cannot be found, a Claude app session keeps its record, because the app
-    can already run it in a new process; any other session ends, as before.
+    When that process cannot be found, the end is the recorded process's when that process has
+    exited (`owner_gone`); otherwise a Claude app session keeps its record, because the app can
+    already run it in a new process, and any other session ends, as before.
     """
     if ending is None:
-        return peer.host_session is None
+        return peer.host_session is None or owner_gone
     return ending == (peer.pid, peer.proc_start)
 
 
@@ -258,12 +260,18 @@ def handle(
         return None
     peer_id = f"{runtime}:{session_id}"
     if event == "session-end":
+        # Both run subprocesses, so they come before the lock.
         ending = _ending(runtime, session_id, host_pid)
+        # A raw read: the live list would prune a record whose process is gone before this
+        # SessionEnd can pause it.
+        seen = mesh.registry.read(peer_id)
+        gone = seen is not None and not is_alive(seen)
         # Registration takes the same lock, so a resume cannot change the record between the
         # check of its owner and the change.
         with mesh.ledger.locked():
-            peer = mesh.registry.get(peer_id)
-            if peer is not None and not _ends_its_process(peer, ending):
+            peer = mesh.registry.read(peer_id)
+            owner_gone = gone and peer is not None and same_record(peer, seen)
+            if peer is not None and not _ends_its_process(peer, ending, owner_gone):
                 # The app ran the session again in a new process before this one ended: the
                 # record and the waiting messages belong to the new process.
                 return None
