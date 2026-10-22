@@ -717,3 +717,113 @@ def test_concurrent_end_and_resume_leave_the_session_with_the_new_process(world:
             # ran before the resume registered: never after.
             [ended] = [e for e in world.mesh.ledger.entries() if e.get("id") == res.msg_id][1:]
             assert ended["outcome"] == "undelivered" and ended["at"] <= record.last_seen, round_
+
+
+def _whoami_in_child(host_pid: int) -> None:
+    Mesh(Registry(), Ledger(), {}).whoami(env={"CODEX_THREAD_ID": "X"}, host_pid=host_pid)
+
+
+def test_whoami_registers_only_after_a_session_end_finished(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # SessionEnd removes the record and expires its inbox as one step under the ledger lock. A
+    # whoami that needs to register the session waits for that step to finish.
+    world.put("x", status="busy")
+    [res] = world.mesh.send(world.peers["a"], "codex-x", "Run the tests.", kind="request")
+    ctx = multiprocessing.get_context("spawn")
+    child = ctx.Process(target=_whoami_in_child, args=(os.getpid(),))
+    blocked: list[bool] = []
+    expire = Mesh.expire_inbox
+
+    def expire_while_a_whoami_waits(self: Mesh, peer_id: str, *, locked: bool = False) -> None:
+        if locked:
+            child.start()
+            child.join(timeout=1.0)  # The child registers here if registration ignores the lock.
+            blocked.append(child.is_alive())
+        expire(self, peer_id, locked=locked)
+
+    monkeypatch.setattr(Mesh, "expire_inbox", expire_while_a_whoami_waits)
+    _hook(world, "session-end", "x")
+    child.join(timeout=60)
+    assert blocked == [True] and child.exitcode == 0
+    assert world.mesh.registry.get("codex:X") is not None
+    assert _outcomes(world, str(res.msg_id)) == ["pending", "undelivered"]
+
+
+def _takes_the_lock_while(world: World, slow_call: str, run: Callable[[], Any]) -> None:
+    """Run `run` while `hooks.<slow_call>` waits, and check that the ledger lock is free then."""
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+    real = getattr(hooks, slow_call)
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        release.wait(timeout=30)
+        return real(*args, **kwargs)
+
+    setattr(hooks, slow_call, slow)
+    try:
+        worker = threading.Thread(target=run)
+        worker.start()
+        assert entered.wait(timeout=30)
+        took: list[bool] = []
+        other = threading.Thread(target=lambda: took.append(_lock_once(world)))
+        other.start()
+        other.join(timeout=2.0)
+        free = took == [True]
+        release.set()
+        worker.join(timeout=30)
+        other.join(timeout=30)
+    finally:
+        setattr(hooks, slow_call, real)
+    assert free, f"the ledger lock was held during {slow_call}"
+
+
+def _lock_once(world: World) -> bool:
+    with world.mesh.ledger.locked():
+        return True
+
+
+def test_registration_detects_the_session_outside_the_ledger_lock(world: World) -> None:
+    payload = {"session_id": "Y", "cwd": os.getcwd()}
+    _takes_the_lock_while(
+        world,
+        "detect",
+        lambda: hooks.handle(
+            world.mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid()
+        ),
+    )
+    assert world.mesh.registry.get("codex:Y") is not None
+
+
+def test_session_end_finds_its_process_outside_the_ledger_lock(world: World) -> None:
+    world.put("b", host_session="local_b")
+    _app_session("local_b", "worker-b")
+    payload = {"session_id": "B", "reason": "other"}
+    _takes_the_lock_while(
+        world,
+        "find_host",
+        lambda: hooks.handle(world.mesh, "session-end", "claude", payload, env={}),
+    )
+
+
+def test_adopt_replaces_a_record_only_when_it_is_gone_paused_or_unchanged(world: World) -> None:
+    def candidate() -> Peer:
+        peer = Peer.from_json(world.peers["b"].to_record())
+        peer.endpoint = "/tmp/new.sock"
+        return peer
+
+    world.mesh.registry.remove("claude:B")
+    assert world.mesh.adopt(candidate(), None).endpoint == "/tmp/new.sock"  # gone
+    seen = world.put("b", endpoint="/tmp/seen.sock")
+    assert world.mesh.adopt(candidate(), seen).endpoint == "/tmp/new.sock"  # unchanged
+    world.put("b", endpoint="/tmp/other.sock")
+    _owned_by_another_process(world, "claude:B")
+    # Another process registered the session after this one read it: its record stays.
+    assert world.mesh.adopt(candidate(), seen).endpoint == "/tmp/other.sock"
+    record = world.mesh.registry.get("claude:B")
+    assert record is not None
+    record.status = "paused"
+    world.mesh.registry.put(record)
+    assert world.mesh.adopt(candidate(), seen).endpoint == "/tmp/new.sock"  # paused
