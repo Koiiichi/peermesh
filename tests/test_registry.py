@@ -6,6 +6,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -359,3 +360,21 @@ def test_no_address_moves_when_a_session_that_wants_the_same_name_ends(
         for proc in sleepers:
             proc.kill()
             proc.wait()
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="the kernel start time")
+def test_process_began_is_the_start_of_the_process_on_the_wall_clock() -> None:
+    before = time.time()
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from peermesh.registry import process_began; print(process_began())",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    began = float(out)
+    # A tick of the Linux clock is 10 ms.
+    assert before - 0.02 <= began <= time.time()

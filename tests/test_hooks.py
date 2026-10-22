@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
@@ -8,7 +9,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from peermesh import hooks, install, paths
+import pytest
+
+from peermesh import cli, hooks, install, paths, registry
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry
 from peermesh.service import Mesh
@@ -317,3 +320,14 @@ def test_the_plugin_post_tool_hook_leaves_a_message_to_the_peers_install_hook(
     out = run(True)
     assert out is not None
     assert "Schema v2 at abc123." in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_hook_cli_gives_the_start_of_its_process_as_the_time_of_the_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(registry, "process_began", lambda: 1234.5)
+    monkeypatch.setattr(hooks, "handle", lambda *args, **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"session_id": "X"}'))
+    assert cli.main(["hook", "session-end", "--runtime", "codex"]) == 0
+    assert [call["began"] for call in calls] == [1234.5]

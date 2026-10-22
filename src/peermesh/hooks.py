@@ -256,14 +256,18 @@ def handle(
     inbox: bool = False,
     plugin: bool = False,
     emit: Emit = lambda out: None,
+    began: float | None = None,
 ) -> dict[str, Any] | None:
     """Run one hook event and return its output; `emit` writes the output to the runtime.
 
     The hook calls `emit` itself for output that carries peer messages, under the ledger lock
     and before it records the messages as injected. `inbox` is True when the post-tool hook of
     this runtime is installed, so senders can leave messages for it. `plugin` is True for a
-    hook of the Codex plugin, whose session has the peermesh MCP tools.
+    hook of the Codex plugin, whose session has the peermesh MCP tools. `began` is when the
+    runtime fired the event, in time.time() seconds; without it, the time of this call.
     """
+    if began is None:
+        began = time.time()
     if plugin and hooks_installed(runtime, _EVENTS.get(event)):
         # A hook of `peers install` serves this event, so the plugin hook does nothing.
         return None
@@ -298,6 +302,10 @@ def handle(
         if ending != owner(seen):
             # Another process owns the record, or this process cannot tell who it is: the end is
             # not this record's. Pruning retires a record whose process exited.
+            return None
+        if seen.registered is not None and seen.registered >= began:
+            # The session registered again after this end began, as a Codex thread does when
+            # it opens again in the same app-server: that registration is a new lifecycle.
             return None
         # The Claude app ends the process of an idle session and keeps the session to run it
         # again: a pause keeps the record and its waiting messages. /clear ends the session id.

@@ -1,17 +1,22 @@
-"""The peer registry: one JSON record per live session, pruned on every read."""
+"""The peer registry: one JSON record per session. Only pruning removes the records of ended
+sessions; a read never deletes."""
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
 import re
+import struct
 import subprocess
+import sys
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from peermesh import paths
 from peermesh.errors import UnreadableRecord
@@ -52,6 +57,9 @@ class Peer:
     # newer registration, also of the same process, as when a Codex thread opens again in a
     # long-lived app-server.
     generation: str | None = None
+    # When the registration was stored, in time.time() seconds. A SessionEnd ends only a
+    # registration stored before the end began: a later one is a new lifecycle of the session.
+    registered: float | None = None
 
     @property
     def has_tools(self) -> bool:
@@ -74,6 +82,44 @@ class Peer:
         # Records written by a newer peermesh can carry fields that this version does not know.
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in known})
+
+
+def _is_text(value: object) -> bool:
+    return isinstance(value, str)
+
+
+def _is_text_or_none(value: object) -> bool:
+    return value is None or isinstance(value, str)
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+# The type of each record field that is present. A record that breaks one is unreadable, so
+# one damaged file cannot stop the list, a send or pruning for the other sessions.
+_SHAPES: dict[str, Callable[[object], bool]] = {
+    "id": _is_text,
+    "name": _is_text,
+    "runtime": lambda value: value in get_args(Runtime),
+    "pid": lambda value: isinstance(value, int) and not isinstance(value, bool),
+    "proc_start": _is_text,
+    "cwd": _is_text,
+    "git_root": _is_text_or_none,
+    "worktree": _is_text_or_none,
+    "branch": _is_text_or_none,
+    "repo_key": _is_text_or_none,
+    "status": lambda value: value in get_args(Status),
+    "last_seen": _is_number,
+    "endpoint": _is_text,
+    "host": _is_text,
+    "capabilities": lambda value: isinstance(value, list) and all(map(_is_text, value)),
+    "transcript": _is_text_or_none,
+    "auto_name": _is_text_or_none,
+    "host_session": _is_text_or_none,
+    "generation": _is_text_or_none,
+    "registered": lambda value: value is None or _is_number(value),
+}
 
 
 def proc_start(pid: int) -> str | None:
@@ -101,6 +147,32 @@ def proc_starts(pids: list[int]) -> dict[int, str]:
         if pid_text.isdigit() and start.strip():
             starts[int(pid_text)] = start.strip()
     return starts
+
+
+def process_began() -> float | None:
+    """The time the kernel started this process, in time.time() seconds, or None when the
+    platform does not tell. A hook process starts when its runtime fires the event, so this
+    time comes before everything that the event caused."""
+    try:
+        if sys.platform == "darwin":
+            # sysctl(CTL_KERN, KERN_PROC, KERN_PROC_PID): a kinfo_proc starts with the
+            # process's start time as a timeval.
+            mib = (ctypes.c_int * 4)(1, 14, 1, os.getpid())
+            buf = ctypes.create_string_buffer(1024)
+            size = ctypes.c_size_t(len(buf))
+            if ctypes.CDLL(None).sysctl(mib, 4, buf, ctypes.byref(size), None, 0) != 0:
+                return None
+            sec, usec = struct.unpack_from("qi", buf, 0)
+            return float(sec + usec / 1e6)
+        if sys.platform.startswith("linux"):
+            # Field 22 of /proc/self/stat is the start, in clock ticks after boot.
+            stat = Path("/proc/self/stat").read_text().rpartition(")")[2].split()
+            ticks = int(stat[19]) / os.sysconf("SC_CLK_TCK")
+            uptime = float(Path("/proc/uptime").read_text().split()[0])
+            return time.time() - uptime + ticks
+    except (OSError, ValueError, IndexError, AttributeError, struct.error):
+        return None
+    return None
 
 
 def is_alive(peer: Peer, starts: dict[int, str] | None = None) -> bool:
@@ -341,6 +413,9 @@ def _load(path: Path) -> Peer:
         data = json.loads(path.read_bytes().decode("utf-8"))
         if not isinstance(data, dict):
             raise ValueError("a record is a JSON object")
+        wrong = [key for key, check in _SHAPES.items() if key in data and not check(data[key])]
+        if wrong:
+            raise ValueError(f"fields of the wrong type: {', '.join(wrong)}")
         return Peer.from_json(data)
     except FileNotFoundError:
         raise

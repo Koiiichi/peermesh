@@ -110,7 +110,9 @@ def _statusline() -> int:
 
 def _hook(args: argparse.Namespace) -> int:
     from peermesh import hooks
+    from peermesh.registry import process_began
 
+    began = process_began()
     try:
         raw = sys.stdin.read()
         payload = json.loads(raw) if raw.strip() else {}
@@ -125,6 +127,7 @@ def _hook(args: argparse.Namespace) -> int:
             inbox=args.inbox,
             plugin=args.plugin,
             emit=lambda out: print(json.dumps(out), flush=True),
+            began=began,
         )
     except Exception:  # a hook must never break the host session
         try:
