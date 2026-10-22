@@ -11,7 +11,7 @@ from typing import Any
 
 from peermesh import paths, text
 from peermesh.envelope import Ending, render
-from peermesh.errors import NoInboxError, UnreadableRecord
+from peermesh.errors import NoInboxError, ProcessCheckError, UnreadableRecord
 from peermesh.identity import detect, find_host
 from peermesh.inbox import Waiting
 from peermesh.install import HOOK_EVENTS, hooks_installed
@@ -38,6 +38,10 @@ _HOOK_NAMES = {
 # The hook event of the runtime for each peermesh hook name.
 _EVENTS = {name: event for event, name in HOOK_EVENTS.items()} | {"post-tool": "PostToolUse"}
 Emit = Callable[[dict[str, Any]], None]
+# The time of an event whose hook process start the platform does not tell. No registration
+# was stored before it, so a SessionEnd at that time removes none, and pruning ends the
+# session once its process exits.
+UNKNOWN_START = 0.0
 # The peermesh mod for Claude Code sets this variable to the id of its session. The mod draws
 # each message that a hook gives the agent, so the hook does not write a notice line too.
 MOD_ENV = "PEERMESH_MOD"
@@ -229,9 +233,16 @@ def _host(runtime: Runtime, session_id: str, host_pid: int | None) -> int | None
 
 def _caller(runtime: Runtime, session_id: str, host_pid: int | None) -> Owner | None:
     """The pid and the start time of the process that fired the hook, or None when no ancestor
-    names the session. Both come from subprocesses, so hooks read them before the lock."""
+    names the session or ps gives no trusted answer. Both come from subprocesses, so hooks
+    read them before the lock."""
     pid = _host(runtime, session_id, host_pid)
-    return None if pid is None else (pid, proc_start(pid) or "")
+    if pid is None:
+        return None
+    try:
+        start = proc_start(pid)
+    except ProcessCheckError:
+        return None
+    return None if start is None else (pid, start)
 
 
 def _needs_registration(peer: Peer | None, caller: Owner | None) -> bool:
@@ -303,9 +314,13 @@ def handle(
             # Another process owns the record, or this process cannot tell who it is: the end is
             # not this record's. Pruning retires a record whose process exited.
             return None
-        if seen.registered is not None and seen.registered >= began:
+        # A record written before peermesh stored the time of a registration counts as stored
+        # at the earliest time.
+        stored = UNKNOWN_START if seen.registered is None else seen.registered
+        if stored >= began:
             # The session registered again after this end began, as a Codex thread does when
-            # it opens again in the same app-server: that registration is a new lifecycle.
+            # it opens again in the same app-server: that registration is a new lifecycle. With
+            # an unknown start, no registration is known to come before the end.
             return None
         # The Claude app ends the process of an idle session and keeps the session to run it
         # again: a pause keeps the record and its waiting messages. /clear ends the session id.

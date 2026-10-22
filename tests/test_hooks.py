@@ -331,3 +331,14 @@ def test_hook_cli_gives_the_start_of_its_process_as_the_time_of_the_event(
     monkeypatch.setattr(sys, "stdin", io.StringIO('{"session_id": "X"}'))
     assert cli.main(["hook", "session-end", "--runtime", "codex"]) == 0
     assert [call["began"] for call in calls] == [1234.5]
+
+
+def test_hook_cli_gives_an_unknown_start_when_the_platform_does_not_tell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(registry, "process_began", lambda: None)
+    monkeypatch.setattr(hooks, "handle", lambda *args, **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"session_id": "X"}'))
+    assert cli.main(["hook", "session-end", "--runtime", "codex"]) == 0
+    assert [call["began"] for call in calls] == [hooks.UNKNOWN_START]
