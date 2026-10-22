@@ -27,6 +27,7 @@ from peermesh.registry import (
     claude_native_state,
     codex_native_state,
     is_alive,
+    same_record,
     scoped,
 )
 from peermesh.transports import Transport
@@ -124,10 +125,10 @@ class Mesh:
         given = (seen.auto_name or seen.name) if seen else None
         peer.name = given or self.registry.unique_name(peer)
         with self.ledger.locked():
-            current = self.registry.get(peer.id)
-            if current is not None and current.status != "paused" and not _same(current, seen):
-                return current
-            self.registry.put(peer)
+            current = self.registry.read(peer.id)
+            if current is None or current.status == "paused" or same_record(current, seen):
+                self.registry.put(peer)
+        # Outside the lock: the live view, with the user's name, runs ps.
         return self.registry.get(peer.id) or peer
 
     def whoami(
@@ -611,15 +612,6 @@ def _wants_inbox(target: Peer, msg: Message) -> bool:
     if msg.urgency == "now":
         return target.runtime == "codex" and target.host != "daemon" and target.status == "busy"
     return target.status == "busy" or msg.kind == "info"
-
-
-def _same(record: Peer, seen: Peer | None) -> bool:
-    """True when record is the record that was read as seen: the same process and status."""
-    return seen is not None and (record.pid, record.proc_start, record.status) == (
-        seen.pid,
-        seen.proc_start,
-        seen.status,
-    )
 
 
 def _pending_note(target: Peer) -> str:

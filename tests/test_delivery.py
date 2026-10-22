@@ -827,3 +827,22 @@ def test_adopt_replaces_a_record_only_when_it_is_gone_paused_or_unchanged(world:
     record.status = "paused"
     world.mesh.registry.put(record)
     assert world.mesh.adopt(candidate(), seen).endpoint == "/tmp/new.sock"  # paused
+
+
+def test_an_unknown_ending_process_pauses_a_record_whose_process_is_gone(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No ancestor names the session, and the recorded process has already exited: this end is
+    # that process's, so the app session is paused and keeps its messages.
+    world.put("b", host_session="local_b", status="idle")
+    _app_session("local_b", "worker-b")
+    [res] = world.mesh.send(world.peers["a"], "claude-b", "Note for later.", kind="info")
+    _process_ended(world, "claude:B")
+    monkeypatch.setattr(hooks, "find_host", lambda *a, **k: None)
+    hooks.handle(
+        world.mesh, "session-end", "claude", {"session_id": "B", "reason": "other"}, env={}
+    )
+    record = world.mesh.registry.get("claude:B")
+    assert record is not None and record.status == "paused"
+    assert "claude:B" in {p.id for p in world.mesh.registry.live()}
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]

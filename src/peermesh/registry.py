@@ -318,6 +318,15 @@ def _typeable(name: object) -> str | None:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-")[:40] or None
 
 
+def same_record(record: Peer, seen: Peer | None) -> bool:
+    """True when record is the record that was read as seen: the same process and status."""
+    return seen is not None and (record.pid, record.proc_start, record.status) == (
+        seen.pid,
+        seen.proc_start,
+        seen.status,
+    )
+
+
 def claude_user_name(pid: int) -> str | None:
     """The name that the user gave the Claude session, made safe to type, or None.
 
@@ -361,10 +370,17 @@ class Registry:
             json.dump(peer.to_record(), fh)
         os.replace(tmp, target)
 
-    def get(self, peer_id: str) -> Peer | None:
+    def read(self, peer_id: str) -> Peer | None:
+        """The stored record, as it is: no user name, and no pruning, so no subprocess runs.
+        A caller that holds the ledger lock reads with this."""
         try:
-            peer = Peer.from_json(json.loads(self._file(peer_id).read_text()))
+            return Peer.from_json(json.loads(self._file(peer_id).read_text()))
         except (OSError, ValueError, TypeError):
+            return None
+
+    def get(self, peer_id: str) -> Peer | None:
+        peer = self.read(peer_id)
+        if peer is None:
             return None
         if peer.runtime == "claude":
             # A user rename is unique only among the live peers, so take it from the live list.
