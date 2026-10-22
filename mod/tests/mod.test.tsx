@@ -82,7 +82,6 @@ test('a peer message is a short row on every surface', async $ => {
 test('a row fills the room of a graphical surface and keeps the cell width on the terminal', async $ => {
   const text = 'Another Claude session sent a message:\n' + (FRAMES[0]?.text ?? '')
   const widths: Record<string, unknown> = {}
-  const wraps: Record<string, boolean> = {}
   for (const surface of ['terminal', 'desktop', 'vscode', 'mobile'] as const) {
     const ui = await $.ui.mount({
       plugin: 'peermesh',
@@ -93,15 +92,80 @@ test('a row fills the room of a graphical surface and keeps the cell width on th
     })
     const drawn = await ui.drawn()
     widths[surface] = (drawn as { props: { width?: unknown } }).props.width
-    // The first line wraps, and so does the group of parts at its right end.
-    wraps[surface] = JSON.stringify(drawn).split('"flexWrap":"wrap"').length - 1 === 2
     await ui.unmount()
   }
   // A graphical surface lays the row out in its own column, whose width in cells it does not
-  // know exactly; a fixed cell width runs past a narrow window and is cut there. The first line
-  // wraps there, so the state and the option go under the sender when the column is narrow.
+  // know exactly; a fixed cell width runs past a narrow window and is cut there.
   expect(widths).toEqual({ terminal: 120, desktop: '100%', vscode: '100%', mobile: '100%' })
-  expect(wraps).toEqual({ terminal: false, desktop: true, vscode: true, mobile: true })
+})
+
+type Drawn = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+const textOf = (node: unknown): string =>
+  typeof node === 'string' ? node : ((node as Drawn).children ?? []).map(textOf).join('')
+const findNode = (node: unknown, isIt: (n: Drawn) => boolean): Drawn | undefined => {
+  if (typeof node !== 'object' || node === null) return undefined
+  const n = node as Drawn
+  if (isIt(n)) return n
+  for (const child of n.children ?? []) {
+    const found = findNode(child, isIt)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+test('the first line of a row and the parts at its right end wrap on a graphical surface', async ($, on) => {
+  const id = 'dd'.repeat(16)
+  const body = Array.from({ length: 12 }, (_, i) => `line ${i + 1} of a long request`).join('\n')
+  const snapshot = JSON.parse(SNAPSHOT) as { messages: object[] }
+  snapshot.messages.push({
+    ...(snapshot.messages[1] as object),
+    id,
+    thread: id,
+    body,
+    state: 'delivered',
+    note: undefined,
+  })
+  mock.env(on, { HOME: '/home/user' })
+  on('session.id', () => ({ value: 'me' }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('process.run', () => ({
+    value: { exitCode: 0, stdout: JSON.stringify(snapshot), stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
+  await $.command.run({
+    command: 'mesh',
+    args: '',
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: true, columns: 120 },
+  })
+  const result = JSON.stringify({ result: [{ msg_id: id, to: 'codex-x', status: 'delivered', note: '' }] })
+  const call = { tool_use_id: 'toolu_1', tool: SEND, input: { to: ['codex-x'], body, kind: 'request' } }
+  for (const surface of ['terminal', 'desktop'] as const) {
+    // A graphical surface can report more columns than its transcript column has.
+    const ui = await $.ui.mount({
+      plugin: 'peermesh',
+      surface,
+      component: 'ToolGroup',
+      viewport: { columns: 120, rows: 40 },
+      props: {
+        calls: [{ ...call, isRunning: false, isErrored: false, isInterrupted: false, output: result }],
+        isActive: true,
+        isExpanded: false,
+      },
+    })
+    const drawn = await ui.drawn()
+    const group = findNode(drawn, n => n.type === 'Box' && n.props?.marginLeft === 2)
+    const line = findNode(drawn, n => n.type === 'Box' && n.props?.justifyContent === 'space-between')
+    // The group holds the state, the option of a long message and the time.
+    expect(textOf(group)).toMatch(/^delivered · 9 more lines · ctrl\+o · \d\d:\d\d$/)
+    if (surface === 'terminal') {
+      expect(group?.props).toMatchObject({ flexShrink: 0, flexWrap: 'nowrap' })
+      expect(line?.props).toMatchObject({ flexWrap: 'nowrap' })
+    } else {
+      expect(group?.props).toMatchObject({ flexShrink: 1, flexWrap: 'wrap' })
+      expect(line?.props).toMatchObject({ flexWrap: 'wrap' })
+    }
+    await ui.unmount()
+  }
 })
 
 test('a sent message shows the state that the ledger has, not a guess', async ($, on) => {
