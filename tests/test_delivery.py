@@ -1301,3 +1301,52 @@ def test_a_damaged_record_is_unreadable_and_leaves_other_sessions_alone(
     assert world.mesh.registry.resolve("claude-a") is not None
     world.mesh.prune()
     assert world.mesh.registry._file("claude:B").exists()
+
+
+def test_a_late_session_end_does_not_end_a_registration_made_after_it_began(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A Codex thread ends and opens again in the same app-server; the old SessionEnd is delayed
+    # until after the new registration, so its first read already sees that registration.
+    world.put("x", status="idle")
+    caller = hooks._caller
+
+    def delayed(*args: Any) -> Any:
+        monkeypatch.setattr(hooks, "_caller", caller)
+        payload = {"session_id": "X", "cwd": os.getcwd()}
+        hooks.handle(
+            world.mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid(), inbox=True
+        )
+        [res] = world.mesh.send(world.peers["a"], "codex:X", "Note for later.", kind="info")
+        sent.append(str(res.msg_id))
+        return caller(*args)
+
+    sent: list[str] = []
+    monkeypatch.setattr(hooks, "_caller", delayed)
+    _hook(world, "session-end", "x")
+    assert world.mesh.registry.read("codex:X") is not None
+    assert _outcomes(world, sent[0]) == ["pending"]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("pid", None),
+        ("proc_start", 7),
+        ("capabilities", "inbox"),
+        ("transcript", 3),
+        ("status", "x"),
+    ],
+)
+def test_a_record_with_a_wrong_field_type_is_unreadable_and_contained(
+    world: World, field: str, value: Any
+) -> None:
+    record = world.mesh.registry.read("claude:B")
+    assert record is not None
+    data = record.to_record() | {field: value}
+    world.mesh.registry._file("claude:B").write_text(json.dumps(data))
+    with pytest.raises(UnreadableRecord):
+        world.mesh.registry.read("claude:B")
+    assert world.mesh.registry.resolve("claude-a") is not None
+    world.mesh.prune()
+    assert world.mesh.registry._file("claude:B").exists()

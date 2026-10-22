@@ -120,8 +120,9 @@ class Mesh:
     # time) and its registration (`generation`). adopt, claim and retire are the only writers
     # of records: each re-reads the record under the ledger lock and commits only when the
     # record is still the registration and the owner that the writer saw. A process that
-    # cannot tell who it is owns nothing. Work that runs a subprocess (ps, git, detect) comes
-    # before the lock.
+    # cannot tell who it is owns nothing. A SessionEnd ends only a registration stored before
+    # the end began (`registered`). Work that runs a subprocess (ps, git, detect) comes before
+    # the lock.
 
     def adopt(
         self,
@@ -159,6 +160,7 @@ class Mesh:
                     and (resume or not started_after(current.proc_start, peer.proc_start))
                 )
             ):
+                peer.registered = time.time()
                 self.registry.put(peer)
         # Outside the lock: the live view, with the user's name, runs ps.
         return self.registry.get(peer.id) or peer
