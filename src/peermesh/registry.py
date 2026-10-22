@@ -47,6 +47,10 @@ class Peer:
     # the process of an idle session to free memory and runs the session again later under the
     # same session id, so a record with this field can outlive its process as "paused".
     host_session: str | None = None
+    # A new value at each registration. A writer that read another value lost the record to a
+    # newer registration, also of the same process, as when a Codex thread opens again in a
+    # long-lived app-server.
+    generation: str | None = None
 
     @property
     def has_tools(self) -> bool:

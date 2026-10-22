@@ -8,9 +8,9 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, TypeVar
 
-from peermesh import identity, paths
+from peermesh import identity, paths, text
 from peermesh.envelope import (
     EnvelopeError,
     Message,
@@ -38,6 +38,8 @@ from peermesh.registry import (
 from peermesh.transports import Transport
 from peermesh.transports.claude import ClaudeSocketTransport
 from peermesh.transports.codex import CodexTransport
+
+T = TypeVar("T")
 
 RATE_LIMIT = 6
 RATE_WINDOW_S = 600.0
@@ -115,54 +117,60 @@ class Mesh:
     def register(self, peer: Peer) -> Peer:
         return self.adopt(peer, self.registry.get(peer.id))
 
-    # Registry invariant. A record names the process that owns its session: the newest
-    # running process that hosts it. Every write, removal and inbox expiry re-reads the record
-    # under the ledger lock and commits only for the owner that the writer saw; work that runs
-    # a subprocess (ps, git, detect) comes before the lock. adopt, update and retire are the
-    # only writers of records.
+    # Registry invariant. A record names the process that owns its session (pid and ps start
+    # time) and its registration (`generation`). adopt, claim and retire are the only writers
+    # of records: each re-reads the record under the ledger lock and commits only when the
+    # record is still the registration and the owner that the writer saw. A process that
+    # cannot tell who it is owns nothing. Work that runs a subprocess (ps, git, detect) comes
+    # before the lock.
 
     def adopt(self, peer: Peer, seen: Peer | None = None, *, seen_dead: bool = False) -> Peer:
         """Register peer, the session of the calling process, which read its record as `seen`.
 
-        The record is replaced when it is gone or paused, when peer's process already owns it,
-        when its owner is still the one in `seen` and that process has exited (`seen_dead`), or
-        when peer's process started after its owner's: an older process never takes a session
-        back. Otherwise the stored record stays and is returned.
+        The record gets a new generation. It replaces the stored record when that is gone,
+        when peer's process already owns it, when peer's process started after its owner's,
+        or when it is still the registration in `seen` and that owner exited (`seen_dead`). An
+        older process never takes a session back. Otherwise the stored record stays, and the
+        live view of the stored record is returned.
         """
         given = (seen.auto_name or seen.name) if seen else None
         peer.name = given or self.registry.unique_name(peer)
+        peer.generation = uuid.uuid4().hex
         with self.ledger.locked():
             current = self.registry.read(peer.id)
             if (
                 current is None
-                or current.status == "paused"
                 or owner(current) == owner(peer)
-                or (seen_dead and seen is not None and owner(current) == owner(seen))
                 or started_after(peer.proc_start, current.proc_start)
+                or (seen_dead and seen is not None and _same(current, seen))
             ):
                 self.registry.put(peer)
         # Outside the lock: the live view, with the user's name, runs ps.
         return self.registry.get(peer.id) or peer
 
-    def update(self, peer_id: str, me: Owner | None, change: Callable[[Peer], None]) -> Peer | None:
-        """Apply change to the stored record, under the lock, when `me` owns it. None when the
-        record is gone or another process owns it; `me` None means the caller's process is
-        unknown and acts as the owner. change only sets fields: it runs under the lock."""
+    def claim(
+        self, peer_id: str, seen: Peer, caller: Owner | None, change: Callable[[Peer], T]
+    ) -> T | None:
+        """Run change on the stored record and store it, under the lock, when the record is
+        still the registration in `seen` and `caller` owns it. None otherwise, and for an
+        unknown caller. change runs under the lock: it sets fields and claims messages only."""
+        if caller is None:
+            return None
         with self.ledger.locked():
             current = self.registry.read(peer_id)
-            if current is None or (me is not None and owner(current) != me):
+            if current is None or not _same(current, seen) or owner(current) != caller:
                 return None
-            change(current)
+            result = change(current)
             self.registry.put(current)
-            return current
+            return result
 
-    def retire(self, peer_id: str, expected: Owner, *, keep_if_kept: bool = True) -> None:
-        """End the record of the process `expected`, under the lock: pause it while the Claude
-        app keeps its session (and `keep_if_kept`), else remove it and expire its inbox in the
-        same step. A record that another process owns by then stays as it is."""
+    def retire(self, peer_id: str, seen: Peer, *, keep_if_kept: bool = True) -> None:
+        """End the registration in `seen`, under the lock: pause it while the Claude app keeps
+        its session (and `keep_if_kept`), else remove the record and expire its inbox in the
+        same step. A newer registration, of any process, stays as it is."""
         with self.ledger.locked():
             current = self.registry.read(peer_id)
-            if current is None or owner(current) != expected:
+            if current is None or not _same(current, seen):
                 return
             if keep_if_kept and app_keeps(current):
                 current.status = "paused"
@@ -172,20 +180,17 @@ class Mesh:
             self.expire_inbox(peer_id, locked=True)
 
     def prune(self) -> None:
-        """Remove the records of exited processes and the inboxes that no record has.
-
-        Which processes run is read first, with ps; under the lock each record is read again,
-        and only a record whose owner is still the exited process is retired.
-        """
+        """Retire the registrations of exited processes, and expire the inboxes that no record
+        has. Which processes run is read first, with ps; retire checks each one again."""
         records = self.registry.records()
         starts = proc_starts([peer.pid for peer in records])
-        dead = [p for p in records if p.status != "paused" and not is_alive(p, starts)]
-        for peer in dead:
-            self.retire(peer.id, owner(peer))
-        for peer in [p for p in records if p.status == "paused"]:
-            # A paused record ends when the app archives or deletes its session.
-            if not app_keeps(peer):
-                self.retire(peer.id, owner(peer), keep_if_kept=False)
+        for peer in records:
+            if peer.status == "paused":
+                # A paused record ends when the app archives or deletes its session.
+                if not app_keeps(peer):
+                    self.retire(peer.id, peer, keep_if_kept=False)
+            elif not is_alive(peer, starts):
+                self.retire(peer.id, peer)
         with self.ledger.locked():
             for path in self.registry.dir.glob("*.json") if self.registry.dir.is_dir() else []:
                 try:
@@ -221,8 +226,11 @@ class Mesh:
         if unregistered is not None:
             raise PeerError(unregistered)
         peer = identity.detect(runtime, session_id, cwd or os.getcwd(), env, host_pid)
-        dead = existing is not None and existing.status != "paused" and not is_alive(existing)
-        return self.adopt(peer, existing, seen_dead=dead)
+        dead = existing is not None and not is_alive(existing)
+        adopted = self.adopt(peer, existing, seen_dead=dead)
+        if owner(adopted) != owner(peer):
+            raise PeerError(text.SUPERSEDED)
+        return adopted
 
     def _enrich(self, peer: Peer) -> Peer:
         """Use the runtime's own status unless a peermesh hook recorded a newer one."""
@@ -506,7 +514,13 @@ class Mesh:
                 )
             # The status can change between resolve() and the lock; a Stop hook changes it
             # under this lock, so the inbox decision sees the status that the hook wrote.
-            target = self._enrich(self.registry.get(target.id) or target)
+            # A raw read: the live view would run ps under the lock. The name stays the one that
+            # resolve() gave.
+            fresh = self.registry.read(target.id)
+            if fresh is not None:
+                fresh.name, fresh.auto_name = target.name, target.auto_name
+                target = fresh
+            target = self._enrich(target)
             to_inbox = _wants_inbox(target, msg)
             try:
                 self.ledger.append(
@@ -547,8 +561,8 @@ class Mesh:
         )
         outcome = self.transports[target.runtime].deliver(target, rendered, msg)
         if outcome.offline:
-            # The record ends only if the process that the send tried still owns it.
-            self.retire(target.id, owner(target))
+            # The record ends only if it is still the registration that the send tried.
+            self.retire(target.id, target)
         entry = {"id": msg.id, "outcome": outcome.status, "note": outcome.note, "at": self.clock()}
         try:
             with self.ledger.locked():
@@ -681,6 +695,11 @@ def _wants_inbox(target: Peer, msg: Message) -> bool:
     if msg.urgency == "now":
         return target.runtime == "codex" and target.host != "daemon" and target.status == "busy"
     return target.status == "busy" or msg.kind == "info"
+
+
+def _same(record: Peer, seen: Peer) -> bool:
+    """True when record is the registration that was read as seen: its generation and owner."""
+    return record.generation == seen.generation and owner(record) == owner(seen)
 
 
 def _pending_note(target: Peer) -> str:
