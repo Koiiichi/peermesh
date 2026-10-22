@@ -136,9 +136,9 @@ def proc_start(pid: int) -> str | None:
 
 def proc_starts(pids: list[int]) -> dict[int, str]:
     """The start time `ps` prints for each running pid, from one `ps` call. A pid that is not
-    in the result does not run. Raises ProcessCheckError when ps does not start, writes an
-    error, or prints a line that is not a pid and a start time: then no pid is known to have
-    exited, and a caller that ends sessions must end none."""
+    in the result does not run. Raises ProcessCheckError when ps does not start, does not
+    answer in 30 s, writes an error, or prints a line that is not a pid and a start time: then
+    no pid is known to have exited, and a caller that ends sessions must end none."""
     wanted = sorted({pid for pid in pids if pid > 0})
     if not wanted:
         return {}
@@ -151,8 +151,11 @@ def proc_starts(pids: list[int]) -> dict[int, str]:
             text=True,
             check=False,
             env=env,
+            # ps answers in milliseconds; a long limit lets a loaded machine finish, and a ps
+            # that does not answer is no answer.
+            timeout=30,
         )
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         raise ProcessCheckError(_PS_FAILED.format(detail=exc)) from exc
     # ps exits with 1 and writes nothing to stderr when no pid runs.
     if result.returncode not in (0, 1) or result.stderr.strip():
