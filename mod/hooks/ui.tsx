@@ -46,12 +46,17 @@ export type Fold = {
   toggle?: () => void
 }
 
-/** A block of rows. `columns` is the width of the transcript. */
+/**
+ * A block of rows. `columns` is the width of the transcript. `isTerminal` is false on a
+ * graphical surface, which lays the block out in its own column: there the block fills that
+ * column, because a width in cells runs past a narrower window and is cut at its edge.
+ */
 export function messageRows(
   T: ElementTable,
   rows: readonly Row[],
   fold: Fold,
   columns: number,
+  isTerminal: boolean,
 ): RenderElement {
   const { Box } = T
   const share = {
@@ -61,7 +66,7 @@ export function messageRows(
 
   // The blank line above is the one that Claude Code puts above each block of its own.
   return (
-    <Box flexDirection="column" marginTop={1} width={columns}>
+    <Box flexDirection="column" marginTop={1} width={isTerminal ? columns : '100%'}>
       {rows.map((row, index) => messageRow(T, row, index, fold, share, columns))}
     </Box>
   )
