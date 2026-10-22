@@ -11,10 +11,18 @@ from typing import Any
 from peermesh import paths, text
 from peermesh.envelope import Ending, render
 from peermesh.errors import NoInboxError
-from peermesh.identity import detect
+from peermesh.identity import detect, find_host
 from peermesh.inbox import Waiting
 from peermesh.install import HOOK_EVENTS, hooks_installed
-from peermesh.registry import Peer, Runtime, app_keeps, current_branch, is_alive, repo_info
+from peermesh.registry import (
+    Peer,
+    Runtime,
+    app_keeps,
+    current_branch,
+    is_alive,
+    proc_start,
+    repo_info,
+)
 from peermesh.service import SHORT_IDS, Mesh, accepts_short_ids
 from peermesh.views import printable
 
@@ -176,6 +184,17 @@ def _context(event: str, body: str) -> dict[str, Any]:
     return {"hookSpecificOutput": {"hookEventName": _HOOK_NAMES[event], "additionalContext": body}}
 
 
+def _ends_its_process(peer: Peer, runtime: Runtime, session_id: str, host_pid: int | None) -> bool:
+    """True when the process whose session ends is the one that the record names, or when that
+    process cannot be found, as before records knew which process ends."""
+    if host_pid is None:
+        found = find_host(runtime, session_id)
+        if found is None:
+            return True
+        host_pid = found[0]
+    return host_pid == peer.pid and proc_start(host_pid) == peer.proc_start
+
+
 def handle(
     mesh: Mesh,
     event: str,
@@ -208,6 +227,10 @@ def handle(
     peer_id = f"{runtime}:{session_id}"
     if event == "session-end":
         peer = mesh.registry.get(peer_id)
+        if peer is not None and not _ends_its_process(peer, runtime, session_id, host_pid):
+            # The app ran the session again in a new process before this one ended: the record
+            # and the waiting messages belong to the new process.
+            return None
         if peer is not None and payload.get("reason") != "clear" and app_keeps(peer):
             # The Claude app ended the process of an idle session and keeps the session to run
             # it again, so its record and its waiting messages stay.

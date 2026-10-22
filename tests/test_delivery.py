@@ -13,7 +13,7 @@ import pytest
 from peermesh import hooks, install, paths, registry
 from peermesh.envelope import ENDINGS, INFO_NOTE, Message
 from peermesh.ledger import Ledger
-from peermesh.registry import Peer, Registry, is_alive
+from peermesh.registry import Peer, Registry, is_alive, proc_start
 from peermesh.service import Mesh, accepts_short_ids, announce_short_ids
 from peermesh.transports import Outcome
 
@@ -594,3 +594,35 @@ def test_a_resume_registers_again_while_the_old_process_still_runs(world: World)
     resumed = world.mesh.registry.get("claude:B")
     assert resumed is not None and resumed.endpoint == "/tmp/new.sock"
     assert resumed.status == "idle"
+
+
+def _owned_by_another_process(world: World, peer_id: str) -> None:
+    """Make the record belong to a running process other than the one that ends in the test."""
+    record = world.mesh.registry.get(peer_id)
+    assert record is not None
+    record.pid = os.getppid()
+    record.proc_start = proc_start(os.getppid()) or ""
+    world.mesh.registry.put(record)
+
+
+def test_the_end_of_an_old_process_leaves_the_resumed_session_alone(world: World) -> None:
+    # The app ran the session again in a new process, which registered, before the old one ended.
+    world.put("b", host_session="local_b", status="idle")
+    _app_session("local_b", "worker-b")
+    [res] = world.mesh.send(world.peers["a"], "claude-b", "Note for later.", kind="info")
+    _owned_by_another_process(world, "claude:B")
+    for reason in ("other", "clear"):
+        _hook(world, "session-end", "b", reason=reason)
+        record = world.mesh.registry.get("claude:B")
+        assert record is not None and record.status == "idle" and record.pid == os.getppid()
+    assert world.mesh.inbox.waiting("claude:B") != []
+    assert _outcomes(world, str(res.msg_id)) == ["pending"]
+
+
+def test_a_paused_session_leaves_when_archived_while_its_old_process_runs(world: World) -> None:
+    world.put("b", host_session="local_b")
+    _app_session("local_b", "worker-b")
+    _hook(world, "session-end", "b", reason="other")
+    # The old process (this test's pid) has not exited yet.
+    _app_session("local_b", "worker-b", archived=True)
+    assert "claude:B" not in {p.id for p in world.mesh.registry.live()}
