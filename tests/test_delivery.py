@@ -669,3 +669,51 @@ def test_a_resume_before_the_old_process_ends_takes_the_record(world: World) -> 
     )
     record = world.mesh.registry.get("claude:B")
     assert record is not None and record.status == "idle" and record.pid == os.getpid()
+
+
+def _end_or_resume(event: str, host_pid: int, reason: str, gate: Any) -> None:
+    """One hook of a separate process: the old process's end, or the new process's resume."""
+    mesh = Mesh(Registry(), Ledger(), {})
+    payload = {"session_id": "B", "cwd": os.getcwd(), "reason": reason, "source": "resume"}
+    gate.wait(timeout=30)
+    hooks.handle(mesh, event, "claude", payload, env={}, host_pid=host_pid)
+
+
+def test_concurrent_end_and_resume_leave_the_session_with_the_new_process(world: World) -> None:
+    # Two processes run at once: the SessionEnd of the process that the app ends (pid `old`),
+    # and the SessionStart of the process that runs the session again (pid `new`).
+    old, new = os.getppid(), os.getpid()
+    _app_session("local_b", "worker-b")
+    sessions = paths.claude_dir() / "sessions"
+    sessions.mkdir(parents=True)
+    (sessions / f"{new}.json").write_text(
+        json.dumps({"sessionId": "B", "messagingSocketPath": "/tmp/new.sock"})
+    )
+    ctx = multiprocessing.get_context("spawn")
+    for round_ in range(20):
+        world.put("b", host_session="local_b", status="idle", endpoint="/tmp/old.sock")
+        _owned_by_another_process(world, "claude:B")
+        [res] = world.mesh.send(world.peers["a"], "claude-b", f"Note {round_}.", kind="info")
+        gate = ctx.Barrier(2)
+        reason = "clear" if round_ % 2 else "other"
+        procs = [
+            ctx.Process(target=_end_or_resume, args=("session-end", old, reason, gate)),
+            ctx.Process(target=_end_or_resume, args=("session-start", new, reason, gate)),
+        ]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=60)
+            assert p.exitcode == 0
+        record = world.mesh.registry.get("claude:B")
+        assert record is not None, round_
+        assert (record.pid, record.endpoint, record.status) == (new, "/tmp/new.sock", "idle")
+        outcomes = _outcomes(world, str(res.msg_id))
+        if reason == "other":
+            # A pause keeps the messages in either order.
+            assert outcomes == ["pending"], round_
+        elif outcomes != ["pending"]:
+            # /clear ends the session id, so its messages end with it, but only when the end
+            # ran before the resume registered: never after.
+            [ended] = [e for e in world.mesh.ledger.entries() if e.get("id") == res.msg_id][1:]
+            assert ended["outcome"] == "undelivered" and ended["at"] <= record.last_seen, round_

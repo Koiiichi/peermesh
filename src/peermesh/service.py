@@ -504,18 +504,22 @@ class Mesh:
         for item in items:
             self._deliver_native(peer, Message.from_json(item.record), after_completion=True)
 
-    def expire_inbox(self, peer_id: str) -> None:
-        """Mark the waiting messages of an ended session as undelivered, and remove its inbox."""
-        with self.ledger.locked():
-            for item in self.inbox.remove(peer_id):
-                self.ledger.append(
-                    {
-                        "id": item.id,
-                        "outcome": "undelivered",
-                        "note": "The peer session ended before a hook injected the message.",
-                        "at": self.clock(),
-                    }
-                )
+    def expire_inbox(self, peer_id: str, *, locked: bool = False) -> None:
+        """Mark the waiting messages of an ended session as undelivered, and remove its inbox.
+        `locked` is True when the caller holds the ledger lock."""
+        if not locked:
+            with self.ledger.locked():
+                self.expire_inbox(peer_id, locked=True)
+            return
+        for item in self.inbox.remove(peer_id):
+            self.ledger.append(
+                {
+                    "id": item.id,
+                    "outcome": "undelivered",
+                    "note": "The peer session ended before a hook injected the message.",
+                    "at": self.clock(),
+                }
+            )
 
     def track(self, msg_id: str) -> dict[str, Any]:
         """The delivery history of one message and the replies to it."""
