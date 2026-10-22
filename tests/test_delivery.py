@@ -570,11 +570,12 @@ def test_an_unreadable_app_record_keeps_a_paused_session(world: World) -> None:
     _hook(world, "session-end", "b", reason="other")
     _process_ended(world, "claude:B")
     sessions = paths.claude_app_dir() / "claude-code-sessions"
-    sessions.chmod(0)
-    try:
-        assert "claude:B" in {p.id for p in world.mesh.registry.live()}
-    finally:
-        sessions.chmod(0o700)
+    for folder in (sessions, sessions / "account", sessions / "account" / "org"):
+        folder.chmod(0)
+        try:
+            assert "claude:B" in {p.id for p in world.mesh.registry.live()}, folder
+        finally:
+            folder.chmod(0o700)
     (sessions / "account" / "org" / "local_b.json").write_text("{not json")
     assert "claude:B" in {p.id for p in world.mesh.registry.live()}
 
