@@ -155,6 +155,14 @@ def _matches(pattern: re.Pattern[str], value: object) -> bool:
     return isinstance(value, str) and pattern.fullmatch(value) is not None
 
 
+def _encodes(value: object) -> bool:
+    """True for text that UTF-8 can hold. JSON can carry a lone surrogate, which it cannot."""
+    try:
+        return isinstance(value, str) and bool(value.encode())
+    except UnicodeEncodeError:
+        return False
+
+
 def _valid_message(record: object) -> bool:
     """True when each field that peermesh renders or stores outside the quoted body has the
     shape it has here. A name with a line break could otherwise forge a line of the frame."""
@@ -169,7 +177,7 @@ def _valid_message(record: object) -> bool:
         and (record.get("in_reply_to") is None or _matches(_MSG_ID, record["in_reply_to"]))
         and record.get("kind") in KINDS
         and record.get("urgency") in URGENCIES
-        and isinstance(record.get("body"), str)
+        and _encodes(record.get("body"))
         and type(record.get("hop")) is int
         and record["hop"] >= 0
         and type(record.get("broadcast")) is bool
