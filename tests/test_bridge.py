@@ -273,6 +273,30 @@ def test_a_resend_delivers_nothing_twice(mesh: Mesh, me: Peer) -> None:
     assert len(mesh.inbox.waiting(me.id)) == 1
 
 
+def test_a_resend_repairs_a_message_whose_inbox_write_failed(
+    mesh: Mesh, me: Peer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    put = mesh.inbox.put
+
+    def fails(peer_id: str, record: dict[str, Any]) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(mesh.inbox, "put", fails)
+    assert mesh.ingest(_sender(), _wire()).status == "refused"
+    monkeypatch.setattr(mesh.inbox, "put", put)
+    assert mesh.ingest(_sender(), _wire()).status == "pending"
+    [item] = mesh.inbox.waiting(me.id)
+    assert item.id == "m1" and item.message.body == "Build finished."
+
+
+def test_a_message_that_was_already_read_is_not_put_back(mesh: Mesh, me: Peer) -> None:
+    mesh.ingest(_sender(), _wire())
+    with mesh.ledger.locked():
+        mesh.record_injected(mesh.take_waiting(me), "prompt")
+    assert mesh.ingest(_sender(), _wire()).status == "injected"
+    assert mesh.inbox.waiting(me.id) == []
+
+
 def test_a_target_on_a_third_machine_is_refused_so_a_bridge_does_not_relay(
     mesh: Mesh, me: Peer
 ) -> None:
@@ -522,6 +546,26 @@ def test_the_connection_closes_after_silence_and_peers_go_offline(
     assert mesh.list_peers(me, "all")[0].status == "offline"
 
 
+def test_a_far_side_that_stops_reading_cannot_block_the_stop(mesh: Mesh, me: Peer) -> None:
+    side = FarSide(mesh)
+    for _ in range(4000):
+        side.hello()
+    side.stop.set()
+    side.thread.join(5)
+    assert not side.thread.is_alive()
+
+
+def test_a_far_side_that_stops_reading_ends_the_connection(
+    mesh: Mesh, me: Peer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bridge, "MAX_QUEUED", 8)
+    side = FarSide(mesh)
+    for _ in range(4000):
+        side.hello()
+    side.thread.join(5)
+    assert not side.thread.is_alive() and "stopped reading" in side.session.error
+
+
 def test_a_bye_forgets_the_peers(mesh: Mesh, far: FarSide) -> None:
     _show()
     far.hello()
@@ -612,6 +656,17 @@ def test_an_agent_session_does_not_change_the_bridge(name: str) -> None:
     with pytest.raises(bridge.PeerError, match="owner"):
         bridge.set_up(HOST, {name: "s1"}, {"target": "i-1"})
     assert not paths.bridge_dir(HOST).exists()
+
+
+def test_off_keeps_track_of_a_link_that_does_not_stop(
+    mesh: Mesh, me: Peer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _show()
+    monkeypatch.setattr(bridge, "_running", lambda host: 12345)
+    monkeypatch.setattr(bridge.os, "kill", lambda pid, sig: None)
+    monkeypatch.setattr(bridge, "STOP_WAIT_S", 0.01)
+    assert bridge.turn_off(mesh) == [f"The bridge to {HOST} did not stop: process 12345 runs."]
+    assert (paths.bridge_dir(HOST) / LINK_FILE).exists()
 
 
 def test_off_forgets_the_peers_and_ends_what_waits(mesh: Mesh, me: Peer) -> None:

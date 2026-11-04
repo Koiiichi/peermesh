@@ -13,6 +13,7 @@ the limits again. A message from the other machine reads as peer text, like any 
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import os
 import queue
@@ -64,6 +65,9 @@ PEERS_S = 5.0
 ACK_WAIT_S = 45.0
 BACKOFF_MAX_S = 60.0
 WORKERS = 4
+# Frames that can wait for the writer. More means that the other machine stopped reading.
+MAX_QUEUED = 1024
+STOP_WAIT_S = 10.0
 REMOTE_FILE = "remote.json"
 SESSION_DOCUMENT = "AWS-StartInteractiveCommand"
 REMOTE_PATH = "/usr/local/bin:/usr/bin:/bin"
@@ -198,8 +202,8 @@ class Session:
         self.connected = False
         self._reader = reader
         self._writer = writer
-        self._write_lock = threading.Lock()
         self._frames: queue.Queue[dict[str, Any] | None] = queue.Queue()
+        self._outgoing: queue.Queue[bytes | None] = queue.Queue(MAX_QUEUED)
         self._sent: dict[str, float] = {}
         self._taking: set[str] = set()
         self._open: dict[str, str] = {}
@@ -211,6 +215,8 @@ class Session:
 
     def run(self) -> None:
         threading.Thread(target=self._read, daemon=True).start()
+        writer = threading.Thread(target=self._write, daemon=True)
+        writer.start()
         try:
             if self.greets:
                 self._hello()
@@ -235,6 +241,9 @@ class Session:
             self.error = str(exc)
         finally:
             self._pool.shutdown(wait=False, cancel_futures=True)
+            with contextlib.suppress(queue.Full):
+                self._outgoing.put_nowait(None)
+            writer.join(1.0)  # a last frame gets a moment; a stuck peer does not hold this up
             if not self.superseded():
                 self._write_link(connected=False)
 
@@ -260,10 +269,22 @@ class Session:
         self._frames.put(None)
 
     def _send(self, frame: dict[str, Any]) -> None:
+        """Queue a frame. The writer thread does the write, so a far side that stops reading
+        cannot hold up the stop event or the silence limit."""
         data = MARK + base64.b64encode(json.dumps(frame).encode()) + b"\n"
-        with self._write_lock:
-            self._writer.write(data)
-            self._writer.flush()
+        try:
+            self._outgoing.put_nowait(data)
+        except queue.Full:
+            raise _Closed(f"{self.host} stopped reading") from None
+
+    def _write(self) -> None:
+        while (data := self._outgoing.get()) is not None:
+            try:
+                self._writer.write(data)
+                self._writer.flush()
+            except OSError:
+                self._frames.put(None)
+                return
 
     def _hello(self) -> None:
         self._send({"type": "hello", "protocol": PROTOCOL, "version": peermesh.__version__})
@@ -321,7 +342,7 @@ class Session:
             self._open[msg_id] = status
         try:
             self._answer(msg_id, status, note)
-        except OSError:
+        except _Closed:
             pass  # the sender resends on the next connection, and the ledger answers
         self._taking.discard(msg_id)
 
@@ -605,8 +626,10 @@ def _connect_once(mesh: Mesh, host: str, stop: threading.Event) -> tuple[bool, s
         )
     assert link.stdin is not None and link.stdout is not None
     session = Session(mesh, host, link.stdout, link.stdin, greets=False, stop=stop)
-    session.run()
-    _end_group(link)
+    try:
+        session.run()
+    finally:
+        _end_group(link)
     return session.connected, session.error if session.connected else _last_line(log)
 
 
@@ -701,9 +724,13 @@ def turn_off(mesh: Mesh) -> list[str]:
         pid = _running(host)
         if pid is not None:
             os.kill(pid, signal.SIGTERM)
-            deadline = time.monotonic() + 10.0
+            deadline = time.monotonic() + STOP_WAIT_S
             while _running(host) is not None and time.monotonic() < deadline:
                 time.sleep(0.1)
+            if _running(host) is not None:
+                # The link file holds the only record of this process, so it stays.
+                lines.append(f"The bridge to {host} did not stop: process {pid} runs.")
+                continue
         mesh.expire_outbox(host, every=True)
         folder = paths.bridge_dir(host)
         (folder / PEERS_FILE).unlink(missing_ok=True)

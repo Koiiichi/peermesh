@@ -622,9 +622,18 @@ class Mesh:
         answer delivers nothing twice. Only a local session can be the target: a bridge does not
         relay."""
         msg_id, to, kind = str(record["id"]), str(record["to"]), str(record["kind"])
-        known = self.ledger.find(msg_id)
-        if known is not None:
-            return SendResult(msg_id, to, str(known.get("outcome")), str(known.get("note", "")))
+        with self.ledger.locked():
+            known = self.ledger.find(msg_id)
+            if known is not None:
+                if known.get("outcome") == "pending":
+                    # The ledger is written first, so a failed or interrupted inbox write leaves
+                    # a pending record with no file. A hook marks the record when it takes a file.
+                    if msg_id not in {item.id for item in self.inbox.waiting(to)}:
+                        try:
+                            self.inbox.put(to, known)
+                        except OSError:
+                            return SendResult(msg_id, to, "refused", "The inbox cannot be written.")
+                return SendResult(msg_id, to, str(known.get("outcome")), str(known.get("note", "")))
         target = next((p for p in self.local_peers() if p.id == to), None)
         if target is None:
             return self._refused(sender, to, to, kind, self._unknown(to, None))
