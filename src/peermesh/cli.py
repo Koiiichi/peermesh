@@ -258,6 +258,11 @@ def main(argv: list[str] | None = None) -> int:
                         "Run it from the shell of an agent session, or use --scope all."
                     ) from None
                 me = None
+            except PeerError:
+                # Every session is the answer to --scope all, whichever session this is.
+                if args.scope != "all":
+                    raise
+                me = None
             peers = (
                 mesh.list_peers(me, args.scope or "repo")
                 if me

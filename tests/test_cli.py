@@ -8,6 +8,7 @@ from collections.abc import Callable
 import pytest
 
 from peermesh import cli
+from peermesh.errors import PeerError
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry
 from peermesh.service import Mesh
@@ -173,3 +174,35 @@ def test_log_line_never_wraps_in_a_narrow_terminal(monkeypatch: pytest.MonkeyPat
     }
     line = cli._log_line(entry)
     assert len(line) == 40 and line.endswith("…")
+
+
+def test_list_with_scope_all_needs_no_identity(
+    setup: tuple[Mesh, Fake],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    mesh, _ = setup
+
+    def refuse() -> Peer:
+        raise PeerError("The session x is not an ancestor of this process.")
+
+    monkeypatch.setattr(mesh, "whoami", refuse)
+    assert cli.main(["--json", "list", "--scope", "all"]) == 0
+    assert json.loads(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("args", [[], ["--scope", "repo"]])
+def test_list_with_a_scope_that_needs_identity_reports_the_failure(
+    setup: tuple[Mesh, Fake],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    args: list[str],
+) -> None:
+    mesh, _ = setup
+
+    def refuse() -> Peer:
+        raise PeerError("The session x is not an ancestor of this process.")
+
+    monkeypatch.setattr(mesh, "whoami", refuse)
+    assert cli.main(["list", *args]) == 2
+    assert "not an ancestor" in capsys.readouterr().err

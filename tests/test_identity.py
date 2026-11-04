@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -71,3 +72,43 @@ def test_codex_app_server_without_daemon_is_not_steerable(monkeypatch: pytest.Mo
     monkeypatch.setattr(identity, "command_of", lambda pid: "/x/codex app-server --flag")
     peer = identity.detect("codex", "T", os.getcwd(), {}, host_pid=os.getpid())
     assert peer.host == "app-server" and "urgent_interrupt" not in peer.capabilities
+
+
+def _status_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str) -> None:
+    status = tmp_path / "status"
+    status.write_text(text)
+    monkeypatch.setattr(identity, "PROC_STATUS", status)
+
+
+def test_visible_pid_is_the_number_that_proc_shows_in_a_pid_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _status_file(tmp_path, monkeypatch, "Name:\tpeers\nNSpid:\t4242\t3\nVmSize:\t1 kB\n")
+    assert identity.visible_pid() == 4242
+
+
+@pytest.mark.parametrize("text", ["Name:\tpeers\n", "NSpid:\n", "NSpid:\tnot-a-number\n"])
+def test_visible_pid_falls_back_to_getpid_without_a_clear_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    _status_file(tmp_path, monkeypatch, text)
+    assert identity.visible_pid() == os.getpid()
+
+
+def test_visible_pid_is_getpid_on_a_platform_without_proc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(identity, "PROC_STATUS", tmp_path / "absent")
+    assert identity.visible_pid() == os.getpid()
+
+
+def test_the_walk_finds_the_host_from_inside_a_pid_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The sandbox numbers this process 2, and /proc shows host numbers, where 2 is another
+    # process. Only the first NSpid value leads to the real parent chain.
+    real = os.getpid()
+    _status_file(tmp_path, monkeypatch, f"NSpid:\t{real}\t2\n")
+    monkeypatch.setattr(identity.os, "getpid", lambda: 2)
+    monkeypatch.setattr(identity, "_is_codex_command", lambda command: "python" in command)
+    assert identity.find_host("codex", "T1") == (real, 0)
