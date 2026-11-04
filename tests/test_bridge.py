@@ -623,6 +623,7 @@ def test_an_unexpected_delivery_failure_lets_a_resend_try_again(
         _until(lambda: len(calls) == 2)
     finally:
         side.close()
+    assert "damaged record" in (paths.bridge_dir(HOST) / bridge.ERROR_LOG).read_text()
 
 
 def test_a_bye_forgets_the_peers(mesh: Mesh, far: FarSide) -> None:
