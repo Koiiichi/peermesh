@@ -33,6 +33,7 @@ from typing import IO, Any, cast
 
 import peermesh
 from peermesh import paths
+from peermesh.envelope import KINDS, URGENCIES
 from peermesh.errors import PeerError
 from peermesh.inbox import Waiting
 from peermesh.registry import (
@@ -157,8 +158,8 @@ def _valid_message(record: object) -> bool:
         and _matches(_PEER_ID, record.get("to"))
         and _matches(_MSG_ID, record.get("thread"))
         and (record.get("in_reply_to") is None or _matches(_MSG_ID, record["in_reply_to"]))
-        and isinstance(record.get("kind"), str)
-        and isinstance(record.get("urgency"), str)
+        and record.get("kind") in KINDS
+        and record.get("urgency") in URGENCIES
         and isinstance(record.get("body"), str)
         and type(record.get("hop")) is int
         and record["hop"] >= 0

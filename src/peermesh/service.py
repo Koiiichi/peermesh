@@ -631,14 +631,9 @@ class Mesh:
         in_reply_to = record.get("in_reply_to")
         parent = self.ledger.find(in_reply_to) if in_reply_to else None
         if in_reply_to and (
-            parent is None
-            or {parent.get("from"), parent.get("to")}
-            != {
-                sender.id,
-                target.id,
-            }
+            parent is None or (parent.get("from"), parent.get("to")) != (target.id, sender.id)
         ):
-            note = "This reply answers no message between these two peers."
+            note = "This reply answers no message from this session to the sender."
             return self._refused(sender, target.id, target.name, kind, note)
         parent = parent or self._causal_parent(sender, target)
         try:
