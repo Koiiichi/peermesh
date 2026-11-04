@@ -857,6 +857,13 @@ def sandboxed_home(
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PEERMESH_BRIDGE_CONNECT", str(stub))
     monkeypatch.setenv("PEERMESH_TMUX", str(shutil.which("tmux")))
+    # A server that exists before the bridge, with the home of its own start. A pane gets the
+    # environment of the server, not the environment of the client that asks for the pane.
+    subprocess.run(
+        ["tmux", "-S", str(short_dir / "t"), "new-session", "-d", "-s", "other", "sleep 600"],
+        env=os.environ | {"PEERMESH_HOME": str(short_dir / "not-this-home")},
+        check=True,
+    )
     yield home
     subprocess.run(
         ["tmux", "-S", str(short_dir / "t"), "kill-server"], capture_output=True, check=False
@@ -886,7 +893,8 @@ def test_a_message_crosses_to_a_serve_that_runs_inside_the_tmux_server(
     try:
         peer = _until(lambda: mesh.registry.resolve(OTHER_NAME))
         assert peer.remote_host == HOST and peer.status == "busy"
-        assert _sessions(tmux) == [bridge.TMUX_SESSION]
+        assert sorted(_sessions(tmux)) == ["other", bridge.TMUX_SESSION]
+        assert not (short_dir / "not-this-home").exists()
 
         [res] = mesh.send(me, OTHER_NAME, "x" * MAX_BODY_BYTES, "request")
         _until(lambda: not mesh.outbox(HOST).waiting(OUTBOX))
