@@ -173,7 +173,7 @@ peers bridge status            # connected or offline, messages waiting, the las
 peers bridge off               # end the connection and forget the remote peers
 ```
 
-`workstation` is the label of the host in peer addresses, and `--as` sets the label of this machine over there. `--remote-home` is `PEERMESH_HOME` in the service, `--run-as` is the user of the sessions, and `--plugin-dir` names the folder of `session-manager-plugin` when it is not on your `PATH`. These values stay in `~/.peermesh/bridge/`. Only the owner changes the bridge: `setup` and `on` refuse to run in an agent session.
+`workstation` is the label of the host in peer addresses, and `--as` sets the label of this machine over there. `--remote-home` is `PEERMESH_HOME` in the service, `--run-as` is the user of the sessions, `--remote-peers` names the `peers` command there when it is not the one on the `PATH`, and `--plugin-dir` names the folder of `session-manager-plugin` when it is not on your `PATH`. These values stay in `~/.peermesh/bridge/`. Only the owner changes the bridge: `setup` and `on` refuse to run in an agent session.
 
 A remote peer has the address `worker-a@workstation`, and `peers_list` gives its host in `remote_host`. A message from it reads `request from worker-a@workstation (claude)` and carries the usual frame: it is peer text, not a user instruction.
 
