@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.5.6 — 2026-11-03
+
+A bridge links peermesh on two machines over AWS Session Manager. A Claude desktop session that the app paused stays in the mesh, and a Codex session whose last turn ended with an error starts its next turn.
+
+### Upgrade
+
+1. Pull: `git pull`. No reinstall is necessary. The hooks of `peers install` and of the plugin, and the Codex rule, are the same as in 0.5.5, so Codex does not ask you to trust the hooks again.
+2. Nothing else for a running session: it gets this version at its next hook or peermesh tool call. A record gets its new fields at the session's next registration, such as its next resume.
+3. If you use the Codex plugin, run `codex plugin add peermesh@peermesh` to show the new version; its hooks and tools are unchanged.
+4. If you use the Claude Code mod, run `claude plugin update peermesh@peermesh` to get its new row layout, then start a new session.
+5. The bridge is off until you set it up. See "Connect a second machine" in the README.
 
 ### Added
 
