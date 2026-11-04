@@ -252,7 +252,7 @@ class Mesh:
             if existing.pid not in identity.ancestors(identity.visible_pid()):
                 raise PeerError(
                     f"The session {existing.name} is not an ancestor of this process. "
-                    "Run peers from the shell of your own agent session."
+                    "Run peers from the shell of your own agent session. " + text.RUN_ALONE
                 )
             return existing
         if unregistered is not None:

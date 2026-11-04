@@ -51,3 +51,7 @@ def test_blocks_limit_who_receives_updates() -> None:
     for block in (text.CLAUDE_BLOCK, text.CODEX_BLOCK, text.TOOL_SEND):
         assert rule in block
     assert "Do not send one message to every peer" in text.CODEX_BLOCK
+
+
+def test_codex_block_tells_the_agent_to_run_peers_alone() -> None:
+    assert "Run each `peers` command alone" in text.CODEX_BLOCK

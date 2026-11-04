@@ -51,6 +51,26 @@ class Ledger:
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
+    @contextmanager
+    def read_locked(self) -> Iterator[None]:
+        """Keep a rotation out with no write access: a sandbox can show this home as read-only.
+
+        Without the lock file no writer has run, so there is nothing to rotate.
+        """
+        try:
+            fd = os.open(self._lock, os.O_RDONLY)
+        except FileNotFoundError:
+            fd = None
+        if fd is None:
+            yield
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
     def entries(self) -> list[dict[str, Any]]:
         try:
             text = self.path.read_text()
@@ -91,7 +111,7 @@ class Ledger:
         The lock keeps a rotation from moving entries between the two reads, which would
         hide them from both. The caller must not hold `locked()`: the lock is not reentrant.
         """
-        with self.locked():
+        with self.read_locked():
             return [*self._archived(), *self.entries()]
 
     def thread(self, thread_id: str) -> list[dict[str, Any]]:

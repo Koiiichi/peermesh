@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Upgrade
+
+1. Run `peers install` to put the new line in the block of `~/.codex/AGENTS.md`. The hooks and the Codex rule are the same as in 0.5.6.
+
+### Fixed
+
+- `peers track` with a short message id works inside the Codex sandbox, where the peermesh home is read-only. The read of the ledger opened its lock file for writing, so it failed with a traceback. It now opens the file to read.
+- A `peers` command that cannot write the peermesh home gives the next step in place of a traceback. The Codex rule lets `peers` run outside the sandbox only when the command runs alone, so a `peers reply` in a script with other commands cannot write the ledger. The AGENTS.md block now says this, and so does the "is not an ancestor of this process" error, which such a script can also cause.
+
 ## 0.5.6 — 2026-11-03
 
 A bridge links peermesh on two machines over AWS Session Manager. A Claude desktop session that the app paused stays in the mesh, and a Codex session whose last turn ended with an error starts its next turn.
