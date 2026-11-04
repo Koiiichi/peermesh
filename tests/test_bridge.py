@@ -290,10 +290,51 @@ def test_the_rate_limit_applies_to_a_sender_on_the_other_machine(mesh: Mesh, me:
     assert results[-1].status == "refused" and "rate limit" in results[-1].note
 
 
+def test_made_up_thread_ids_do_not_escape_the_rate_limit(mesh: Mesh, me: Peer) -> None:
+    results = [
+        mesh.ingest(_sender(), _wire(id=f"m{n}", thread=f"made-up-{n}"))
+        for n in range(service.RATE_LIMIT + 1)
+    ]
+    assert results[-1].status == "refused" and "rate limit" in results[-1].note
+
+
+def test_a_low_hop_from_the_far_side_does_not_reset_the_loop_count(mesh: Mesh, me: Peer) -> None:
+    _show()
+    mesh.ingest(_sender(), _wire(id="m0", thread="m0", kind="request"))
+    answer = mesh.reply(me, "m0", "An answer.")
+    mesh.ingest(
+        _sender(), _wire(id="m1", kind="reply", in_reply_to=answer.msg_id, thread="x", hop=0)
+    )
+    record = mesh.ledger.find("m1")
+    assert record is not None and record["hop"] == 2 and record["thread"] == "m0"
+
+
+def test_a_reply_to_a_message_of_other_peers_is_refused(
+    mesh: Mesh, me: Peer, make_peer: Callable[..., Peer]
+) -> None:
+    local = make_peer(id="claude:b", name="local-b", capabilities=["inbox"], status="busy")
+    mesh.registry.put(local)
+    [private] = mesh.send(me, "local-b", "Local note.", "request")
+    result = mesh.ingest(_sender(), _wire(kind="reply", in_reply_to=private.msg_id))
+    assert result.status == "refused" and "reply" in result.note
+    assert [w.id for w in mesh.inbox.waiting(me.id)] == []
+
+
+def test_a_reply_to_an_unknown_message_is_refused(mesh: Mesh, me: Peer) -> None:
+    result = mesh.ingest(_sender(), _wire(kind="reply", in_reply_to="nothing"))
+    assert result.status == "refused" and "reply" in result.note
+
+
+def test_a_thread_id_from_the_far_side_is_not_stored(mesh: Mesh, me: Peer) -> None:
+    mesh.ingest(_sender(), _wire(id="m1", thread="m1", kind="request"))
+    mesh.ingest(_sender(), _wire(id="m2", thread="forged", kind="request"))
+    record = mesh.ledger.find("m2")
+    assert record is not None and record["thread"] != "forged"
+
+
 @pytest.mark.parametrize(
     "change",
     [
-        {"hop": 8},
         {"kind": "order"},
         {"urgency": "now"},
         {"body": " "},

@@ -616,9 +616,11 @@ class Mesh:
 
     def ingest(self, sender: Peer, record: Mapping[str, Any]) -> SendResult:
         """Deliver a message that arrived over a bridge to a session of this machine. The record
-        passes the same checks as a local send. A message that this machine has already taken
-        gives its recorded outcome, so a resend after a lost answer delivers nothing twice. Only
-        a local session can be the target: a bridge does not relay."""
+        passes the same checks as a local send, and its thread and hop come from this ledger:
+        the limits rest on them, so the other machine does not get to name them. A message that
+        this machine has already taken gives its recorded outcome, so a resend after a lost
+        answer delivers nothing twice. Only a local session can be the target: a bridge does not
+        relay."""
         msg_id, to, kind = str(record["id"]), str(record["to"]), str(record["kind"])
         known = self.ledger.find(msg_id)
         if known is not None:
@@ -626,6 +628,19 @@ class Mesh:
         target = next((p for p in self.local_peers() if p.id == to), None)
         if target is None:
             return self._refused(sender, to, to, kind, self._unknown(to, None))
+        in_reply_to = record.get("in_reply_to")
+        parent = self.ledger.find(in_reply_to) if in_reply_to else None
+        if in_reply_to and (
+            parent is None
+            or {parent.get("from"), parent.get("to")}
+            != {
+                sender.id,
+                target.id,
+            }
+        ):
+            note = "This reply answers no message between these two peers."
+            return self._refused(sender, target.id, target.name, kind, note)
+        parent = parent or self._causal_parent(sender, target)
         try:
             msg = new_message(
                 sender,
@@ -633,9 +648,9 @@ class Mesh:
                 record["body"],
                 kind,
                 record["urgency"],
-                in_reply_to=record.get("in_reply_to"),
-                thread=record.get("thread"),
-                hop=record["hop"],
+                in_reply_to=in_reply_to,
+                thread=str(parent.get("thread", parent["id"])) if parent else None,
+                hop=self._next_hop(parent) if parent else 0,
                 broadcast=record["broadcast"],
                 msg_id=msg_id,
                 done=record["done"],
