@@ -541,6 +541,7 @@ def test_a_peer_list_never_carries_a_path(mesh: Mesh, me: Peer, far: FarSide) ->
         {"hop": -1},
         {"thread": "a b"},
         {"body": 7},
+        {"body": "\ud800"},
         {"broadcast": "yes"},
         {"kind": "\x1b[2Jinfo"},
         {"urgency": "\x1b[2Jnow"},
