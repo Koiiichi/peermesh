@@ -394,6 +394,22 @@ def test_a_reported_outcome_does_not_reset_the_loop_count(
     assert second.status == "refused" and "loop limit" in second.note
 
 
+def test_a_reply_to_an_older_message_does_not_lower_the_loop_count(mesh: Mesh, me: Peer) -> None:
+    now = mesh.clock()
+    base = {
+        "from": me.id,
+        "to": OTHER_ID,
+        "thread": "t1",
+        "kind": "request",
+        "outcome": "delivered",
+    }
+    with mesh.ledger.locked():
+        mesh.ledger.append(base | {"id": "old", "hop": 1, "sent_at": now - 5})
+        mesh.ledger.append(base | {"id": "new", "hop": 7, "sent_at": now})
+    result = mesh.ingest(_sender(), _wire(id="a1", kind="reply", in_reply_to="old"))
+    assert result.status == "refused" and "loop limit" in result.note
+
+
 def test_a_thread_id_from_the_far_side_is_not_stored(mesh: Mesh, me: Peer) -> None:
     mesh.ingest(_sender(), _wire(id="m1", thread="m1", kind="request"))
     mesh.ingest(_sender(), _wire(id="m2", thread="forged", kind="request"))
