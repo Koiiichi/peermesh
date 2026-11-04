@@ -86,6 +86,9 @@ _REPO = re.compile(r"[0-9a-f]{16}")
 _STATUSES = ("busy", "idle", "paused")
 _ANSWERS = ("pending", "queued", "delivered", "refused", "sending", "injected", "undelivered")
 _OPEN = ("pending", "queued", "sending")
+# What can follow an answer. A refusal cannot: it would drop the message from the history that
+# the loop limit reads.
+_LATE = ("delivered", "injected", "undelivered")
 _AGENT_ENV = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID")
 
 
@@ -368,7 +371,7 @@ class Session:
         """Record what became of a message after its answer. Only a message that this machine
         sent to that host can change."""
         msg_id, outcome = frame.get("id"), frame.get("outcome")
-        if not _matches(_MSG_ID, msg_id) or outcome not in _ANSWERS:
+        if not _matches(_MSG_ID, msg_id) or outcome not in _LATE:
             return
         record = self.mesh.ledger.find(str(msg_id))
         if record is not None and str(record.get("to", "")).startswith(f"{self.host}/"):

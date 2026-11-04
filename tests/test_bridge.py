@@ -556,6 +556,22 @@ def test_an_answer_cannot_change_a_record_that_this_outbox_does_not_hold(
     assert record is not None and record["outcome"] == "pending"
 
 
+def test_a_late_outcome_cannot_mark_a_sent_message_refused(
+    mesh: Mesh, me: Peer, far: FarSide
+) -> None:
+    _show()
+    [res] = mesh.send(me, OTHER_NAME, "Tests pass.", "request")
+    far.hello()
+    far.next("msg")
+    far.send({"type": "ack", "id": res.msg_id, "outcome": "pending", "note": ""})
+    far.send({"type": "outcome", "id": res.msg_id, "outcome": "refused"})
+    far.send({"type": "outcome", "id": res.msg_id, "outcome": "injected"})
+    _until(lambda: mesh.ledger.find(str(res.msg_id))["outcome"] == "injected")
+    assert not any(
+        e.get("id") == res.msg_id and e.get("outcome") == "refused" for e in mesh.ledger.entries()
+    )
+
+
 def test_the_connection_closes_after_silence_and_peers_go_offline(
     mesh: Mesh, me: Peer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
