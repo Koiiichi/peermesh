@@ -241,7 +241,7 @@ def _parser() -> argparse.ArgumentParser:
     br_on = bridge.add_parser("on", help="connect to a host")
     br_on.add_argument("host")
     bridge.add_parser("off", help="end each connection and forget its peers")
-    bridge.add_parser("status")
+    bridge.add_parser("status", parents=[output])
     br_run = bridge.add_parser("run", help=argparse.SUPPRESS)
     br_run.add_argument("host")
     br_serve = bridge.add_parser("serve", help="take one connection on a private socket")
