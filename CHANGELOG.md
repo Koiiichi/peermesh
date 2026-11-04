@@ -1,10 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.5.7 — 2026-11-04
+
+`peers track` with a short message id works inside the Codex sandbox, a `peers` command that cannot write there gives the next step in place of a traceback, and `--json` also works after the subcommand.
 
 ### Upgrade
 
-1. Run `peers install` to put the new line in the block of `~/.codex/AGENTS.md`. The hooks and the Codex rule are the same as in 0.5.6.
+1. Pull: `git pull`. The hooks and the Codex rule are the same as in 0.5.6, so Codex does not ask you to trust the hooks again.
+2. If you set up Codex with `peers install`, run `peers install` again to put the new line in the block of `~/.codex/AGENTS.md`.
+3. If you use the Codex plugin, run `codex plugin add peermesh@peermesh` to show the new version. Do not run `peers install` for this release: the plugin has no `AGENTS.md` block, and its hooks and tools are unchanged.
+4. Nothing else for a running session: it gets this version at its next hook or peermesh tool call.
 
 ### Added
 
