@@ -183,34 +183,38 @@ def _bridge(args: argparse.Namespace, mesh: Mesh) -> int:
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="peers", description="Message other agent sessions.")
     p.add_argument("--json", action="store_true", help="print JSON")
+    # The Codex rule matches `peers <subcommand>`, so a command that runs outside the sandbox
+    # has --json after the subcommand. SUPPRESS keeps the value of the top-level flag.
+    output = argparse.ArgumentParser(add_help=False)
+    output.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="print JSON")
     sub = p.add_subparsers(dest="cmd", required=True)
-    ls = sub.add_parser("list")
+    ls = sub.add_parser("list", parents=[output])
     ls.add_argument(
         "--scope",
         choices=["repo", "worktree", "all"],
         help="default: repo; outside an agent session, all",
     )
-    snd = sub.add_parser("send")
+    snd = sub.add_parser("send", parents=[output])
     snd.add_argument("targets", nargs="+")
     snd.add_argument("--body", required=True, help="text, or - for stdin")
     snd.add_argument(
         "--kind", default="info", choices=["info", "request", "handoff", "review_request"]
     )
     snd.add_argument("--urgent", action="store_true")
-    rep = sub.add_parser("reply")
+    rep = sub.add_parser("reply", parents=[output])
     rep.add_argument("msg_id")
     rep.add_argument("--body", required=True, help="text, or - for stdin")
     rep.add_argument("--done", action="store_true", help="the requested work is complete")
-    st = sub.add_parser("status")
+    st = sub.add_parser("status", parents=[output])
     st.add_argument("target")
-    sub.add_parser("whoami")
-    tr = sub.add_parser("track")
+    sub.add_parser("whoami", parents=[output])
+    tr = sub.add_parser("track", parents=[output])
     tr.add_argument("msg_id")
-    lg = sub.add_parser("log")
+    lg = sub.add_parser("log", parents=[output])
     lg.add_argument("--limit", type=int, default=20)
-    th = sub.add_parser("thread", help="show one conversation in order")
+    th = sub.add_parser("thread", parents=[output], help="show one conversation in order")
     th.add_argument("msg_id", help="the id of any message in the thread")
-    wa = sub.add_parser("watch", help="live view of sessions and messages")
+    wa = sub.add_parser("watch", parents=[output], help="live view of sessions and messages")
     wa.add_argument("--interval", type=float, default=1.0, help="seconds between updates")
     wa.add_argument("--once", action="store_true", help="print the view one time")
     sub.add_parser("statusline", help="status line segment for Claude Code")

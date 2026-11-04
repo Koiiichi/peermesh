@@ -6,6 +6,10 @@
 
 1. Run `peers install` to put the new line in the block of `~/.codex/AGENTS.md`. The hooks and the Codex rule are the same as in 0.5.6.
 
+### Added
+
+- `--json` also works after the subcommand, as in `peers list --scope all --json`. The Codex rule matches `peers <subcommand>`, so `peers --json list` ran in the sandbox. `peers --json list` still works.
+
 ### Fixed
 
 - `peers track` with a short message id works inside the Codex sandbox, where the peermesh home is read-only. The read of the ledger opened its lock file for writing, so it failed with a traceback. It now opens the file to read.

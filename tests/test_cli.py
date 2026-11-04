@@ -264,3 +264,31 @@ def test_a_reply_in_a_home_that_cannot_be_written_gives_the_next_step(
     monkeypatch.setattr(mesh.ledger, "locked", read_only)
     assert cli.main(["reply", sent.msg_id[:8], "--body", "Rebased on it."]) == 2
     assert text.RUN_ALONE in capsys.readouterr().err
+
+
+def test_json_after_the_subcommand_prints_json(
+    setup: tuple[Mesh, Fake], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(["list", "--scope", "all", "--json"]) == 0
+    assert [r["name"] for r in json.loads(capsys.readouterr().out)] == ["claude-p"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["list"],
+        ["send", "claude-p", "--body", "x"],
+        ["reply", "abc", "--body", "x"],
+        ["status", "claude-p"],
+        ["whoami"],
+        ["track", "abc"],
+        ["log"],
+        ["thread", "abc"],
+        ["watch"],
+    ],
+)
+def test_json_is_accepted_on_each_side_of_the_subcommand(command: list[str]) -> None:
+    parser = cli._parser()
+    assert parser.parse_args([*command, "--json"]).json is True
+    assert parser.parse_args(["--json", *command]).json is True
+    assert parser.parse_args(command).json is False
