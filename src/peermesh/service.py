@@ -401,15 +401,20 @@ class Mesh:
             )
         return matches.pop() if matches else ref
 
-    def _causal_parent(self, me: Peer, target: Peer) -> dict[str, Any] | None:
-        """The newest message from target to me in CAUSAL_WINDOW_S, which a send answers."""
+    def _causal_parent(
+        self, me: Peer, target: Peer, *, any_outcome: bool = False
+    ) -> dict[str, Any] | None:
+        """The newest message from target to me in CAUSAL_WINDOW_S, which a send answers. With
+        `any_outcome`, a message counts whatever became of it: the sender of a remote message
+        reports the outcomes of messages sent to it, so it must not choose what counts."""
         now = self.clock()
         received = [
             e
             for e in self.ledger.latest()
             if e.get("from") == target.id
             and e.get("to") == me.id
-            and e.get("outcome") in SENT_OUTCOMES
+            and "hop" in e
+            and (any_outcome or e.get("outcome") in SENT_OUTCOMES)
             and now - float(e.get("sent_at", 0.0)) < CAUSAL_WINDOW_S
         ]
         return max(received, key=lambda e: float(e.get("sent_at", 0.0)), default=None)
@@ -647,7 +652,7 @@ class Mesh:
         ):
             note = "This reply answers no message from this session to the sender."
             return self._refused(sender, target.id, target.name, kind, note)
-        parent = parent or self._causal_parent(sender, target)
+        parent = parent or self._causal_parent(sender, target, any_outcome=True)
         try:
             msg = new_message(
                 sender,
