@@ -139,6 +139,43 @@ def _hook(args: argparse.Namespace) -> int:
     return 0
 
 
+def _bridge(args: argparse.Namespace, mesh: Mesh) -> int:
+    from peermesh import bridge
+
+    if args.action == "on":
+        print(bridge.turn_on(args.host, os.environ))
+    elif args.action == "setup":
+        options = {
+            "target": args.target,
+            "home": args.remote_home,
+            "tmux": args.tmux_socket,
+            "run_as": args.run_as,
+            "profile": args.profile,
+            "region": args.region,
+            "plugin_dir": args.plugin_dir,
+            "label": args.label,
+        }
+        print(bridge.set_up(args.host, os.environ, options))
+    elif args.action == "off":
+        print("\n".join(bridge.turn_off(mesh)))
+    elif args.action == "run":
+        bridge.run_link(mesh, bridge.check_label(args.host))
+    elif args.action == "serve":
+        print(bridge.serve_unix(mesh, args.peer_host), file=sys.stderr)
+    elif args.action == "dial":
+        bridge.dial(args.peer_host, args.tmux_socket, sys.stdin.buffer, sys.stdout.buffer)
+    else:
+        links = bridge.status(mesh)
+        lines = [
+            f"{link['host']:20} {'connected' if link['connected'] else 'offline':10} "
+            f"{'running' if link['running'] else 'stopped':8} waiting {link['waiting']}"
+            + (f"  {link['error']}" if link["error"] else "")
+            for link in links
+        ]
+        _print(args, links, lines or ["No bridge is on."])
+    return 0
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="peers", description="Message other agent sessions.")
     p.add_argument("--json", action="store_true", help="print JSON")
@@ -180,6 +217,29 @@ def _parser() -> argparse.ArgumentParser:
     hk.add_argument("--runtime", choices=["claude", "codex"], required=True)
     hk.add_argument("--inbox", action="store_true", help="the post-tool hook is installed")
     hk.add_argument("--plugin", action="store_true", help="the hook runs from the Codex plugin")
+    br = sub.add_parser("bridge", help="link to peermesh on one other machine")
+    bridge = br.add_subparsers(dest="action", required=True)
+    br_set = bridge.add_parser("setup", help="store how to reach a host")
+    br_set.add_argument("host", help="the label of the host in peer addresses")
+    br_set.add_argument("--target", required=True, help="the instance id for Session Manager")
+    br_set.add_argument("--remote-home", required=True, help="PEERMESH_HOME on the host")
+    br_set.add_argument("--tmux-socket", required=True, help="the tmux server of its service")
+    br_set.add_argument("--run-as", help="the user of the sessions on the host")
+    br_set.add_argument("--profile", help="the AWS profile")
+    br_set.add_argument("--region", help="the AWS region")
+    br_set.add_argument("--plugin-dir", help="the folder of session-manager-plugin")
+    br_set.add_argument("--as", dest="label", help="the label of this machine on the host")
+    br_on = bridge.add_parser("on", help="connect to a host")
+    br_on.add_argument("host")
+    bridge.add_parser("off", help="end each connection and forget its peers")
+    bridge.add_parser("status")
+    br_run = bridge.add_parser("run", help=argparse.SUPPRESS)
+    br_run.add_argument("host")
+    br_serve = bridge.add_parser("serve", help="take one connection on a private socket")
+    br_serve.add_argument("--peer-host", required=True, help="the label of the connecting machine")
+    br_dial = bridge.add_parser("dial", help="start serve through tmux and pass the bytes on")
+    br_dial.add_argument("--peer-host", required=True, help="the label of the connecting machine")
+    br_dial.add_argument("--tmux-socket", required=True)
     sub.add_parser("doctor")
     ins = sub.add_parser("install")
     ins.add_argument("--dry-run", action="store_true")
@@ -201,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
         return install.run(args)
     mesh = _mesh()
     try:
+        if args.cmd == "bridge":
+            return _bridge(args, mesh)
         if args.cmd == "log":
             entries = mesh.ledger.latest()[-args.limit :]
             _print(args, entries, [_log_line(e) for e in entries])
@@ -274,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
                 [
                     f"{p.name:28} {p.runtime:6} "
                     f"{_style(f'{p.status:6}', 'yellow' if p.status == 'busy' else 'dim')} "
-                    f"{p.branch or '-':20} {p.worktree or p.cwd}"
+                    f"{p.branch or '-':20} {p.worktree or p.cwd or f'on {p.remote_host}'}"
                     for p in peers
                 ]
                 or ["No other live peer in this scope." if me else "No live session."],

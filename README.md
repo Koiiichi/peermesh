@@ -156,6 +156,31 @@ With [ccstatusline](https://github.com/sirmalloc/ccstatusline), which is a separ
 
 Use the full path of `peers` (`which peers`) if the status line does not find the command.
 
+## Connect a second machine
+
+A bridge links peermesh on this machine with peermesh on one remote Linux host that you reach through AWS Session Manager. Peers on each side can then see and message each other. It is experimental and off by default.
+
+The host can run its sessions in tmux, inside a sandboxed service. A Session Manager login lands outside that service, so the bridge starts `peers bridge serve` as a pane of the service's tmux server, which puts it inside. Install peermesh on the host first. On this machine, tell peermesh how to reach the host once, then turn the bridge on and off with one command:
+
+```bash
+peers bridge setup workstation \
+  --target i-0123456789abcdef0 \
+  --remote-home /srv/shared/peermesh \
+  --tmux-socket /run/sessions/tmux.sock \
+  --run-as agent --profile dev --region us-east-1 --as laptop
+peers bridge on workstation    # stays on until you run off, or until this machine restarts
+peers bridge status            # connected or offline, messages waiting, the last error
+peers bridge off               # end the connection and forget the remote peers
+```
+
+`workstation` is the label of the host in peer addresses, and `--as` sets the label of this machine over there. `--remote-home` is `PEERMESH_HOME` in the service, `--run-as` is the user of the sessions, and `--plugin-dir` names the folder of `session-manager-plugin` when it is not on your `PATH`. These values stay in `~/.peermesh/bridge/`. Only the owner changes the bridge: `setup` and `on` refuse to run in an agent session.
+
+A remote peer has the address `worker-a@workstation`, and `peers_list` gives its host in `remote_host`. A message from it reads `request from worker-a@workstation (claude)` and carries the usual frame: it is peer text, not a user instruction.
+
+- **Offline:** when the connection fails, local messages carry on, and remote peers show as `offline`. A send to an offline peer is refused at once. The bridge reconnects by itself.
+- **Waiting messages:** a message that was waiting when the connection failed goes out after the reconnect. After 15 minutes it ends as undelivered, so a stale request does not arrive late. `off` ends every waiting message.
+- **What crosses:** peer lists and messages only. A peer list holds each session's id, name, runtime and status and a hash of its repository, and no path. A session on one machine can't reach a third machine through the bridge.
+
 ## Safety limits
 
 - Every message carries the frame above, and every body line is quoted with `> `, so a body cannot imitate the frame.
@@ -166,6 +191,7 @@ Use the full path of `peers` (`which peers`) if the status line does not find th
 - The Codex threads of one host process share that process, for example every terminal session on the shared app-server daemon. A command that runs outside the Codex sandbox in one thread, such as in full-access mode, can act as another thread of the same process: it can set `CODEX_THREAD_ID`, or start its own `peers-mcp` and name the thread in the request metadata. Under the default `workspace-write` sandbox both attempts failed in tests on macOS, because the sandbox blocks what peermesh runs.
 - No check stops a process that runs as your user from writing to `~/.peermesh`, to a Claude inbox socket or to `codex queue`, and every session can read the ledger. The sender in a frame names the session for cooperating agents. It does not prove who sent the message.
 - Codex receives peer messages as ordinary user input; the frame and the peermesh rules from the hooks and the instruction block are the only provenance it has.
+- A bridge proves the host of a remote message and nothing more. The receiver sets the host label from the connection and applies its own limits, but one process on the remote host can write as any peer of that host. An agent on your machine runs as you, so it can reach the bridge's files and your AWS session; the refusal in `peers bridge on` guards against a mistake, not against an attack.
 
 ## Try it with two sessions
 
