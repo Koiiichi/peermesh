@@ -491,8 +491,19 @@ def _start_serve(host: str, tmux_socket: str) -> None:
     """Start `serve` as a pane of the tmux server. The server forks each pane, so the pane is
     inside its service with the environment of the service, wherever this client runs."""
     tmux = [os.environ.get("PEERMESH_TMUX") or "tmux", "-S", tmux_socket]
+    # A pane gets the environment of the server, so the home is named here.
     serve_command = shlex.join(
-        [sys.executable, "-m", "peermesh.cli", "bridge", "serve", "--peer-host", host]
+        [
+            "env",
+            f"PEERMESH_HOME={paths.home()}",
+            sys.executable,
+            "-m",
+            "peermesh.cli",
+            "bridge",
+            "serve",
+            "--peer-host",
+            host,
+        ]
     )
     # An earlier connection can leave its session behind, and the name is this bridge's own.
     target = f"={TMUX_SESSION}"
