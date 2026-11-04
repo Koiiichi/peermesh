@@ -226,6 +226,7 @@ def test_a_home_that_cannot_be_written_gives_the_next_step(
     err = capsys.readouterr().err
     assert "/somewhere/ledger.lock" in err
     assert text.RUN_ALONE in err
+    assert "check the permissions and the mount" in err
 
 
 @pytest.mark.parametrize(
@@ -246,7 +247,9 @@ def test_another_os_error_is_not_reported_as_a_sandbox(
 
 
 def test_a_reply_in_a_home_that_cannot_be_written_gives_the_next_step(
-    setup: tuple[Mesh, Fake], capsys: pytest.CaptureFixture[str]
+    setup: tuple[Mesh, Fake],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     mesh, _ = setup
     me = mesh.registry.get("codex:ME")
@@ -254,11 +257,10 @@ def test_a_reply_in_a_home_that_cannot_be_written_gives_the_next_step(
     assert me is not None and sender is not None
     [sent] = mesh.send(sender, me.name, "Decision: use SQLite.")
     assert sent.msg_id is not None
-    home = mesh.ledger.path.parent
-    (home / "ledger.lock").chmod(0o400)
-    home.chmod(0o500)
-    try:
-        assert cli.main(["reply", sent.msg_id[:8], "--body", "Rebased on it."]) == 2
-    finally:
-        home.chmod(0o700)
+
+    def read_only() -> None:
+        raise OSError(errno.EROFS, "Read-only file system", str(mesh.ledger.path))
+
+    monkeypatch.setattr(mesh.ledger, "locked", read_only)
+    assert cli.main(["reply", sent.msg_id[:8], "--body", "Rebased on it."]) == 2
     assert text.RUN_ALONE in capsys.readouterr().err

@@ -111,7 +111,10 @@ RUN_ALONE = (
     "In Codex, run each peers command alone, with no other command in the same script, "
     "and write the body as one quoted string with no escaped quote."
 )
-CANNOT_WRITE = "peers cannot use {path}: {reason}. A sandbox can cause this error. " + RUN_ALONE
+CANNOT_WRITE = (
+    "peers cannot use {path}: {reason}. A sandbox can cause this error. " + RUN_ALONE + " "
+    "If the error continues, check the permissions and the mount of that path."
+)
 
 CODEX_BLOCK = (
     "## Peer coordination (peermesh)\n\n"
