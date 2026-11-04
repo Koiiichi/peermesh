@@ -339,15 +339,15 @@ class Session:
         try:
             result = self.mesh.ingest(sender, record)
             status, note = result.status, result.note
-        except (PeerError, OSError) as exc:
-            status, note = "refused", _printable(exc)
-        if status in _OPEN:
-            self._open[msg_id] = status
-        try:
+            if status in _OPEN:
+                self._open[msg_id] = status
             self._answer(msg_id, status, note)
+        except (PeerError, OSError) as exc:
+            self._answer(msg_id, "refused", _printable(exc))
         except _Closed:
             pass  # the sender resends on the next connection, and the ledger answers
-        self._taking.discard(msg_id)
+        finally:
+            self._taking.discard(msg_id)
 
     def _answer(self, msg_id: str, outcome: str, note: str) -> None:
         self._send({"type": "ack", "id": msg_id, "outcome": outcome, "note": note})
@@ -630,14 +630,17 @@ def _connect_once(mesh: Mesh, host: str, stop: threading.Event) -> tuple[bool, s
     with log.open("w") as errors:
         # Its own session gives it no terminal, so the plugin cannot change the user's terminal,
         # and a signal to its process group also reaches the plugin that `aws` starts.
-        link = subprocess.Popen(
-            _connect_command(host),
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=errors,
-            env=env,
-            start_new_session=True,
-        )
+        try:
+            link = subprocess.Popen(
+                _connect_command(host),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                env=env,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            return False, _printable(f"The connection did not start: {exc}")
     assert link.stdin is not None and link.stdout is not None
     session = Session(mesh, host, link.stdout, link.stdin, greets=False, stop=stop)
     try:
