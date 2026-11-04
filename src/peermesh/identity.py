@@ -12,6 +12,21 @@ from peermesh.errors import NoInboxError, NoSessionError, PeerError
 from peermesh.registry import Peer, Runtime, claude_session, proc_start, repo_info
 from peermesh.transports.codex import daemon_socket
 
+PROC_STATUS = Path("/proc/self/status")
+
+
+def visible_pid() -> int:
+    """This process under the number that `ps` knows it by. A sandbox can give a process a PID
+    namespace and keep the host's /proc: `os.getpid` then gives an inner number, which names an
+    unrelated process in `ps`. NSpid lists the number in the namespace of /proc first."""
+    try:
+        for line in PROC_STATUS.read_text().splitlines():
+            if line.startswith("NSpid:"):
+                return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass  # no /proc, as on macOS, or no clear answer
+    return os.getpid()
+
 
 def _ps(field: str, pid: int) -> str:
     result = subprocess.run(
@@ -46,7 +61,7 @@ def find_host(
     runtime: Runtime, session_id: str, start: int | None = None
 ) -> tuple[int, int] | None:
     """Return (pid, depth) of the nearest ancestor that hosts the session."""
-    chain = ancestors(start or os.getpid())
+    chain = ancestors(start or visible_pid())
     if runtime == "claude":
         for depth, pid in enumerate(chain):
             data = claude_session(pid)
@@ -68,7 +83,7 @@ def current_claude_session(start: int | None = None) -> str | None:
     A long-lived child (an MCP server) keeps the id from its start in its environment; after
     /clear or /resume the host's session file has the current id.
     """
-    for pid in ancestors(start or os.getpid()):
+    for pid in ancestors(start or visible_pid()):
         data = claude_session(pid)
         if data is not None and isinstance(data.get("sessionId"), str):
             return str(data["sessionId"])

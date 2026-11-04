@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
-from peermesh import paths, service
+from peermesh import identity, paths, service
 from peermesh.envelope import Message
 from peermesh.errors import PeerError
 from peermesh.ledger import Ledger
@@ -555,3 +557,14 @@ def test_a_send_to_a_name_that_two_sessions_want_names_both(world: World) -> Non
     [res] = world.mesh.send(world.peers["xa"], "review", "who is review?")
     assert res.status == "refused"
     assert "More than one live session has the name 'review': claude-a, claude-b." in res.note
+
+
+def test_whoami_accepts_its_session_from_inside_a_pid_namespace(
+    world: World, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = os.getpid()
+    status = tmp_path / "status"
+    status.write_text(f"NSpid:\t{real}\t2\n")
+    monkeypatch.setattr(identity, "PROC_STATUS", status)
+    monkeypatch.setattr(identity.os, "getpid", lambda: 2)
+    assert world.mesh.whoami(env={"CODEX_THREAD_ID": "A"}).id == "codex:A"
