@@ -652,7 +652,8 @@ class Mesh:
         ):
             note = "This reply answers no message from this session to the sender."
             return self._refused(sender, target.id, target.name, kind, note)
-        parent = parent or self._causal_parent(sender, target, any_outcome=True)
+        latest = self._causal_parent(sender, target, any_outcome=True)
+        parent = parent or latest
         try:
             msg = new_message(
                 sender,
@@ -662,7 +663,7 @@ class Mesh:
                 record["urgency"],
                 in_reply_to=in_reply_to,
                 thread=str(parent.get("thread", parent["id"])) if parent else None,
-                hop=self._next_hop(parent) if parent else 0,
+                hop=max((self._next_hop(p) for p in (parent, latest) if p), default=0),
                 broadcast=record["broadcast"],
                 msg_id=msg_id,
                 done=record["done"],
