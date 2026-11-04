@@ -289,6 +289,28 @@ def test_a_resend_repairs_a_message_whose_inbox_write_failed(
     assert item.id == "m1" and item.message.body == "Build finished."
 
 
+def test_the_id_of_an_outgoing_message_cannot_be_reflected_into_a_local_inbox(
+    mesh: Mesh, me: Peer, make_peer: Callable[..., Peer]
+) -> None:
+    _show()
+    local = make_peer(id="claude:b", name="local-b", capabilities=["inbox"], status="busy")
+    mesh.registry.put(local)
+    [sent] = mesh.send(me, OTHER_NAME, "Tests pass.", "request")
+    result = mesh.ingest(_sender(), _wire(id=sent.msg_id, thread=sent.msg_id, to="claude:b"))
+    assert result.status == "refused"
+    assert mesh.inbox.waiting("claude:b") == []
+    assert mesh.ledger.find(str(sent.msg_id))["to"] == OTHER_ID
+
+
+def test_a_resend_from_another_peer_of_the_host_is_refused(mesh: Mesh, me: Peer) -> None:
+    mesh.ingest(_sender(), _wire())
+    other = registry.remote_peer(
+        HOST, {"id": "claude:w2", "name": "worker-b", "runtime": "claude", "status": "idle"}
+    )
+    assert mesh.ingest(other, _wire(**{"from": "claude:w2"})).status == "refused"
+    assert len(mesh.inbox.waiting(me.id)) == 1
+
+
 def test_a_message_that_was_already_read_is_not_put_back(mesh: Mesh, me: Peer) -> None:
     mesh.ingest(_sender(), _wire())
     with mesh.ledger.locked():
