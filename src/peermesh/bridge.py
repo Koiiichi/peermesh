@@ -575,7 +575,7 @@ def _remote_command(host: str) -> str:
     the user nor the paths of the service, so the command names them."""
     remote = _remote(host)
     words = ["env", f"PATH={REMOTE_PATH}", f"PEERMESH_HOME={remote['home']}"]
-    words += ["peers", "bridge", "dial", "--peer-host", remote["label"]]
+    words += [remote.get("peers", "peers"), "bridge", "dial", "--peer-host", remote["label"]]
     words += ["--tmux-socket", remote["tmux"]]
     if remote.get("run_as"):
         words = ["sudo", "-n", "runuser", "-u", remote["run_as"], "--", *words]

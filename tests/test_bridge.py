@@ -676,6 +676,11 @@ def test_the_connection_runs_without_a_terminal_and_with_the_plugin_on_its_path(
     assert seen["env"]["PATH"].startswith("/opt/plugin:")
 
 
+def test_the_remote_command_can_name_another_copy_of_peers() -> None:
+    _set_up(peers="/opt/test/bin/peers")
+    assert " /opt/test/bin/peers bridge dial " in bridge._remote_command(HOST)
+
+
 def test_on_before_setup_says_what_to_run() -> None:
     with pytest.raises(bridge.PeerError, match="peers bridge setup"):
         bridge.turn_on(HOST, {})

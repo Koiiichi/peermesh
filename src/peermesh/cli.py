@@ -150,6 +150,7 @@ def _bridge(args: argparse.Namespace, mesh: Mesh) -> int:
             "home": args.remote_home,
             "tmux": args.tmux_socket,
             "run_as": args.run_as,
+            "peers": args.remote_peers,
             "profile": args.profile,
             "region": args.region,
             "plugin_dir": args.plugin_dir,
@@ -225,6 +226,7 @@ def _parser() -> argparse.ArgumentParser:
     br_set.add_argument("--remote-home", required=True, help="PEERMESH_HOME on the host")
     br_set.add_argument("--tmux-socket", required=True, help="the tmux server of its service")
     br_set.add_argument("--run-as", help="the user of the sessions on the host")
+    br_set.add_argument("--remote-peers", help="the peers command on the host, default: peers")
     br_set.add_argument("--profile", help="the AWS profile")
     br_set.add_argument("--region", help="the AWS region")
     br_set.add_argument("--plugin-dir", help="the folder of session-manager-plugin")
