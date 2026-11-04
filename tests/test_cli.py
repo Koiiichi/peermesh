@@ -285,6 +285,7 @@ def test_json_after_the_subcommand_prints_json(
         ["log"],
         ["thread", "abc"],
         ["watch"],
+        ["bridge", "status"],
     ],
 )
 def test_json_is_accepted_on_each_side_of_the_subcommand(command: list[str]) -> None:
