@@ -31,6 +31,12 @@ def state_file(peer_id: str, kind: str) -> Path:
     return home() / "state" / f"{safe}.{kind}"
 
 
+def bridge_dir(host: str | None = None) -> Path:
+    """The folder of all bridges, or of the bridge to `host`."""
+    root = home() / "bridge"
+    return root / host if host else root
+
+
 def ensure_private_dir(path: Path) -> Path:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     return path

@@ -60,6 +60,14 @@ NO_DETOUR = "Do not send the message through a different channel."
 # The kind of state file that a session writes when its peermesh resolves a short message id.
 SHORT_IDS = "short-ids"
 PENDING_NOTE = "The peer reads the message at its next tool call or prompt."
+BRIDGE_NOTE = "The bridge sends the message to the other machine."
+BRIDGE_DOWN = (
+    "The bridge to {host} is down. The message was not sent. Send it when {target} is not "
+    "offline, or tell the user."
+)
+OUTBOX = "outbox"
+# A message that the other machine did not take in this time goes stale: it is not sent later.
+OUTBOX_TTL_S = 900.0
 PAUSED_NOTE = (
     "The Claude app paused this idle session to free memory. The message waits, and the "
     "session reads it at its next prompt after the app runs it again. peermesh cannot run it; "
@@ -258,8 +266,9 @@ class Mesh:
 
     def _enrich(self, peer: Peer) -> Peer:
         """Use the runtime's own status unless a peermesh hook recorded a newer one."""
-        if peer.status == "paused":
-            # Its process ended, so its pid can belong to another session now.
+        if peer.status == "paused" or peer.remote_host:
+            # A paused process ended, so its pid can belong to another session now. A remote
+            # peer has no pid here: its status comes from the other machine.
             return peer
         if peer.runtime == "claude":
             native = claude_native_state(peer.pid)
@@ -269,12 +278,18 @@ class Mesh:
             peer.status = native[0]
         return peer
 
-    def all_peers(self) -> list[Peer]:
-        """Every live peer, with the status that Claude Code reports when it is newer."""
+    def local_peers(self) -> list[Peer]:
+        """Every live peer of this machine, with the status that Claude Code reports when it is
+        newer."""
         return [self._enrich(p) for p in self.registry.live()]
 
+    def all_peers(self) -> list[Peer]:
+        """Every live peer of this machine, and the peers that each bridge shows."""
+        return [*self.local_peers(), *self.registry.remote()]
+
     def list_peers(self, me: Peer, scope: Scope = "repo") -> list[Peer]:
-        return [self._enrich(p) for p in scoped(self.registry.live(), me, scope)]
+        peers = [*self.registry.live(), *self.registry.remote()]
+        return [self._enrich(p) for p in scoped(peers, me, scope)]
 
     def send(
         self,
@@ -354,11 +369,12 @@ class Mesh:
             "name": target.name,
             "runtime": target.runtime,
             "status": target.status,
-            "alive": True,
+            "alive": target.status != "offline",
             "seconds_since_seen": round(now - target.last_seen),
             "branch": target.branch,
             "worktree": target.worktree,
             "host": target.host,
+            "remote_host": target.remote_host,
             "queued_last_hour": queued,
             "pending_in_inbox": pending,
         }
@@ -443,7 +459,8 @@ class Mesh:
                 f"{', '.join(sorted(p.name for p in contested))}. "
                 "Send the message to one of these names."
             )
-        names = sorted(p.name for p in self.registry.live() if me is None or p.id != me.id)
+        peers = [*self.registry.live(), *self.registry.remote()]
+        names = sorted(p.name for p in peers if me is None or p.id != me.id)
         return (
             f"No live peer has the name or id {target_ref!r}. "
             f"Live peers: {', '.join(names) or 'none'}."
@@ -476,6 +493,9 @@ class Mesh:
                 "The target is this session. Send the message to a different peer.",
             )
         self._enrich(target)
+        if target.remote_host and target.status == "offline":
+            note = BRIDGE_DOWN.format(host=target.remote_host, target=target.name)
+            return self._refused(me, target.id, target.name, kind, note)
         if in_reply_to is None:
             parent = self._causal_parent(me, target)
             if parent is not None:
@@ -497,6 +517,12 @@ class Mesh:
             )
         except EnvelopeError as exc:
             return self._refused(me, target.id, target.name, kind, str(exc))
+        return self._admit(me, msg, target)
+
+    def _admit(self, me: Peer, msg: Message, target: Peer) -> SendResult:
+        """Apply the limits to msg, record it, and start its delivery. The sender can be on the
+        other side of a bridge, whose own limits this side does not trust."""
+        kind = msg.kind
         # The lock covers only the checks and the "sending" record. Delivery can take tens of
         # seconds and runs outside it. The record makes a retry of this id a duplicate even if
         # this process ends during delivery.
@@ -552,7 +578,7 @@ class Mesh:
                 fresh.name, fresh.auto_name = target.name, target.auto_name
                 target = fresh
             target = self._enrich(target)
-            to_inbox = _wants_inbox(target, msg)
+            to_inbox = bool(target.remote_host) or _wants_inbox(target, msg)
             try:
                 self.ledger.append(
                     msg.to_json()
@@ -562,7 +588,9 @@ class Mesh:
                         "note": _pending_note(target) if to_inbox else "",
                     }
                 )
-                if to_inbox:
+                if target.remote_host:
+                    self.outbox(target.remote_host).put(OUTBOX, msg.to_json() | {"queued_at": now})
+                elif to_inbox:
                     # A hook renders the waiting messages itself. peermesh 0.2.1 and older
                     # read `rendered`, so the record keeps it for a session whose hooks run
                     # an older version after a rollback.
@@ -581,6 +609,55 @@ class Mesh:
         if to_inbox:
             return SendResult(msg.id, target.name, "pending", _pending_note(target))
         return self._deliver_native(target, msg, after_completion=_can_reopen(target, msg))
+
+    def outbox(self, host: str) -> Inbox:
+        """The messages that wait for the bridge to `host`."""
+        return Inbox(paths.bridge_dir(host))
+
+    def ingest(self, sender: Peer, record: Mapping[str, Any]) -> SendResult:
+        """Deliver a message that arrived over a bridge to a session of this machine. The record
+        passes the same checks as a local send. A message that this machine has already taken
+        gives its recorded outcome, so a resend after a lost answer delivers nothing twice. Only
+        a local session can be the target: a bridge does not relay."""
+        msg_id, to, kind = str(record["id"]), str(record["to"]), str(record["kind"])
+        known = self.ledger.find(msg_id)
+        if known is not None:
+            return SendResult(msg_id, to, str(known.get("outcome")), str(known.get("note", "")))
+        target = next((p for p in self.local_peers() if p.id == to), None)
+        if target is None:
+            return self._refused(sender, to, to, kind, self._unknown(to, None))
+        try:
+            msg = new_message(
+                sender,
+                target,
+                record["body"],
+                kind,
+                record["urgency"],
+                in_reply_to=record.get("in_reply_to"),
+                thread=record.get("thread"),
+                hop=record["hop"],
+                broadcast=record["broadcast"],
+                msg_id=msg_id,
+                done=record["done"],
+            )
+        except EnvelopeError as exc:
+            return self._refused(sender, target.id, target.name, kind, str(exc))
+        return self._admit(sender, msg, target)
+
+    def settle(self, host: str, item: Waiting, outcome: str, note: str) -> None:
+        """Record what became of one message in the outbox of `host`, and remove it."""
+        with self.ledger.locked():
+            self.ledger.append(
+                {"id": item.id, "outcome": outcome, "note": note, "at": self.clock()}
+            )
+            self.outbox(host).done([item])
+
+    def expire_outbox(self, host: str, *, every: bool = False) -> None:
+        """End the outbox messages that went stale, or `every` message when the bridge stops."""
+        now = self.clock()
+        for item in self.outbox(host).waiting(OUTBOX):
+            if every or now - float(item.record.get("queued_at", 0.0)) >= OUTBOX_TTL_S:
+                self.settle(host, item, "undelivered", f"The bridge to {host} did not send it.")
 
     def _deliver_native(self, target: Peer, msg: Message, *, after_completion: bool) -> SendResult:
         rendered = render(
@@ -746,6 +823,8 @@ def _same(record: Peer, seen: Peer) -> bool:
 
 
 def _pending_note(target: Peer) -> str:
+    if target.remote_host:
+        return BRIDGE_NOTE
     return PAUSED_NOTE if target.status == "paused" else PENDING_NOTE
 
 

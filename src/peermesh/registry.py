@@ -12,7 +12,7 @@ import struct
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime
 from pathlib import Path
@@ -60,6 +60,9 @@ class Peer:
     # When the registration was stored, in time.time() seconds. A SessionEnd ends only a
     # registration stored before the end began: a later one is a new lifecycle of the session.
     registered: float | None = None
+    # The label of the other machine for a peer that a bridge shows, or None on this machine.
+    # `host` above tells how a session on this machine is reached, so it cannot hold this.
+    remote_host: str | None = None
 
     @property
     def has_tools(self) -> bool:
@@ -119,6 +122,7 @@ _SHAPES: dict[str, Callable[[object], bool]] = {
     "host_session": _is_text_or_none,
     "generation": _is_text_or_none,
     "registered": lambda value: value is None or _is_number(value),
+    "remote_host": _is_text_or_none,
 }
 
 
@@ -270,7 +274,16 @@ def _label(peer: Peer) -> str:
     return re.sub(r"[^a-z0-9]+", "-", base).strip("-") or "session"
 
 
+def repo_tag(repo_key: str) -> str:
+    """What a bridge shares of a repo key. A key can be a local path, and two machines with one
+    remote still get one tag."""
+    return hashlib.sha256(repo_key.encode()).hexdigest()[:16]
+
+
 def _same_repo(a: Peer, b: Peer) -> bool:
+    if a.remote_host or b.remote_host:
+        tags = [p.repo_key if p.remote_host else repo_tag(p.repo_key or "") for p in (a, b)]
+        return bool(a.repo_key and b.repo_key) and tags[0] == tags[1]
     if a.repo_key and b.repo_key:
         return a.repo_key == b.repo_key
     return a.cwd == b.cwd
@@ -420,6 +433,45 @@ def app_keeps(peer: Peer) -> bool:
     except (OSError, ValueError):
         return True
     return data is not None and data.get("isArchived") is not True
+
+
+PEERS_FILE = "peers.json"
+LINK_FILE = "link.json"
+# A link that gave no frame for this time is down, also when its process ended without a word.
+LINK_DEAD_S = 45.0
+
+
+def link_state(host: str) -> dict[str, Any]:
+    """The state that the bridge to `host` wrote, or {} when it wrote none."""
+    try:
+        state = json.loads((paths.bridge_dir(host) / LINK_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def link_up(state: Mapping[str, Any], now: float) -> bool:
+    return bool(state.get("connected")) and now - float(state.get("seen", 0.0)) < LINK_DEAD_S
+
+
+def remote_peer(host: str, item: Mapping[str, Any], up: bool = True) -> Peer:
+    """The peer in one entry of a peer list from `host`, under the address it has here."""
+    return Peer(
+        id=f"{host}/{item['id']}",
+        name=f"{item['name']}@{host}",
+        runtime=item["runtime"],
+        pid=0,
+        proc_start="",
+        cwd="",
+        git_root=None,
+        worktree=None,
+        branch=None,
+        repo_key=item.get("repo"),
+        status=item.get("status", "idle") if up else "offline",
+        last_seen=0.0,
+        endpoint="",
+        remote_host=host,
+    )
 
 
 def _typeable(name: object) -> str | None:
@@ -586,8 +638,22 @@ class Registry:
         found = [p for p in peers if claude_user_name(p.pid) == name]
         return found if len(found) > 1 else []
 
+    def remote(self) -> list[Peer]:
+        """The peers that each bridge shows. They are offline while their link is down. A folder
+        that cannot be read shows no peers: a bridge writes these files whole."""
+        root = paths.bridge_dir()
+        peers: list[Peer] = []
+        for folder in sorted(root.iterdir()) if root.is_dir() else []:
+            try:
+                items = json.loads((folder / PEERS_FILE).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            up = link_up(link_state(folder.name), time.time())
+            peers += [remote_peer(folder.name, item, up) for item in items]
+        return peers
+
     def resolve(self, target: str) -> Peer | None:
-        for peer in self.live():
+        for peer in [*self.live(), *self.remote()]:
             if target in (peer.id, peer.name, peer.auto_name):
                 return peer
         return None

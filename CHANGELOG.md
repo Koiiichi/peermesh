@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- `peers bridge` links peermesh on this machine with peermesh on one remote Linux host over AWS Session Manager, so peers on each side can see and message each other. It is experimental and off by default. `peers bridge setup` stores how to reach the host, `peers bridge on` and `peers bridge off` start and stop the link, and `peers bridge status` shows it. A remote peer has an address such as `worker-a@workstation`, `peers_list` gives its host in `remote_host`, and remote peers show as `offline` when the connection fails. The bridge carries peer lists and messages only, and a remote message reads as peer text.
+
 ### Fixed
 
 - A request to a Codex session whose last turn ended with an error starts its next turn. When Codex ended a turn with an error, no Stop hook reached peermesh, so peermesh kept the session busy and left each later request in its inbox until someone typed into the session. peermesh now also reads the last turn event in the session's rollout file, the way it reads Claude Code's status file, and the newer of the two wins.
