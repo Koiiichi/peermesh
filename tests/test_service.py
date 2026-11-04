@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from peermesh import identity, paths, service
+from peermesh import identity, paths, service, text
 from peermesh.envelope import Message
 from peermesh.errors import PeerError
 from peermesh.ledger import Ledger
@@ -400,8 +400,9 @@ def test_whoami_refuses_a_session_that_is_not_an_ancestor(world: World) -> None:
         record.pid = other.pid
         record.proc_start = proc_start(other.pid) or ""
         world.mesh.registry.put(record)
-        with pytest.raises(PeerError, match="not an ancestor"):
+        with pytest.raises(PeerError, match="not an ancestor") as refused:
             world.mesh.whoami(env={"CODEX_THREAD_ID": "A"})
+        assert text.RUN_ALONE in str(refused.value)
     finally:
         other.kill()
         other.wait()
@@ -568,3 +569,15 @@ def test_whoami_accepts_its_session_from_inside_a_pid_namespace(
     monkeypatch.setattr(identity, "PROC_STATUS", status)
     monkeypatch.setattr(identity.os, "getpid", lambda: 2)
     assert world.mesh.whoami(env={"CODEX_THREAD_ID": "A"}).id == "codex:A"
+
+
+def test_track_finds_a_short_id_in_a_home_that_cannot_be_written(world: World) -> None:
+    [res] = world.mesh.send(world.peers["ca"], "claude-b", "Decision: use SQLite.")
+    home = world.mesh.ledger.path.parent
+    (home / "ledger.lock").chmod(0o400)
+    home.chmod(0o500)
+    try:
+        assert res.msg_id is not None
+        assert world.mesh.track(res.msg_id[:8])["id"] == res.msg_id
+    finally:
+        home.chmod(0o700)

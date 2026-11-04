@@ -107,6 +107,12 @@ CLAUDE_BLOCK = (
     "communicate with them. " + ONE_CHANNEL + "\n\n" + WHEN + "\n\n" + RULES + "\n"
 )
 
+RUN_ALONE = (
+    "In Codex, run each peers command alone, with no other command in the same script, "
+    "and write the body as one quoted string with no escaped quote."
+)
+CANNOT_WRITE = "peers cannot use {path}: {reason}. A sandbox can cause this error. " + RUN_ALONE
+
 CODEX_BLOCK = (
     "## Peer coordination (peermesh)\n\n"
     "Other Claude Code and Codex sessions can work on this machine at the same time. "
@@ -122,11 +128,10 @@ CODEX_BLOCK = (
     '- `peers reply <msg> --body "<text>" --done` also reports that you completed the '
     "requested work.\n"
     "- `peers status <name>` shows the status of one peer.\n"
-    "- `peers track <msg>` shows the delivery state of a message that you sent.\n\n"
-    + WHEN
-    + "\n\n"
-    + RULES
-    + "\n"
+    "- `peers track <msg>` shows the delivery state of a message that you sent.\n"
+    "- Run each `peers` command alone, with no other command in the same script, and write the "
+    "body as one quoted string with no escaped quote. Another form runs in the sandbox, where "
+    "peermesh cannot write its data.\n\n" + WHEN + "\n\n" + RULES + "\n"
 )
 
 

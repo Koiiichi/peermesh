@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import io
 import json
 import time
@@ -7,7 +8,7 @@ from collections.abc import Callable
 
 import pytest
 
-from peermesh import cli
+from peermesh import cli, text
 from peermesh.errors import PeerError
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry
@@ -206,3 +207,58 @@ def test_list_with_a_scope_that_needs_identity_reports_the_failure(
     monkeypatch.setattr(mesh, "whoami", refuse)
     assert cli.main(["list", *args]) == 2
     assert "not an ancestor" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("code", [errno.EROFS, errno.EACCES, errno.EPERM])
+def test_a_home_that_cannot_be_written_gives_the_next_step(
+    setup: tuple[Mesh, Fake],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    code: int,
+) -> None:
+    mesh, _ = setup
+
+    def refuse() -> Peer:
+        raise OSError(code, "denied", "/somewhere/ledger.lock")
+
+    monkeypatch.setattr(mesh, "whoami", refuse)
+    assert cli.main(["whoami"]) == 2
+    err = capsys.readouterr().err
+    assert "/somewhere/ledger.lock" in err
+    assert text.RUN_ALONE in err
+
+
+@pytest.mark.parametrize(
+    "error",
+    [OSError(errno.ENOSPC, "full", "/somewhere/ledger.lock"), OSError(errno.EPERM, "no file")],
+)
+def test_another_os_error_is_not_reported_as_a_sandbox(
+    setup: tuple[Mesh, Fake], monkeypatch: pytest.MonkeyPatch, error: OSError
+) -> None:
+    mesh, _ = setup
+
+    def refuse() -> Peer:
+        raise error
+
+    monkeypatch.setattr(mesh, "whoami", refuse)
+    with pytest.raises(OSError, match=error.strerror):
+        cli.main(["whoami"])
+
+
+def test_a_reply_in_a_home_that_cannot_be_written_gives_the_next_step(
+    setup: tuple[Mesh, Fake], capsys: pytest.CaptureFixture[str]
+) -> None:
+    mesh, _ = setup
+    me = mesh.registry.get("codex:ME")
+    sender = mesh.registry.get("claude:P")
+    assert me is not None and sender is not None
+    [sent] = mesh.send(sender, me.name, "Decision: use SQLite.")
+    assert sent.msg_id is not None
+    home = mesh.ledger.path.parent
+    (home / "ledger.lock").chmod(0o400)
+    home.chmod(0o500)
+    try:
+        assert cli.main(["reply", sent.msg_id[:8], "--body", "Rebased on it."]) == 2
+    finally:
+        home.chmod(0o700)
+    assert text.RUN_ALONE in capsys.readouterr().err

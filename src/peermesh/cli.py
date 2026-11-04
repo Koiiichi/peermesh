@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import shutil
@@ -11,10 +12,12 @@ import time
 import traceback
 from typing import Any
 
-from peermesh import paths, views
+from peermesh import paths, text, views
 from peermesh.envelope import short_id
 from peermesh.errors import NoSessionError, PeerError
 from peermesh.service import Mesh, SendResult
+
+WRITE_DENIED = (errno.EROFS, errno.EACCES, errno.EPERM)
 
 
 def _mesh() -> Mesh:
@@ -355,6 +358,12 @@ def main(argv: list[str] | None = None) -> int:
             return _results(args, [mesh.reply(me, args.msg_id, _body(args.body), done=args.done)])
     except PeerError as exc:
         print(str(exc), file=sys.stderr)
+        return 2
+    except OSError as exc:
+        # EPERM is the macOS sandbox's answer. Without a path, the error is not about the home.
+        if exc.errno not in WRITE_DENIED or exc.filename is None:
+            raise
+        print(text.CANNOT_WRITE.format(path=exc.filename, reason=exc.strerror), file=sys.stderr)
         return 2
     return 2
 

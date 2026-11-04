@@ -5,6 +5,7 @@ import json
 import multiprocessing
 import os
 import stat
+import threading
 import time
 
 import pytest
@@ -164,3 +165,36 @@ def test_torn_lines_move_to_the_archive(monkeypatch: pytest.MonkeyPatch) -> None
     [archive] = led.archive_dir.glob("ledger-*.jsonl.gz")
     with gzip.open(archive, "rt") as fh:
         assert "{torn" in fh.read()
+
+
+def test_a_prefix_read_needs_no_write_access() -> None:
+    led = Ledger()
+    with led.locked():
+        led.append(_entry(1))
+    home = led.path.parent
+    (home / "ledger.lock").chmod(0o400)
+    home.chmod(0o500)
+    try:
+        assert [e["id"] for e in led.with_prefix("m1")] == ["m1"]
+    finally:
+        home.chmod(0o700)
+
+
+def test_a_prefix_read_of_a_new_home_creates_nothing() -> None:
+    led = Ledger()
+    assert led.with_prefix("m1") == []
+    assert not led.path.parent.exists()
+
+
+def test_a_prefix_read_waits_for_a_writer() -> None:
+    led = Ledger()
+    with led.locked():
+        led.append(_entry(1))
+    found: list[list[dict[str, object]]] = []
+    reader = threading.Thread(target=lambda: found.append(led.with_prefix("m1")))
+    with led.locked():
+        reader.start()
+        reader.join(0.2)
+        assert reader.is_alive()
+    reader.join(5)
+    assert [e["id"] for e in found[0]] == ["m1"]
