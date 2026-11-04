@@ -625,6 +625,9 @@ class Mesh:
         with self.ledger.locked():
             known = self.ledger.find(msg_id)
             if known is not None:
+                # The other machine knows the id of each message that this machine sent it.
+                if (known.get("from"), known.get("to")) != (sender.id, to):
+                    return SendResult(msg_id, to, "refused", "This message id is in use.")
                 if known.get("outcome") == "pending":
                     # The ledger is written first, so a failed or interrupted inbox write leaves
                     # a pending record with no file. A hook marks the record when it takes a file.
