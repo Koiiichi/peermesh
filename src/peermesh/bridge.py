@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import tty
 import uuid
 from collections.abc import Callable, Mapping
@@ -69,6 +70,7 @@ WORKERS = 4
 MAX_QUEUED = 1024
 STOP_WAIT_S = 10.0
 REMOTE_FILE = "remote.json"
+ERROR_LOG = "errors.log"
 SESSION_DOCUMENT = "AWS-StartInteractiveCommand"
 REMOTE_PATH = "/usr/local/bin:/usr/bin:/bin"
 SERVE_SOCKET = "serve.sock"
@@ -346,6 +348,11 @@ class Session:
             self._answer(msg_id, "refused", _printable(exc))
         except _Closed:
             pass  # the sender resends on the next connection, and the ledger answers
+        except Exception:
+            # This runs in a worker, where an error reaches no one, and `serve` runs in a pane.
+            # No answer goes back, so the sender resends until the message expires.
+            with (self.folder / ERROR_LOG).open("a") as log:
+                log.write(f"{time.ctime()} message {msg_id}\n{traceback.format_exc()}\n")
         finally:
             self._taking.discard(msg_id)
 
