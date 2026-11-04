@@ -225,7 +225,7 @@ def _parser() -> argparse.ArgumentParser:
     hk.add_argument("--runtime", choices=["claude", "codex"], required=True)
     hk.add_argument("--inbox", action="store_true", help="the post-tool hook is installed")
     hk.add_argument("--plugin", action="store_true", help="the hook runs from the Codex plugin")
-    br = sub.add_parser("bridge", help="link to peermesh on one other machine")
+    br = sub.add_parser("bridge", parents=[output], help="link to peermesh on one other machine")
     bridge = br.add_subparsers(dest="action", required=True)
     br_set = bridge.add_parser("setup", help="store how to reach a host")
     br_set.add_argument("host", help="the label of the host in peer addresses")

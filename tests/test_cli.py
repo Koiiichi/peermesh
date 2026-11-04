@@ -293,3 +293,7 @@ def test_json_is_accepted_on_each_side_of_the_subcommand(command: list[str]) -> 
     assert parser.parse_args([*command, "--json"]).json is True
     assert parser.parse_args(["--json", *command]).json is True
     assert parser.parse_args(command).json is False
+
+
+def test_json_between_the_words_of_bridge_status() -> None:
+    assert cli._parser().parse_args(["bridge", "--json", "status"]).json is True
