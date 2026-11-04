@@ -320,6 +320,13 @@ def test_a_reply_to_a_message_of_other_peers_is_refused(
     assert [w.id for w in mesh.inbox.waiting(me.id)] == []
 
 
+def test_a_sender_cannot_answer_its_own_message_to_escape_the_limits(mesh: Mesh, me: Peer) -> None:
+    mesh.ingest(_sender(), _wire(id="m1", thread="m1", kind="request"))
+    result = mesh.ingest(_sender(), _wire(id="m2", kind="request", in_reply_to="m1"))
+    assert result.status == "refused" and "reply" in result.note
+    assert [w.id for w in mesh.inbox.waiting(me.id)] == ["m1"]
+
+
 def test_a_reply_to_an_unknown_message_is_refused(mesh: Mesh, me: Peer) -> None:
     result = mesh.ingest(_sender(), _wire(kind="reply", in_reply_to="nothing"))
     assert result.status == "refused" and "reply" in result.note
@@ -335,7 +342,6 @@ def test_a_thread_id_from_the_far_side_is_not_stored(mesh: Mesh, me: Peer) -> No
 @pytest.mark.parametrize(
     "change",
     [
-        {"kind": "order"},
         {"urgency": "now"},
         {"body": " "},
         {"body": "x" * (MAX_BODY_BYTES + 1)},
@@ -458,6 +464,8 @@ def test_a_peer_list_never_carries_a_path(mesh: Mesh, me: Peer, far: FarSide) ->
         {"thread": "a b"},
         {"body": 7},
         {"broadcast": "yes"},
+        {"kind": "\x1b[2Jinfo"},
+        {"urgency": "\x1b[2Jnow"},
     ],
 )
 def test_a_field_with_a_wrong_shape_is_refused(
@@ -465,6 +473,7 @@ def test_a_field_with_a_wrong_shape_is_refused(
 ) -> None:
     assert _msg_answer(far, _wire(**bad))["outcome"] == "refused"
     assert mesh.inbox.waiting(me.id) == []
+    assert all("\x1b" not in str(entry.get("kind")) for entry in mesh.ledger.entries())
 
 
 def test_a_sender_cannot_claim_a_local_identity(mesh: Mesh, me: Peer, far: FarSide) -> None:
