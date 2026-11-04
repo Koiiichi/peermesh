@@ -604,6 +604,27 @@ def test_a_far_side_that_stops_reading_ends_the_connection(
     assert not side.thread.is_alive() and "stopped reading" in side.session.error
 
 
+def test_an_unexpected_delivery_failure_lets_a_resend_try_again(
+    mesh: Mesh, me: Peer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+
+    def fails(sender: Peer, record: dict[str, Any]) -> Any:
+        calls.append(record["id"])
+        raise KeyError("damaged record")
+
+    monkeypatch.setattr(mesh, "ingest", fails)
+    side = FarSide(mesh)
+    try:
+        side.hello()
+        side.send({"type": "msg", "message": _wire()})
+        _until(lambda: calls and not side.session._taking)
+        side.send({"type": "msg", "message": _wire()})
+        _until(lambda: len(calls) == 2)
+    finally:
+        side.close()
+
+
 def test_a_bye_forgets_the_peers(mesh: Mesh, far: FarSide) -> None:
     _show()
     far.hello()
@@ -670,8 +691,7 @@ def test_the_connection_runs_without_a_terminal_and_with_the_plugin_on_its_path(
         raise OSError("stop here")
 
     monkeypatch.setattr(bridge.subprocess, "Popen", refuse)
-    with pytest.raises(OSError, match="stop here"):
-        bridge._connect_once(mesh, HOST, threading.Event())
+    assert bridge._connect_once(mesh, HOST, threading.Event())[0] is False
     assert seen["start_new_session"] is True
     assert seen["env"]["PATH"].startswith("/opt/plugin:")
 
@@ -679,6 +699,15 @@ def test_the_connection_runs_without_a_terminal_and_with_the_plugin_on_its_path(
 def test_the_remote_command_can_name_another_copy_of_peers() -> None:
     _set_up(peers="/opt/test/bin/peers")
     assert " /opt/test/bin/peers bridge dial " in bridge._remote_command(HOST)
+
+
+def test_a_connection_that_cannot_start_reports_why_and_keeps_the_link(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_up()
+    monkeypatch.setenv("PEERMESH_BRIDGE_CONNECT", "/no/such/aws")
+    spoke, reason = bridge._connect_once(mesh, HOST, threading.Event())
+    assert spoke is False and "/no/such/aws" in reason
 
 
 def test_on_before_setup_says_what_to_run() -> None:
