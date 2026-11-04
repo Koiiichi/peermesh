@@ -378,6 +378,22 @@ def test_a_reply_to_an_unknown_message_is_refused(mesh: Mesh, me: Peer) -> None:
     assert result.status == "refused" and "reply" in result.note
 
 
+@pytest.mark.parametrize("claimed", ["undelivered", "refused"])
+def test_a_reported_outcome_does_not_reset_the_loop_count(
+    mesh: Mesh, me: Peer, claimed: str
+) -> None:
+    # This machine's message is at hop 7, so an answer to it reaches the loop limit.
+    sent = {"id": "m7", "from": me.id, "to": OTHER_ID, "thread": "t1", "hop": 7, "kind": "request"}
+    with mesh.ledger.locked():
+        mesh.ledger.append(sent | {"sent_at": mesh.clock(), "outcome": "delivered"})
+    first = mesh.ingest(_sender(), _wire(id="a1", kind="request"))
+    assert first.status == "refused" and "loop limit" in first.note
+    with mesh.ledger.locked():
+        mesh.ledger.append({"id": "m7", "outcome": claimed, "note": "", "at": mesh.clock()})
+    second = mesh.ingest(_sender(), _wire(id="a2", kind="request"))
+    assert second.status == "refused" and "loop limit" in second.note
+
+
 def test_a_thread_id_from_the_far_side_is_not_stored(mesh: Mesh, me: Peer) -> None:
     mesh.ingest(_sender(), _wire(id="m1", thread="m1", kind="request"))
     mesh.ingest(_sender(), _wire(id="m2", thread="forged", kind="request"))
