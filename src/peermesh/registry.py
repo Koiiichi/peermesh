@@ -456,9 +456,11 @@ def link_up(state: Mapping[str, Any], now: float) -> bool:
 
 def remote_peer(host: str, item: Mapping[str, Any], up: bool = True) -> Peer:
     """The peer in one entry of a peer list from `host`, under the address it has here."""
+    auto_name = item.get("auto_name")
     return Peer(
         id=f"{host}/{item['id']}",
         name=f"{item['name']}@{host}",
+        auto_name=f"{auto_name}@{host}" if auto_name else None,
         runtime=item["runtime"],
         pid=0,
         proc_start="",
@@ -468,7 +470,8 @@ def remote_peer(host: str, item: Mapping[str, Any], up: bool = True) -> Peer:
         branch=None,
         repo_key=item.get("repo"),
         status=item.get("status", "idle") if up else "offline",
-        last_seen=0.0,
+        last_seen=item.get("last_seen", 0.0),
+        capabilities=item.get("capabilities", []),
         endpoint="",
         remote_host=host,
     )
@@ -653,10 +656,24 @@ class Registry:
         return peers
 
     def resolve(self, target: str) -> Peer | None:
-        for peer in [*self.live(), *self.remote()]:
+        """The peer whose id, name or automatic name is `target`. A name without a host also
+        finds the one remote peer that has it, when no local session has or claims it."""
+        remote = self.remote()
+        for peer in [*self.live(), *remote]:
             if target in (peer.id, peer.name, peer.auto_name):
                 return peer
+        found = self.remote_named(target, remote)
+        if len(found) == 1 and not self.claimants(target):
+            return found[0]
         return None
+
+    def remote_named(self, name: str, peers: list[Peer] | None = None) -> list[Peer]:
+        """The remote peers whose name or automatic name is `name` with a host suffix."""
+        return [
+            p
+            for p in (self.remote() if peers is None else peers)
+            if f"{name}@{p.remote_host}" in (p.name, p.auto_name)
+        ]
 
     def unique_name(self, peer: Peer) -> str:
         # A renamed peer keeps its given name as an address, so that name stays taken.

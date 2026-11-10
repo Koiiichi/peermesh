@@ -60,11 +60,18 @@ def me(mesh: Mesh, make_peer: Callable[..., Peer]) -> Peer:
     return peer
 
 
-def _show(status: str = "idle", *, up: bool = True, repo: str | None = None) -> None:
-    """Write what a live link to HOST leaves on disk."""
-    folder = paths.ensure_private_dir(paths.bridge_dir(HOST))
+def _show(
+    status: str = "idle",
+    *,
+    up: bool = True,
+    repo: str | None = None,
+    host: str = HOST,
+    **fields: Any,
+) -> None:
+    """Write what a live link to `host` leaves on disk."""
+    folder = paths.ensure_private_dir(paths.bridge_dir(host))
     item = {"id": OTHER, "name": "worker-a", "runtime": "claude", "status": status, "repo": repo}
-    (folder / PEERS_FILE).write_text(json.dumps([item]))
+    (folder / PEERS_FILE).write_text(json.dumps([item | fields]))
     seen = time.time() if up else time.time() - 3600
     (folder / LINK_FILE).write_text(json.dumps({"connected": True, "seen": seen}))
 
@@ -199,6 +206,41 @@ def test_a_damaged_peer_file_shows_no_remote_peers_and_local_peers_stay(
 
 
 # Sending to a remote peer
+
+
+def test_a_bare_name_reaches_the_one_remote_peer_that_has_it(mesh: Mesh, me: Peer) -> None:
+    _show()
+    [res] = mesh.send(me, "worker-a", "Tests pass.", "request")
+    assert (res.status, res.to) == ("pending", OTHER_NAME)
+    [item] = mesh.outbox(HOST).waiting(OUTBOX)
+    assert item.record["to"] == OTHER_ID
+
+
+def test_a_local_peer_keeps_its_bare_name(
+    mesh: Mesh, me: Peer, make_peer: Callable[..., Peer]
+) -> None:
+    _show()
+    mesh.registry.put(make_peer(id="claude:b", name="worker-a", capabilities=["inbox"]))
+    [res] = mesh.send(me, "worker-a", "Local note.", "request")
+    assert res.to == "worker-a"
+    assert mesh.outbox(HOST).waiting(OUTBOX) == []
+
+
+def test_a_bare_name_on_two_hosts_is_refused_with_both_addresses(mesh: Mesh, me: Peer) -> None:
+    _show()
+    _show(host="laptop")
+    [res] = mesh.send(me, "worker-a", "Tests pass.", "request")
+    assert res.status == "refused"
+    assert res.note.startswith("More than one remote peer has the name 'worker-a'")
+    assert "worker-a@laptop" in res.note and OTHER_NAME in res.note
+    assert mesh.outbox(HOST).waiting(OUTBOX) == []
+
+
+def test_a_renamed_remote_peer_keeps_its_automatic_name_as_an_address(mesh: Mesh, me: Peer) -> None:
+    _show(name="lead", auto_name="claude-repo-e1")
+    for address in ("claude-repo-e1@workstation", "claude-repo-e1", "lead"):
+        [res] = mesh.send(me, address, "Tests pass.", "info")
+        assert (res.status, res.to) == ("pending", "lead@workstation")
 
 
 def test_a_send_to_a_remote_peer_waits_in_the_outbox(mesh: Mesh, me: Peer) -> None:
@@ -520,9 +562,12 @@ def test_a_peer_list_never_carries_a_path(mesh: Mesh, me: Peer, far: FarSide) ->
         {
             "id": me.id,
             "name": me.name,
+            "auto_name": None,
             "runtime": "claude",
             "status": "busy",
             "repo": repo_tag(me.repo_key or ""),
+            "capabilities": ["inbox"],
+            "last_seen": me.last_seen,
         }
     ]
     assert me.cwd not in json.dumps(frame) and (me.repo_key or "") not in json.dumps(frame)
@@ -572,6 +617,69 @@ def test_an_entry_with_a_bad_name_stays_out_of_the_peer_list(mesh: Mesh, far: Fa
     while not mesh.registry.remote() and time.monotonic() < deadline:
         time.sleep(0.02)
     assert [p.id for p in mesh.registry.remote()] == [OTHER_ID]
+
+
+def _remote_after(far: FarSide, entry: dict[str, Any]) -> Peer:
+    """The remote peer that this machine shows after the far side lists `entry`."""
+    far.hello()
+    far.send({"type": "peers", "peers": [entry]})
+    far.send({"type": "ping"})
+    deadline = time.monotonic() + 5
+    while not mesh_remote(far) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    [peer] = mesh_remote(far)
+    return peer
+
+
+def mesh_remote(far: FarSide) -> list[Peer]:
+    return far.session.mesh.registry.remote()
+
+
+GOOD = {"id": OTHER, "name": "worker-a", "runtime": "claude", "status": "idle", "repo": None}
+
+
+def test_a_remote_peer_shows_its_capabilities_and_when_it_was_seen(far: FarSide) -> None:
+    entry = GOOD | {"auto_name": "claude-x-e1", "capabilities": ["inbox"], "last_seen": 1700.5}
+    peer = _remote_after(far, entry)
+    assert peer.auto_name == "claude-x-e1@workstation"
+    assert (peer.capabilities, peer.last_seen) == (["inbox"], 1700.5)
+
+
+def test_a_peer_list_from_an_older_version_still_shows_its_peers(far: FarSide) -> None:
+    peer = _remote_after(far, GOOD)
+    assert (peer.name, peer.auto_name, peer.capabilities, peer.last_seen) == (
+        OTHER_NAME,
+        None,
+        [],
+        0.0,
+    )
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"auto_name": "x\ny"},
+        {"auto_name": 7},
+        {"capabilities": "inbox"},
+        {"capabilities": ["in\nbox"]},
+        {"capabilities": ["inbox"] * 20},
+        {"last_seen": True},
+        {"last_seen": "1700"},
+        {"last_seen": -1},
+        {"last_seen": float("inf")},
+    ],
+)
+def test_an_optional_field_with_a_wrong_shape_is_left_out(
+    far: FarSide, bad: dict[str, Any]
+) -> None:
+    peer = _remote_after(far, GOOD | bad)
+    assert peer.name == OTHER_NAME
+    assert (peer.auto_name, peer.capabilities, peer.last_seen) == (None, [], 0.0)
+
+
+def test_a_field_that_peermesh_does_not_know_is_not_stored(far: FarSide) -> None:
+    _remote_after(far, GOOD | {"cwd": "/home/a/secret"})
+    assert "secret" not in (paths.bridge_dir(HOST) / PEERS_FILE).read_text()
 
 
 def test_an_answer_cannot_change_a_record_that_this_outbox_does_not_hold(

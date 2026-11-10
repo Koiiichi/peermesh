@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- A send to a bare name, such as `worker-a`, reaches a remote peer when exactly one peer over all bridges has that name and no local session has it or claims it. When two machines have a peer of that name, the refusal lists both addresses. Before, a remote peer took only its full address, such as `worker-a@workstation`.
+- A bridge peer list carries each session's automatic name, capabilities and last-seen time, so `peers_list` shows them for a remote peer, and a renamed remote peer keeps its automatic name as an address. Each machine needs this version to send them; a peer list from an older version still works and shows the fields empty.
+
+### Fixed
+
+- The bridge stores only the fields of a peer list entry that peermesh knows. It stored each valid entry whole, with any other field that the other machine sent. An optional field with a wrong shape now drops only that field.
+
 ## 0.5.7 — 2026-11-04
 
 `peers track` with a short message id works inside the Codex sandbox, a `peers` command that cannot write there gives the next step in place of a traceback, and `--json` also works after the subcommand.
