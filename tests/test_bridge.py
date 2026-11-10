@@ -716,6 +716,21 @@ def test_a_full_peer_list_of_long_entries_fits_in_one_frame(
     assert all(_valid(entry) for entry in peers)
 
 
+def test_a_list_too_long_even_without_optional_fields_still_goes_in_one_frame(
+    mesh: Mesh, make_peer: Callable[..., Peer], far: FarSide
+) -> None:
+    # Ids and names of the longest shape that a peer list allows.
+    for n in range(bridge.MAX_PEERS):
+        mesh.registry.put(
+            make_peer(id=f"claude:{n:04d}" + "i" * 124, name=f"{n:04d}" + "n" * 60, status="idle")
+        )
+    far.hello()
+    peers = far.next("peers")["peers"]
+    assert len(json.dumps({"type": "peers", "peers": peers})) <= bridge.MAX_FRAME
+    assert 0 < len(peers) < bridge.MAX_PEERS and all(_valid(entry) for entry in peers)
+    assert far.session.error == ""
+
+
 def _valid(entry: dict[str, Any]) -> bool:
     return bridge._valid_peer(entry)
 
