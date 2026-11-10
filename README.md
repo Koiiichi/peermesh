@@ -175,11 +175,11 @@ peers bridge off               # end the connection and forget the remote peers
 
 `workstation` is the label of the host in peer addresses, and `--as` sets the label of this machine over there. `--remote-home` is `PEERMESH_HOME` in the service, `--run-as` is the user of the sessions, `--remote-peers` names the `peers` command there when it is not the one on the `PATH`, and `--plugin-dir` names the folder of `session-manager-plugin` when it is not on your `PATH`. These values stay in `~/.peermesh/bridge/`. Only the owner changes the bridge: `setup` and `on` refuse to run in an agent session.
 
-A remote peer has the address `worker-a@workstation`, and `peers_list` gives its host in `remote_host`. A message from it reads `request from worker-a@workstation (claude)` and carries the usual frame: it is peer text, not a user instruction.
+A remote peer has the address `worker-a@workstation`, and `peers_list` gives its host in `remote_host`. A send to `worker-a` also reaches it when no local session has that name and no other machine has a peer of that name. A renamed remote peer keeps its automatic name as a second address, as a local one does. A message from it reads `request from worker-a@workstation (claude)` and carries the usual frame: it is peer text, not a user instruction.
 
 - **Offline:** when the connection fails, local messages carry on, and remote peers show as `offline`. A send to an offline peer is refused at once. The bridge reconnects by itself.
 - **Waiting messages:** a message that was waiting when the connection failed goes out after the reconnect. After 15 minutes it ends as undelivered, so a stale request does not arrive late. `off` ends every waiting message.
-- **What crosses:** peer lists and messages only. A peer list holds each session's id, name, runtime and status and a hash of its repository, and no path. A session on one machine can't reach a third machine through the bridge.
+- **What crosses:** peer lists and messages only. A peer list holds each session's id, name, automatic name, runtime, status, capabilities and last-seen time and a hash of its repository, and no path or process id. A session on one machine can't reach a third machine through the bridge.
 
 ## Safety limits
 

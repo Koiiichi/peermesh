@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
+import math
 import os
 import queue
 import re
@@ -58,6 +59,7 @@ MAX_FRAME = 64 * 1024
 MARK = b"PM1 "
 MAX_LINE = len(MARK) + (MAX_FRAME * 4) // 3 + 8
 MAX_PEERS = 256
+MAX_CAPABILITIES = 8
 MAX_NOTE = 300
 TICK_S = 0.25
 PING_S = 15.0
@@ -85,6 +87,7 @@ _PEER_ID = re.compile(r"(claude|codex):[A-Za-z0-9_.-]{1,128}")
 _NAME = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 _MSG_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _REPO = re.compile(r"[0-9a-f]{16}")
+_CAPABILITY = re.compile(r"[a-z_]{1,32}")
 _STATUSES = ("busy", "idle", "paused")
 _ANSWERS = ("pending", "queued", "delivered", "refused", "sending", "injected", "undelivered")
 _OPEN = ("pending", "queued", "sending")
@@ -125,17 +128,41 @@ def _outbound_peer(peer: Any) -> dict[str, Any]:
     return {
         "id": peer.id,
         "name": peer.name,
+        "auto_name": peer.auto_name,
         "runtime": peer.runtime,
         "status": peer.status,
         "repo": repo_tag(peer.repo_key) if peer.repo_key else None,
+        "capabilities": peer.capabilities,
+        "last_seen": peer.last_seen,
     }
 
 
 def _inbound_peers(items: object) -> list[dict[str, Any]]:
-    """The valid entries of a peer list. A bad entry costs only that entry."""
+    """The valid entries of a peer list, with only the fields that peermesh knows. A bad entry
+    costs only that entry, and a bad optional field costs only that field."""
     if not isinstance(items, list):
         raise _Closed("a peer list is not a list")
-    return [item for item in items[:MAX_PEERS] if _valid_peer(item)]
+    return [_known_fields(item) for item in items[:MAX_PEERS] if _valid_peer(item)]
+
+
+def _known_fields(item: dict[str, Any]) -> dict[str, Any]:
+    # An older peermesh sends none of the optional fields.
+    entry = {key: item.get(key) for key in ("id", "name", "runtime", "status", "repo")}
+    if _matches(_NAME, item.get("auto_name")):
+        entry["auto_name"] = item["auto_name"]
+    capabilities = item.get("capabilities")
+    if (
+        isinstance(capabilities, list)
+        and len(capabilities) <= MAX_CAPABILITIES
+        and all(_matches(_CAPABILITY, c) for c in capabilities)
+    ):
+        entry["capabilities"] = capabilities
+    seen = item.get("last_seen")
+    # JSON true loads as True, which Python counts as an int.
+    if isinstance(seen, int | float) and not isinstance(seen, bool):
+        if math.isfinite(seen) and seen >= 0:
+            entry["last_seen"] = seen
+    return entry
 
 
 def _valid_peer(item: object) -> bool:

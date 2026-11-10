@@ -464,6 +464,13 @@ class Mesh:
                 f"{', '.join(sorted(p.name for p in contested))}. "
                 "Send the message to one of these names."
             )
+        remote = self.registry.remote_named(target_ref)
+        if len(remote) > 1:
+            return (
+                f"More than one remote peer has the name {target_ref!r}: "
+                f"{', '.join(sorted(p.name for p in remote))}. "
+                "Send the message to one of these addresses."
+            )
         peers = [*self.registry.live(), *self.registry.remote()]
         names = sorted(p.name for p in peers if me is None or p.id != me.id)
         return (
