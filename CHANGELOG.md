@@ -9,7 +9,7 @@ A session on the other side of a bridge answers to its bare name, and `peers_lis
 1. Pull: `git pull`. The hooks, the Codex rule and the `AGENTS.md` block are the same as in 0.5.7, so you don't need to run `peers install`, and Codex does not ask you to trust the hooks again.
 2. If you use the Codex plugin, run `codex plugin add peermesh@peermesh` to show the new version; its hooks and tools are unchanged.
 3. Nothing else for a running session: it gets this version at its next hook or peermesh tool call.
-4. If you use the bridge, update peermesh on both machines, then run `peers bridge off` and `peers bridge on <host>` from a terminal, so that both ends run the new version. Until the other machine runs it, its peers show the new fields empty.
+4. If you use the bridge, update peermesh on both machines, then run `peers bridge off` and `peers bridge on <host>` from a terminal, so that both ends run the new version. `off` marks each message that still waits for the other machine as undelivered, and it is not sent after the reconnect, so run it when `peers bridge status` shows 0 waiting. Until the other machine runs the new version, its peers show the new fields empty.
 
 ### Added
 
