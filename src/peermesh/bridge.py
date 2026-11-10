@@ -15,7 +15,6 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
-import math
 import os
 import queue
 import re
@@ -60,6 +59,9 @@ MARK = b"PM1 "
 MAX_LINE = len(MARK) + (MAX_FRAME * 4) // 3 + 8
 MAX_PEERS = 256
 MAX_CAPABILITIES = 8
+# Later than any clock this code runs under. A bound on an int needs no conversion to float, and
+# a large enough int cannot convert.
+MAX_SEEN = 10**11
 MAX_NOTE = 300
 TICK_S = 0.25
 PING_S = 15.0
@@ -88,6 +90,8 @@ _NAME = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 _MSG_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _REPO = re.compile(r"[0-9a-f]{16}")
 _CAPABILITY = re.compile(r"[a-z_]{1,32}")
+# The fields of a peer list entry that every version sends.
+_REQUIRED = ("id", "name", "runtime", "status", "repo")
 _STATUSES = ("busy", "idle", "paused")
 _ANSWERS = ("pending", "queued", "delivered", "refused", "sending", "injected", "undelivered")
 _OPEN = ("pending", "queued", "sending")
@@ -137,6 +141,14 @@ def _outbound_peer(peer: Any) -> dict[str, Any]:
     }
 
 
+def _fit(peers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The peer list in a size that one frame holds. A full list of long entries passes the frame
+    limit with the optional fields, and fits without them."""
+    if len(json.dumps({"type": "peers", "peers": peers}).encode()) <= MAX_FRAME:
+        return peers
+    return [{key: p[key] for key in _REQUIRED} for p in peers]
+
+
 def _inbound_peers(items: object) -> list[dict[str, Any]]:
     """The valid entries of a peer list, with only the fields that peermesh knows. A bad entry
     costs only that entry, and a bad optional field costs only that field."""
@@ -147,7 +159,7 @@ def _inbound_peers(items: object) -> list[dict[str, Any]]:
 
 def _known_fields(item: dict[str, Any]) -> dict[str, Any]:
     # An older peermesh sends none of the optional fields.
-    entry = {key: item.get(key) for key in ("id", "name", "runtime", "status", "repo")}
+    entry = {key: item.get(key) for key in _REQUIRED}
     if _matches(_NAME, item.get("auto_name")):
         entry["auto_name"] = item["auto_name"]
     capabilities = item.get("capabilities")
@@ -158,10 +170,9 @@ def _known_fields(item: dict[str, Any]) -> dict[str, Any]:
     ):
         entry["capabilities"] = capabilities
     seen = item.get("last_seen")
-    # JSON true loads as True, which Python counts as an int.
-    if isinstance(seen, int | float) and not isinstance(seen, bool):
-        if math.isfinite(seen) and seen >= 0:
-            entry["last_seen"] = seen
+    # JSON true loads as True, which Python counts as an int. NaN fails both comparisons.
+    if isinstance(seen, int | float) and not isinstance(seen, bool) and 0 <= seen <= MAX_SEEN:
+        entry["last_seen"] = float(seen)
     return entry
 
 
@@ -449,12 +460,13 @@ class Session:
 
     def _share_peers(self) -> None:
         try:
-            peers = [_outbound_peer(p) for p in self.mesh.local_peers()]
+            # The other machine keeps only the first MAX_PEERS entries.
+            peers = [_outbound_peer(p) for p in self.mesh.local_peers()][:MAX_PEERS]
         except PeerError:
             return  # ps gave no answer, so the last list stays
         if peers != self._peers:
             self._peers = peers
-            self._send({"type": "peers", "peers": peers})
+            self._send({"type": "peers", "peers": _fit(peers)})
 
     def _report_outcomes(self) -> None:
         for msg_id, reported in list(self._open.items()):
