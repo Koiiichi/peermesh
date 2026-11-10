@@ -638,7 +638,7 @@ class Registry:
     def claimants(self, name: str) -> list[Peer]:
         """The live peers whose user names are `name`, when more than one wants it."""
         peers = [p for p in self.live() if p.runtime == "claude" and p.name != name]
-        found = [p for p in peers if claude_user_name(p.pid) == name]
+        found = [p for p in peers if _user_name(p) == name]
         return found if len(found) > 1 else []
 
     def remote(self) -> list[Peer]:

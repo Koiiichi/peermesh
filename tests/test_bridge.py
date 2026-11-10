@@ -236,6 +236,22 @@ def test_a_bare_name_on_two_hosts_is_refused_with_both_addresses(mesh: Mesh, me:
     assert mesh.outbox(HOST).waiting(OUTBOX) == []
 
 
+def test_a_name_that_two_local_sessions_claim_does_not_go_to_a_remote_peer(
+    mesh: Mesh, me: Peer, make_peer: Callable[..., Peer], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The check must read user names where the list does: a paused session's name is its title
+    # in the Claude app, which the pid does not give.
+    _show()
+    for n in ("b", "c"):
+        mesh.registry.put(make_peer(id=f"claude:{n}", name=f"claude-a-{n}"))
+    monkeypatch.setattr(
+        registry, "_user_name", lambda p: "worker-a" if p.id in ("claude:b", "claude:c") else None
+    )
+    [res] = mesh.send(me, "worker-a", "Tests pass.", "request")
+    assert res.status == "refused" and "More than one live session" in res.note
+    assert mesh.outbox(HOST).waiting(OUTBOX) == []
+
+
 def test_a_renamed_remote_peer_keeps_its_automatic_name_as_an_address(mesh: Mesh, me: Peer) -> None:
     _show(name="lead", auto_name="claude-repo-e1")
     for address in ("claude-repo-e1@workstation", "claude-repo-e1", "lead"):
@@ -667,6 +683,7 @@ def test_a_peer_list_from_an_older_version_still_shows_its_peers(far: FarSide) -
         {"last_seen": "1700"},
         {"last_seen": -1},
         {"last_seen": float("inf")},
+        {"last_seen": 10**400},
     ],
 )
 def test_an_optional_field_with_a_wrong_shape_is_left_out(
@@ -675,6 +692,32 @@ def test_an_optional_field_with_a_wrong_shape_is_left_out(
     peer = _remote_after(far, GOOD | bad)
     assert peer.name == OTHER_NAME
     assert (peer.auto_name, peer.capabilities, peer.last_seen) == (None, [], 0.0)
+
+
+def test_a_full_peer_list_of_long_entries_fits_in_one_frame(
+    mesh: Mesh, make_peer: Callable[..., Peer], far: FarSide
+) -> None:
+    for n in range(bridge.MAX_PEERS + 4):
+        mesh.registry.put(
+            make_peer(
+                id=f"claude:{n:08d}-0000-4000-8000-000000000000",
+                name=f"claude-repository-{n:04d}-" + "y" * 40,
+                capabilities=["inbox", "urgent_interrupt", "mcp_tools"],
+                status="idle",
+                last_seen=1794276947.7830138,
+            )
+        )
+    full = [bridge._outbound_peer(p) for p in mesh.local_peers()][: bridge.MAX_PEERS]
+    assert len(json.dumps({"type": "peers", "peers": full})) > bridge.MAX_FRAME
+    far.hello()
+    peers = far.next("peers")["peers"]
+    assert len(peers) == bridge.MAX_PEERS
+    assert len(json.dumps({"type": "peers", "peers": peers})) <= bridge.MAX_FRAME
+    assert all(_valid(entry) for entry in peers)
+
+
+def _valid(entry: dict[str, Any]) -> bool:
+    return bridge._valid_peer(entry)
 
 
 def test_a_field_that_peermesh_does_not_know_is_not_stored(far: FarSide) -> None:
