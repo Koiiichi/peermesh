@@ -143,10 +143,19 @@ def _outbound_peer(peer: Any) -> dict[str, Any]:
 
 def _fit(peers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The peer list in a size that one frame holds. A full list of long entries passes the frame
-    limit with the optional fields, and fits without them."""
-    if len(json.dumps({"type": "peers", "peers": peers}).encode()) <= MAX_FRAME:
+    limit with the optional fields, and usually fits without them. Entries of the longest shape
+    can pass it even then, so the last entries stay out: a frame past the limit closes the link,
+    and the next connection sends the same list."""
+    if _frame_size(peers) <= MAX_FRAME:
         return peers
-    return [{key: p[key] for key in _REQUIRED} for p in peers]
+    basic = [{key: p[key] for key in _REQUIRED} for p in peers]
+    while basic and _frame_size(basic) > MAX_FRAME:
+        basic.pop()
+    return basic
+
+
+def _frame_size(peers: list[dict[str, Any]]) -> int:
+    return len(json.dumps({"type": "peers", "peers": peers}).encode())
 
 
 def _inbound_peers(items: object) -> list[dict[str, Any]]:
