@@ -31,6 +31,7 @@ from peermesh.ledger import Ledger
 from peermesh.registry import LINK_FILE, PEERS_FILE, Peer, Registry, repo_tag
 from peermesh.service import OUTBOX, Mesh
 from peermesh.transports import Outcome
+from peermesh.transports.codex import codex_bin
 
 HOST = "workstation"
 OTHER = "claude:w1"
@@ -1330,7 +1331,7 @@ def test_an_unreadable_lock_of_one_host_leaves_the_other_hosts_in_status(
         first, second = bridge.status(mesh)
     finally:
         life.chmod(0o600)
-    assert first["host"] == "host-a" and "cannot be read" in first["error"]
+    assert first["host"] == "host-a" and "cannot be checked" in first["error"]
     assert second["host"] == "host-b" and second["connected"] is True
 
 
@@ -1339,6 +1340,124 @@ def test_a_failure_is_logged_when_the_log_lock_cannot_be_opened(tmp_path: Path) 
     (paths.bridge_dir(HOST) / bridge.LOG_LOCK).mkdir()
     bridge._log_failure(HOST, "no answer")
     assert "no answer" in (paths.bridge_dir(HOST) / bridge.LINK_LOG).read_text()
+
+
+def test_a_stuck_lock_does_not_hold_up_a_host_that_was_also_busy(mesh: Mesh) -> None:
+    _show(host="host-a")
+    _show(host="host-b")
+    stuck = os.open(paths.bridge_dir("host-a") / bridge.LINK_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    busy = os.open(paths.bridge_dir("host-b") / bridge.LINK_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(stuck, fcntl.LOCK_EX)
+    fcntl.flock(busy, fcntl.LOCK_EX)
+    off = threading.Thread(target=bridge.turn_off, args=(mesh,))
+    off.start()
+    try:
+        time.sleep(0.3)
+        assert (paths.bridge_dir("host-b") / LINK_FILE).exists()
+        os.close(busy)
+        _until(lambda: not (paths.bridge_dir("host-b") / LINK_FILE).exists(), timeout=5)
+        assert (paths.bridge_dir("host-a") / LINK_FILE).exists()
+    finally:
+        os.close(stuck)
+        off.join(5)
+
+
+def test_off_reports_a_lock_that_stays_busy(mesh: Mesh, monkeypatch: pytest.MonkeyPatch) -> None:
+    _show()
+    monkeypatch.setattr(bridge, "LOCK_WAIT_S", 0.0)
+    stuck = os.open(paths.bridge_dir(HOST) / bridge.LINK_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(stuck, fcntl.LOCK_EX)
+    try:
+        [line], stopped = bridge.turn_off(mesh)
+    finally:
+        os.close(stuck)
+    assert stopped is False and "holds its lock" in line and bridge._held(HOST)
+
+
+def test_a_failed_process_check_leaves_the_other_hosts_in_status(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _show(host="host-a")
+    _show(host="host-b")
+    running = bridge._running
+
+    def check(host: str) -> int | None:
+        if host == "host-a":
+            raise bridge.ProcessCheckError("ps gave no answer")
+        return running(host)
+
+    monkeypatch.setattr(bridge, "_running", check)
+    first, second = bridge.status(mesh)
+    assert "ps gave no answer" in first["error"] and first["running"] is False
+    assert second["host"] == "host-b" and second["error"] == ""
+
+
+def test_a_failure_line_is_written_under_the_log_lock(tmp_path: Path) -> None:
+    _autostart(tmp_path)
+    log = paths.bridge_dir(HOST) / bridge.LINK_LOG
+    held = os.open(paths.bridge_dir(HOST) / bridge.LOG_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    writer = threading.Thread(target=bridge._log_failure, args=(HOST, "no answer"))
+    writer.start()
+    try:
+        time.sleep(0.2)
+        assert not log.exists()
+    finally:
+        os.close(held)
+        writer.join(5)
+    assert "no answer" in log.read_text()
+
+
+def test_a_relative_location_resolves_its_folders_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = tmp_path / "work" / "task"
+    work.mkdir(parents=True)
+    monkeypatch.chdir(work)
+    expected = str(work.resolve().parent / "tools")
+    assert bridge._absolute("../tools") == expected
+    assert bridge._absolute("/kept/../as/given") == "/kept/../as/given"
+
+
+def test_an_absolute_location_needs_no_current_folder(monkeypatch: pytest.MonkeyPatch) -> None:
+    def gone() -> str:
+        raise FileNotFoundError("the current folder is gone")
+
+    monkeypatch.setattr(bridge.os, "getcwd", gone)
+    assert bridge._absolute("/a/home") == "/a/home"
+
+
+def test_autostart_with_the_root_as_plugin_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tools = _tools(tmp_path)
+    (tools / "session-manager-plugin").unlink()
+    which = shutil.which
+
+    def found(name: str, path: str | None = None, **kwargs: Any) -> str | None:
+        if name == "session-manager-plugin" and path == "/":
+            return "/session-manager-plugin"
+        return which(name, path=path)
+
+    monkeypatch.setattr(bridge.shutil, "which", found)
+    _set_up(plugin_dir="/")
+    bridge.enable_autostart(HOST, {"PATH": str(tools)})
+    record = json.loads((paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).read_text())
+    assert record["path"] == [str(tools)]
+
+
+def test_the_codex_path_keeps_a_parent_step_after_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = tmp_path / "opt" / "deep"
+    real.mkdir(parents=True)
+    (tmp_path / "opt" / "codex").write_text("#!/bin/sh\n")
+    (tmp_path / "opt" / "codex").chmod(0o700)
+    (tmp_path / "link").symlink_to(real)
+    folder = f"{tmp_path}/link/.."
+    monkeypatch.delenv("PEERMESH_CODEX", raising=False)
+    monkeypatch.setenv("PATH", folder)
+    assert codex_bin() == f"{folder}/codex"
 
 
 def test_a_failed_process_check_leaves_the_other_hosts_held(

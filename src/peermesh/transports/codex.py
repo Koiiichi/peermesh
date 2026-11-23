@@ -32,7 +32,10 @@ def codex_bin() -> str | None:
         found = override if os.access(override, os.X_OK) else None
     else:
         found = shutil.which("codex")
-    return os.path.abspath(found) if found else None
+    if not found:
+        return None
+    # An absolute path stays as given: a `..` in it can follow a symlink.
+    return found if os.path.isabs(found) else os.path.abspath(found)
 
 
 def _start_folder(preferred: str | None = None) -> str:
