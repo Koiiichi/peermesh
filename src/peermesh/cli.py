@@ -161,7 +161,10 @@ def _bridge(args: argparse.Namespace, mesh: Mesh) -> int:
         }
         print(bridge.set_up(args.host, os.environ, options))
     elif args.action == "off":
-        print("\n".join(bridge.turn_off(mesh)))
+        lines, stopped = bridge.turn_off(mesh)
+        print("\n".join(lines))
+        if not stopped:
+            return 1
     elif args.action == "autostart":
         change = bridge.enable_autostart if args.state == "on" else bridge.disable_autostart
         print(change(args.host, os.environ))
