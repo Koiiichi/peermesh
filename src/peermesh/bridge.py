@@ -787,7 +787,7 @@ def set_up(host: str, env: Mapping[str, str], options: Mapping[str, str | None])
     _refuse_agent(env)
     remote = {key: value for key, value in options.items() if value}
     if "plugin_dir" in remote:
-        remote["plugin_dir"] = os.path.abspath(remote["plugin_dir"])
+        remote["plugin_dir"] = _from_here(remote["plugin_dir"])
     remote["label"] = check_label(remote.get("label") or socket.gethostname().split(".")[0])
     folder = paths.ensure_private_dir(paths.bridge_dir(host))
     _write_json(folder / REMOTE_FILE, remote)
@@ -844,8 +844,13 @@ def _rotate_log(log: Path) -> None:
         os.replace(log, log.with_name(f"{LINK_LOG}.1"))
 
 
+def _from_here(path: str | Path) -> str:
+    """`path` as an absolute path. It keeps each `..`, which can follow a symlink elsewhere."""
+    return os.path.join(os.getcwd(), path)
+
+
 def _home() -> str:
-    return os.path.abspath(paths.home())
+    return _from_here(paths.home())
 
 
 def _located(env: Mapping[str, str]) -> dict[str, str]:
@@ -853,7 +858,7 @@ def _located(env: Mapping[str, str]) -> dict[str, str]:
     found = {**env, "PEERMESH_HOME": _home()}
     for name in _OWNER_ENV:
         if found.get(name):
-            found[name] = os.path.abspath(found[name])
+            found[name] = _from_here(found[name])
     return found
 
 
@@ -886,6 +891,16 @@ def _start_link(host: str, env: Mapping[str, str] | None = None) -> None:
         os.close(life)
 
 
+def _refuse_relative_plugin_dir(host: str, remote: Mapping[str, Any]) -> None:
+    """An earlier setup stored the folder as given, and a link runs in its private folder."""
+    plugin_dir = remote.get("plugin_dir")
+    if plugin_dir and not os.path.isabs(plugin_dir):
+        raise PeerError(
+            f"The plugin folder of {host} is a relative path. "
+            f"Run `peers bridge setup {host}` again with an absolute `--plugin-dir`."
+        )
+
+
 def turn_on(host: str, env: Mapping[str, str]) -> str:
     """Start the link process of `host`, and end the hold that `peers bridge off` left."""
     check_label(host)
@@ -893,17 +908,12 @@ def turn_on(host: str, env: Mapping[str, str]) -> str:
     remote = _remote(host)
     if not remote:
         raise PeerError(f"The bridge to {host} is not set up. Run `peers bridge setup {host}`.")
-    link_env = None
-    plugin_dir = remote.get("plugin_dir")
-    if plugin_dir and not os.path.isabs(plugin_dir):
-        # An earlier setup stored it as given. It names a folder from where the owner is now.
-        search = f"{os.path.abspath(plugin_dir)}{os.pathsep}{os.environ.get('PATH', '')}"
-        link_env = {**os.environ, "PATH": search}
+    _refuse_relative_plugin_dir(host, remote)
     with _link_lock(host):
         (paths.bridge_dir(host) / HOLD_FILE).unlink(missing_ok=True)
         if _link_runs(host):
             return f"The bridge to {host} is already on."
-        _start_link(host, link_env)
+        _start_link(host)
     return f"The bridge to {host} is on. Run `peers bridge status` to see the connection."
 
 
@@ -915,12 +925,8 @@ def enable_autostart(host: str, env: Mapping[str, str]) -> str:
     remote = _remote(host)
     if not remote:
         raise PeerError(f"The bridge to {host} is not set up. Run `peers bridge setup {host}`.")
+    _refuse_relative_plugin_dir(host, remote)
     plugin_dir = remote.get("plugin_dir")
-    if plugin_dir and not os.path.isabs(plugin_dir):
-        raise PeerError(
-            f"The plugin folder of {host} is a relative path. "
-            f"Run `peers bridge setup {host}` again with an absolute `--plugin-dir`."
-        )
     search = env.get("PATH", "")
     plugin_search = os.pathsep.join(filter(None, (plugin_dir, search)))
     aws = shutil.which("aws", path=search)
@@ -929,15 +935,20 @@ def enable_autostart(host: str, env: Mapping[str, str]) -> str:
         missing = "aws" if aws is None else "session-manager-plugin"
         raise PeerError(f"Autostart for {host} needs `{missing}`, and this PATH does not hold it.")
     # A delivery to a Codex session runs `codex`, and an npm install of it runs `node`. A plugin
-    # folder from setup applies to the connection only, so it stays out of this search.
-    tools = [aws, *([] if plugin_dir else [plugin])]
+    # folder from setup applies to the connection only, so it stays out of this search, unless
+    # the plugin is not there and this PATH found it.
+    in_setup_folder = plugin_dir and os.path.dirname(plugin) == plugin_dir.rstrip(os.sep)
+    tools = [aws, *([] if in_setup_folder else [plugin])]
     tools += filter(None, (shutil.which(name, path=search) for name in ("codex", "node")))
-    folders = {os.path.dirname(os.path.abspath(tool)) for tool in tools}
+    folders = {os.path.dirname(_from_here(tool)) for tool in tools}
     # In the owner's order, so that each name finds the same program as it does for the owner.
-    order = [os.path.abspath(entry) for entry in search.split(os.pathsep)]
+    order = [
+        os.path.dirname(_from_here(os.path.join(entry, "tool")))
+        for entry in search.split(os.pathsep)
+    ]
     record = {
         "path": sorted(folders, key=order.index),
-        "env": {name: os.path.abspath(env[name]) for name in _OWNER_ENV if env.get(name)},
+        "env": {name: _from_here(env[name]) for name in _OWNER_ENV if env.get(name)},
     }
     _write_json(paths.bridge_dir(host) / AUTOSTART_FILE, record)
     if _held(host):
@@ -1013,8 +1024,10 @@ def _restore_link(host: str, env: Mapping[str, str]) -> None:
 
 def _log_failure(host: str, failure: object) -> None:
     log = paths.bridge_dir(host) / LINK_LOG
-    with contextlib.suppress(OSError), _file_lock(log.with_name(LOG_LOCK)):
-        _rotate_log(log)
+    with contextlib.suppress(OSError):
+        # A log that cannot rotate still takes the reason.
+        with contextlib.suppress(OSError), _file_lock(log.with_name(LOG_LOCK)):
+            _rotate_log(log)
         with log.open("a") as fh:
             fh.write(f"{time.ctime()} autostart failed: {_printable(failure)}\n")
 
@@ -1107,12 +1120,15 @@ def _end_link(mesh: Mesh, host: str, *, clean: bool = True) -> tuple[bool, str]:
     return True, f"The bridge to {host} is off.{waits}"
 
 
-def _end_host(mesh: Mesh, host: str) -> tuple[bool, str]:
+def _end_host(mesh: Mesh, host: str, *, wait: bool) -> tuple[bool, str] | None:
     """Hold the link of `host` off and end it, under its lock, so that `on` runs before or after
-    the whole stop. A hold or a lock that fails does not keep the link running."""
+    the whole stop. A hold or a lock that fails does not keep the link running. Returns None
+    when `wait` is False and the lock is busy."""
     hold_failure = None
     try:
-        with _link_lock(host):
+        with _link_lock(host, wait=wait) as locked:
+            if not locked:
+                return None
             try:
                 (paths.bridge_dir(host) / HOLD_FILE).touch(mode=0o600)
             except OSError as exc:
@@ -1133,10 +1149,16 @@ def turn_off(mesh: Mesh) -> tuple[list[str], bool]:
     # Before any process check, which can stall or fail. `_end_host` writes the hold again under
     # the lock that it keeps, because an `on` can run between the two.
     for host in hosts:
-        with contextlib.suppress(OSError), _link_lock(host):
+        with contextlib.suppress(OSError):
             (paths.bridge_dir(host) / HOLD_FILE).touch(mode=0o600)
-    results = [_end_host(mesh, host) for host in hosts]
-    return [line for _, line in results] or ["No bridge is on."], all(ok for ok, _ in results)
+    results: dict[str, tuple[bool, str]] = {}
+    # A host with a busy lock waits until the other links have stopped.
+    for wait in (False, True):
+        for host in hosts:
+            if host not in results and (result := _end_host(mesh, host, wait=wait)):
+                results[host] = result
+    lines = [results[host][1] for host in hosts]
+    return lines or ["No bridge is on."], all(stopped for stopped, _ in results.values())
 
 
 def status(mesh: Mesh) -> list[dict[str, Any]]:
@@ -1147,15 +1169,19 @@ def status(mesh: Mesh) -> list[dict[str, Any]]:
         state = link_state(host)
         autostart = _autostart_record(host) is not None
         hold = _held(host)
-        alive = _link_alive(host)
-        if state or autostart or hold or alive:
+        lock_error = ""
+        try:
+            alive = _link_alive(host)
+        except OSError as exc:
+            alive, lock_error = False, f"The link lock cannot be read: {_printable(exc)}"
+        if state or autostart or hold or alive or lock_error:
             found.append(
                 {
                     "host": host,
                     "connected": link_up(state, now),
                     "running": alive or _running(host) is not None,
                     "waiting": len(mesh.outbox(host).waiting(OUTBOX)),
-                    "error": state.get("error", ""),
+                    "error": lock_error or state.get("error", ""),
                     "autostart": autostart,
                     "hold": hold,
                 }

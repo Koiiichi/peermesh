@@ -11,6 +11,7 @@
 
 - `peers bridge off` leaves a hold on every host, which outlasts a restart, so that a session start does not turn the bridge back on. `peers bridge on <host>` ends the hold of that host.
 - `peers bridge off` exits with status 1 when a connection did not stop or a hold could not be written, and it still handles the other hosts.
+- `peers bridge on` refuses a `--plugin-dir` that an earlier `setup` stored as a relative path, and asks you to run `setup` again with an absolute one.
 - `link.log` keeps the lines of earlier runs. At 256 KiB it moves to `link.log.1`. Each start emptied it before.
 
 ### Fixed

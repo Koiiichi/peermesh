@@ -1298,6 +1298,49 @@ def test_a_failed_hold_keeps_the_lock_through_the_stop(
     assert stopped is False and "hold was not written" in line
 
 
+def test_a_busy_lock_does_not_delay_the_stop_of_another_host(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _show(host="host-a")
+    _show(host="host-b")
+    busy = os.open(paths.bridge_dir("host-a") / bridge.LINK_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(busy, fcntl.LOCK_EX)
+    answers: list[tuple[list[str], bool]] = []
+    off = threading.Thread(target=lambda: answers.append(bridge.turn_off(mesh)))
+    off.start()
+    try:
+        _until(lambda: not (paths.bridge_dir("host-b") / LINK_FILE).exists(), timeout=5)
+        assert (paths.bridge_dir("host-a") / LINK_FILE).exists()
+    finally:
+        os.close(busy)
+        off.join(5)
+    assert answers == [(["The bridge to host-a is off.", "The bridge to host-b is off."], True)]
+
+
+def test_an_unreadable_lock_of_one_host_leaves_the_other_hosts_in_status(
+    mesh: Mesh,
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root ignores the file mode")
+    _show(host="host-b")
+    folder = paths.ensure_private_dir(paths.bridge_dir("host-a"))
+    life = folder / bridge.LINK_LIFE
+    life.touch(mode=0)
+    try:
+        first, second = bridge.status(mesh)
+    finally:
+        life.chmod(0o600)
+    assert first["host"] == "host-a" and "cannot be read" in first["error"]
+    assert second["host"] == "host-b" and second["connected"] is True
+
+
+def test_a_failure_is_logged_when_the_log_lock_cannot_be_opened(tmp_path: Path) -> None:
+    _autostart(tmp_path)
+    (paths.bridge_dir(HOST) / bridge.LOG_LOCK).mkdir()
+    bridge._log_failure(HOST, "no answer")
+    assert "no answer" in (paths.bridge_dir(HOST) / bridge.LINK_LOG).read_text()
+
+
 def test_a_failed_process_check_leaves_the_other_hosts_held(
     mesh: Mesh, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1566,17 +1609,16 @@ def _relative_plugin_dir() -> Path:
     return file
 
 
-def test_on_resolves_a_relative_plugin_folder_and_writes_no_settings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_on_refuses_a_relative_plugin_folder_and_keeps_the_hold(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    started = _starts(monkeypatch)
     file = _relative_plugin_dir()
     before = file.read_text()
-    monkeypatch.chdir(tmp_path)
-    envs: list[Any] = []
-    monkeypatch.setattr(bridge, "_start_link", lambda host, env=None: envs.append(env))
-    bridge.turn_on(HOST, {})
-    assert envs[0]["PATH"].split(os.pathsep)[0] == str(Path.cwd() / "tools")
-    assert file.read_text() == before
+    bridge.turn_off(mesh)
+    with pytest.raises(bridge.PeerError, match="absolute"):
+        bridge.turn_on(HOST, {})
+    assert started == [] and bridge._held(HOST) and file.read_text() == before
 
 
 def test_autostart_refuses_a_relative_plugin_folder_and_writes_no_settings(
@@ -1601,6 +1643,31 @@ def test_a_plugin_folder_does_not_take_over_the_delivery_tools(tmp_path: Path) -
     bridge.enable_autostart(HOST, {"PATH": str(owner)})
     record = json.loads((paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).read_text())
     assert record["path"] == [str(owner)]
+
+
+def test_autostart_keeps_a_plugin_that_only_the_path_finds(tmp_path: Path) -> None:
+    owner, fallback, stale = tmp_path / "owner", tmp_path / "fallback", tmp_path / "stale"
+    stale.mkdir()
+    for folder, name in ((owner, "aws"), (fallback, "session-manager-plugin")):
+        folder.mkdir()
+        (folder / name).write_text("#!/bin/sh\n")
+        (folder / name).chmod(0o700)
+    _set_up(plugin_dir=str(stale))
+    bridge.enable_autostart(HOST, {"PATH": f"{owner}{os.pathsep}{fallback}"})
+    record = json.loads((paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).read_text())
+    assert record["path"] == [str(owner), str(fallback)]
+
+
+def test_a_location_keeps_a_parent_step_after_a_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = tmp_path / "elsewhere" / "deep"
+    real.mkdir(parents=True)
+    (tmp_path / "link").symlink_to(real)
+    home = f"{tmp_path}/link/../state"
+    monkeypatch.setenv("PEERMESH_HOME", home)
+    assert bridge._located({})["PEERMESH_HOME"] == home
+    assert Path(bridge._home()).parent.resolve() == real.parent.resolve()
 
 
 def test_a_link_gets_absolute_locations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
