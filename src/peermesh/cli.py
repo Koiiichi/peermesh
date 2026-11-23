@@ -162,6 +162,9 @@ def _bridge(args: argparse.Namespace, mesh: Mesh) -> int:
         print(bridge.set_up(args.host, os.environ, options))
     elif args.action == "off":
         print("\n".join(bridge.turn_off(mesh)))
+    elif args.action == "autostart":
+        change = bridge.enable_autostart if args.state == "on" else bridge.disable_autostart
+        print(change(args.host, os.environ))
     elif args.action == "run":
         bridge.run_link(mesh, bridge.check_label(args.host))
     elif args.action == "serve":
@@ -173,6 +176,8 @@ def _bridge(args: argparse.Namespace, mesh: Mesh) -> int:
         lines = [
             f"{link['host']:20} {'connected' if link['connected'] else 'offline':10} "
             f"{'running' if link['running'] else 'stopped':8} waiting {link['waiting']}"
+            f"  autostart {'on' if link['autostart'] else 'off'}"
+            f"  hold {'on' if link['hold'] else 'off'}"
             + (f"  {link['error']}" if link["error"] else "")
             for link in links
         ]
@@ -241,6 +246,9 @@ def _parser() -> argparse.ArgumentParser:
     br_on = bridge.add_parser("on", help="connect to a host")
     br_on.add_argument("host")
     bridge.add_parser("off", help="end each connection and forget its peers")
+    br_auto = bridge.add_parser("autostart", help="let a session start restore the connection")
+    br_auto.add_argument("state", choices=["on", "off"])
+    br_auto.add_argument("host")
     bridge.add_parser("status", parents=[output])
     br_run = bridge.add_parser("run", help=argparse.SUPPRESS)
     br_run.add_argument("host")

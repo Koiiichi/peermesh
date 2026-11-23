@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import fcntl
 import json
 import os
 import queue
 import re
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -28,7 +30,7 @@ import time
 import traceback
 import tty
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import IO, Any, cast
@@ -75,6 +77,11 @@ MAX_QUEUED = 1024
 STOP_WAIT_S = 10.0
 REMOTE_FILE = "remote.json"
 ERROR_LOG = "errors.log"
+LINK_LOG = "link.log"
+LINK_LOCK = "link.lock"
+AUTOSTART_FILE = "autostart.json"
+HOLD_FILE = "hold"
+MAX_LINK_LOG = 256 * 1024
 SESSION_DOCUMENT = "AWS-StartInteractiveCommand"
 REMOTE_PATH = "/usr/local/bin:/usr/bin:/bin"
 SERVE_SOCKET = "serve.sock"
@@ -99,6 +106,12 @@ _OPEN = ("pending", "queued", "sending")
 # the loop limit reads.
 _LATE = ("delivered", "injected", "undelivered")
 _AGENT_ENV = ("CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID")
+# All that a link started by a session start takes from that session. The link outlives the
+# session, so it must not keep its identity or its AWS credentials.
+_SESSION_ENV = ("HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE")
+# Where the owner's shell finds the runtimes. The link delivers arriving messages to them.
+_OWNER_ENV = ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "PEERMESH_CLAUDE_APP", "PEERMESH_CODEX")
+_SYSTEM_PATH = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
 
 
 class _Closed(Exception):
@@ -773,23 +786,159 @@ def set_up(host: str, env: Mapping[str, str], options: Mapping[str, str | None])
     return f"The bridge to {host} is set up. Run `peers bridge on {host}` to connect."
 
 
-def turn_on(host: str, env: Mapping[str, str]) -> str:
-    """Start the link process of `host`."""
-    check_label(host)
-    _refuse_agent(env)
-    if not _remote(host):
-        raise PeerError(f"The bridge to {host} is not set up. Run `peers bridge setup {host}`.")
-    if _running(host) is not None:
-        return f"The bridge to {host} is already on."
-    with (paths.bridge_dir(host) / "link.log").open("w") as errors:
-        subprocess.Popen(
+@contextlib.contextmanager
+def _link_lock(host: str, *, wait: bool = True) -> Iterator[bool]:
+    """Hold the lock of `host` around a running check and what depends on it. Yields False when
+    `wait` is False and another process holds the lock."""
+    fd = os.open(paths.bridge_dir(host) / LINK_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+        except BlockingIOError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)
+
+
+def _start_link(host: str, env: Mapping[str, str] | None = None) -> None:
+    """Start the link process of `host`, with `env` or else this environment. The caller holds
+    the lock and found no running link."""
+    folder = paths.bridge_dir(host)
+    log = folder / LINK_LOG
+    mode = "w" if log.exists() and log.stat().st_size >= MAX_LINK_LOG else "a"
+    with log.open(mode) as errors:
+        link = subprocess.Popen(
             [sys.executable, "-m", "peermesh.cli", "bridge", "run", host],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=errors,
+            env=env,
             start_new_session=True,
         )
+    # The next holder of the lock must see this process, and it can run before the process has
+    # imported enough to write the file itself.
+    started = proc_start(link.pid)
+    if started is not None:
+        state = {"pid": link.pid, "started": started, "connected": False, "seen": 0.0}
+        _write_json(folder / LINK_FILE, state)
+
+
+def turn_on(host: str, env: Mapping[str, str]) -> str:
+    """Start the link process of `host`, and end the hold that `peers bridge off` left."""
+    check_label(host)
+    _refuse_agent(env)
+    if not _remote(host):
+        raise PeerError(f"The bridge to {host} is not set up. Run `peers bridge setup {host}`.")
+    with _link_lock(host):
+        (paths.bridge_dir(host) / HOLD_FILE).unlink(missing_ok=True)
+        if _running(host) is not None:
+            return f"The bridge to {host} is already on."
+        _start_link(host)
     return f"The bridge to {host} is on. Run `peers bridge status` to see the connection."
+
+
+def enable_autostart(host: str, env: Mapping[str, str]) -> str:
+    """Record that a registered session start can start the link of `host`, with the tools that
+    the owner's PATH finds: the PATH of a desktop app session can be short."""
+    check_label(host)
+    _refuse_agent(env)
+    remote = _remote(host)
+    if not remote:
+        raise PeerError(f"The bridge to {host} is not set up. Run `peers bridge setup {host}`.")
+    search = env.get("PATH", "")
+    plugin_search = os.pathsep.join(filter(None, (remote.get("plugin_dir"), search)))
+    aws = shutil.which("aws", path=search)
+    plugin = shutil.which("session-manager-plugin", path=plugin_search)
+    if aws is None or plugin is None:
+        missing = "aws" if aws is None else "session-manager-plugin"
+        raise PeerError(f"Autostart for {host} needs `{missing}`, and this PATH does not hold it.")
+    # A delivery to a Codex session runs `codex`, and an npm install of it runs `node`.
+    delivery = (shutil.which(name, path=search) for name in ("codex", "node"))
+    tools = [aws, plugin, *filter(None, delivery)]
+    record = {
+        "path": list(dict.fromkeys(os.path.dirname(os.path.abspath(tool)) for tool in tools)),
+        "env": {name: env[name] for name in _OWNER_ENV if env.get(name)},
+    }
+    _write_json(paths.bridge_dir(host) / AUTOSTART_FILE, record)
+    if _held(host):
+        return (
+            f"Autostart is on for {host}, and it waits: `peers bridge off` left a hold. "
+            f"Run `peers bridge on {host}` to end the hold."
+        )
+    return f"Autostart is on for {host}. The next agent session that starts connects the bridge."
+
+
+def disable_autostart(host: str, env: Mapping[str, str]) -> str:
+    """Remove the autostart record of `host`. A running link keeps running."""
+    check_label(host)
+    _refuse_agent(env)
+    record = paths.bridge_dir(host) / AUTOSTART_FILE
+    if record.exists():
+        with _link_lock(host):
+            record.unlink(missing_ok=True)
+    return f"Autostart is off for {host}. A running link keeps running."
+
+
+def _autostart_record(host: str) -> dict[str, Any] | None:
+    """The record of `host`, or None when it is absent or has a wrong shape. Any process of this
+    user can write the file, so a value that it holds does not reach the link unchecked."""
+    try:
+        record = json.loads((paths.bridge_dir(host) / AUTOSTART_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    folders, owner_env = record.get("path"), record.get("env")
+    if not isinstance(folders, list) or not isinstance(owner_env, dict):
+        return None
+    if not all(isinstance(folder, str) and os.path.isabs(folder) for folder in folders):
+        return None
+    if not all(name in _OWNER_ENV and isinstance(v, str) for name, v in owner_env.items()):
+        return None
+    return {"path": folders, "env": owner_env}
+
+
+def _held(host: str) -> bool:
+    return (paths.bridge_dir(host) / HOLD_FILE).exists()
+
+
+def _link_env(record: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, str]:
+    """The environment of a link that a session start begins, from an allowlist."""
+    return {
+        **{name: env[name] for name in _SESSION_ENV if name in env},
+        **record["env"],
+        "PATH": os.pathsep.join([*record["path"], *_SYSTEM_PATH]),
+        "PEERMESH_HOME": str(paths.home()),
+    }
+
+
+def _restore_link(host: str, env: Mapping[str, str]) -> None:
+    if not (paths.bridge_dir(host) / AUTOSTART_FILE).exists():
+        return
+    # A session that finds the lock taken leaves the start to its holder, and a hook has a short
+    # time limit.
+    with _link_lock(host, wait=False) as locked:
+        if not locked or _held(host) or not _remote(host) or _running(host) is not None:
+            return
+        record = _autostart_record(host)
+        if record is not None:
+            _start_link(host, _link_env(record, env))
+
+
+def restore_links(env: Mapping[str, str]) -> None:
+    """Start each link that has autostart on and no hold, for the session start with `env`. Does
+    not wait for a connection. A failure goes to the log of its host."""
+    for host in _hosts():
+        try:
+            _restore_link(host, env)
+        except Exception as exc:  # a hook must never break the host session
+            log = paths.bridge_dir(host) / LINK_LOG
+            with contextlib.suppress(OSError):
+                if not log.exists() or log.stat().st_size < MAX_LINK_LOG:
+                    with log.open("a") as fh:
+                        fh.write(f"{time.ctime()} autostart failed: {_printable(exc)}\n")
 
 
 def _hosts() -> list[str]:
@@ -798,9 +947,15 @@ def _hosts() -> list[str]:
 
 
 def turn_off(mesh: Mesh) -> list[str]:
-    """End each link, forget its peers, and end the messages that wait for it."""
+    """Hold each link off, end it, forget its peers, and end the messages that wait for it."""
     lines: list[str] = []
-    for host in _hosts():
+    hosts = _hosts()
+    for host in hosts:
+        # Under the lock, a start that is under way has finished and written its link file, so
+        # the stop below finds its process. Each later start finds the hold.
+        with _link_lock(host):
+            (paths.bridge_dir(host) / HOLD_FILE).touch(mode=0o600)
+    for host in hosts:
         pid = _running(host)
         if pid is not None:
             os.kill(pid, signal.SIGTERM)
@@ -815,7 +970,8 @@ def turn_off(mesh: Mesh) -> list[str]:
         folder = paths.bridge_dir(host)
         (folder / PEERS_FILE).unlink(missing_ok=True)
         (folder / LINK_FILE).unlink(missing_ok=True)
-        lines.append(f"The bridge to {host} is off.")
+        waits = f" Autostart waits for `peers bridge on {host}`." if _autostart_record(host) else ""
+        lines.append(f"The bridge to {host} is off.{waits}")
     return lines or ["No bridge is on."]
 
 
@@ -825,7 +981,9 @@ def status(mesh: Mesh) -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     for host in _hosts():
         state = link_state(host)
-        if state:
+        autostart = _autostart_record(host) is not None
+        hold = _held(host)
+        if state or autostart or hold:
             found.append(
                 {
                     "host": host,
@@ -833,6 +991,8 @@ def status(mesh: Mesh) -> list[dict[str, Any]]:
                     "running": _running(host) is not None,
                     "waiting": len(mesh.outbox(host).waiting(OUTBOX)),
                     "error": state.get("error", ""),
+                    "autostart": autostart,
+                    "hold": hold,
                 }
             )
     return found

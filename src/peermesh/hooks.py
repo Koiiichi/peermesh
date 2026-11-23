@@ -96,6 +96,15 @@ def _note(line: str) -> None:
         pass
 
 
+def _restore_bridges(env: Mapping[str, str]) -> None:
+    try:
+        from peermesh import bridge
+
+        bridge.restore_links(env)
+    except Exception as exc:  # the session is registered and has its context
+        _note(f"bridge autostart: {exc}")
+
+
 def _post_tool(
     mesh: Mesh, peer_id: str, env: Mapping[str, str], emit: Emit, me: Callable[[], Owner | None]
 ) -> dict[str, Any] | None:
@@ -401,6 +410,7 @@ def handle(
         _remove_stale_state(mesh)
         out = _context(event, text.session_start_text(peer, peers))
         emit(out)
+        _restore_bridges(env)
         return out
     parts = [text.change_text(peer, peers)] if _changed(peer.id, peers) else []
 

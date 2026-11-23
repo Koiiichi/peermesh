@@ -169,16 +169,21 @@ peers bridge setup workstation \
   --tmux-socket /run/sessions/tmux.sock \
   --run-as agent --profile dev --region us-east-1 --as laptop
 peers bridge on workstation    # stays on until you run off, or until this machine restarts
-peers bridge status            # connected or offline, messages waiting, the last error
-peers bridge off               # end the connection and forget the remote peers
+peers bridge status            # connected or offline, messages waiting, autostart, hold, the last error
+peers bridge off               # end the connection, forget the remote peers, and hold it off
+peers bridge autostart on workstation    # the next agent session that starts restores the connection
+peers bridge autostart off workstation   # stop restoring it; a running connection stays
 ```
 
-`workstation` is the label of the host in peer addresses, and `--as` sets the label of this machine over there. `--remote-home` is `PEERMESH_HOME` in the service, `--run-as` is the user of the sessions, `--remote-peers` names the `peers` command there when it is not the one on the `PATH`, and `--plugin-dir` names the folder of `session-manager-plugin` when it is not on your `PATH`. These values stay in `~/.peermesh/bridge/`. Only the owner changes the bridge: `setup` and `on` refuse to run in an agent session.
+`workstation` is the label of the host in peer addresses, and `--as` sets the label of this machine over there. `--remote-home` is `PEERMESH_HOME` in the service, `--run-as` is the user of the sessions, `--remote-peers` names the `peers` command there when it is not the one on the `PATH`, and `--plugin-dir` names the folder of `session-manager-plugin` when it is not on your `PATH`. These values stay in `~/.peermesh/bridge/`. Only the owner changes the bridge: `setup`, `on` and `autostart` refuse to run in an agent session.
 
 A remote peer has the address `worker-a@workstation`, and `peers_list` gives its host in `remote_host`. A send to `worker-a` also reaches it when no local session has that name and no other machine has a peer of that name. A renamed remote peer keeps its automatic name as a second address, as a local one does. A message from it reads `request from worker-a@workstation (claude)` and carries the usual frame: it is peer text, not a user instruction.
 
 - **Offline:** when the connection fails, local messages carry on, and remote peers show as `offline`. A send to an offline peer is refused at once. The bridge reconnects by itself.
 - **Waiting messages:** a message that was waiting when the connection failed goes out after the reconnect. After 15 minutes it ends as undelivered, so a stale request does not arrive late. `off` ends every waiting message.
+- **After a restart:** the connection does not come back by itself. With `autostart on`, the next agent session that registers on this machine starts it, without waiting for it to connect, when the host is set up and no connection process runs. The other machine never starts one. A failed start goes to `~/.peermesh/bridge/<host>/link.log` and does not affect the session.
+- **What an autostarted connection runs with:** `autostart on` records the folders of `aws`, `session-manager-plugin`, `codex` and `node` from your `PATH`, because a desktop app session can have a shorter one. Run it again after you move one of them. The connection takes those folders and a short list of variables such as `HOME`. It takes no session id and no `AWS_*` variable from the session, so give `setup` the `--profile` and `--region` that the connection needs.
+- **Hold:** `off` leaves a hold on every host, so that no session start turns the bridge back on, also after a restart. `peers bridge on <host>` ends the hold of that host.
 - **What crosses:** peer lists and messages only. A peer list holds each session's id, name, automatic name, runtime, status, capabilities and last-seen time and a hash of its repository, and no path or process id. A session on one machine can't reach a third machine through the bridge.
 
 ## Safety limits
@@ -191,7 +196,7 @@ A remote peer has the address `worker-a@workstation`, and `peers_list` gives its
 - The Codex threads of one host process share that process, for example every terminal session on the shared app-server daemon. A command that runs outside the Codex sandbox in one thread, such as in full-access mode, can act as another thread of the same process: it can set `CODEX_THREAD_ID`, or start its own `peers-mcp` and name the thread in the request metadata. Under the default `workspace-write` sandbox both attempts failed in tests on macOS, because the sandbox blocks what peermesh runs.
 - No check stops a process that runs as your user from writing to `~/.peermesh`, to a Claude inbox socket or to `codex queue`, and every session can read the ledger. The sender in a frame names the session for cooperating agents. It does not prove who sent the message.
 - Codex receives peer messages as ordinary user input; the frame and the peermesh rules from the hooks and the instruction block are the only provenance it has.
-- A bridge proves the host of a remote message and nothing more. The receiver sets the host label from the connection and applies its own limits, but one process on the remote host can write as any peer of that host. An agent on your machine runs as you, so it can reach the bridge's files and your AWS session; the refusal in `peers bridge on` guards against a mistake, not against an attack.
+- A bridge proves the host of a remote message and nothing more. The receiver sets the host label from the connection and applies its own limits, but one process on the remote host can write as any peer of that host. An agent on your machine runs as you, so it can reach the bridge's files and your AWS session; the refusals in `peers bridge on` and `peers bridge autostart` and the hold guard against a mistake, not against an attack. A process of your user can write the autostart record.
 
 ## Try it with two sessions
 

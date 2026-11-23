@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 import json
 import os
@@ -21,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from peermesh import bridge, paths, registry, service
+from peermesh import bridge, cli, paths, registry, service
 from peermesh.envelope import MAX_BODY_BYTES, render
 from peermesh.ledger import Ledger
 from peermesh.registry import LINK_FILE, PEERS_FILE, Peer, Registry, repo_tag
@@ -955,6 +956,484 @@ def test_the_bridge_is_off_until_it_is_turned_on(mesh: Mesh, me: Peer) -> None:
     assert mesh.list_peers(me, "all") == []
     assert bridge.status(mesh) == []
     assert bridge.turn_off(mesh) == ["No bridge is on."]
+
+
+# Autostart
+
+
+AWS_STUB = """#!/bin/sh
+echo "$PPID" >> {calls}
+/usr/bin/env > {env_dump}
+exec /bin/sleep 600
+"""
+
+
+def _tools(folder: Path) -> Path:
+    """A folder with a stand-in for `aws` and `session-manager-plugin`. `calls` gets one line for
+    each connection that a link starts, and `env` the environment of the last one."""
+    tools = paths.ensure_private_dir(folder / "tools")
+    stub = tools / "aws"
+    stub.write_text(AWS_STUB.format(calls=folder / "calls", env_dump=folder / "env"))
+    stub.chmod(0o700)
+    plugin = tools / "session-manager-plugin"
+    plugin.write_text("#!/bin/sh\n")
+    plugin.chmod(0o700)
+    return tools
+
+
+def _autostart(folder: Path, host: str = HOST) -> None:
+    bridge.set_up(host, {}, {"target": "i-1", "home": "/w", "tmux": "/t", "label": "laptop"})
+    bridge.enable_autostart(host, {"PATH": str(_tools(folder))})
+
+
+def _starts(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    started: list[str] = []
+    monkeypatch.setattr(bridge, "_start_link", lambda host, env=None: started.append(host))
+    return started
+
+
+def _calls(folder: Path) -> list[str]:
+    calls = folder / "calls"
+    return calls.read_text().split() if calls.exists() else []
+
+
+def test_autostart_on_records_the_folders_of_the_tools(tmp_path: Path) -> None:
+    tools = _tools(tmp_path)
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    (tools / "session-manager-plugin").rename(plugin_dir / "session-manager-plugin")
+    codex_dir = tmp_path / "codex-bin"
+    codex_dir.mkdir()
+    (codex_dir / "codex").write_text("#!/bin/sh\n")
+    (codex_dir / "codex").chmod(0o700)
+    _set_up(plugin_dir=str(plugin_dir))
+    path = os.pathsep.join([str(tools), str(codex_dir)])
+    assert "Autostart is on" in bridge.enable_autostart(
+        HOST, {"PATH": path, "CODEX_HOME": "/c", "AWS_SECRET_ACCESS_KEY": "s"}
+    )
+    record = json.loads((paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).read_text())
+    assert record == {
+        "path": [str(tools), str(plugin_dir), str(codex_dir)],
+        "env": {"CODEX_HOME": "/c"},
+    }
+    assert stat.S_IMODE((paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).stat().st_mode) == 0o600
+
+
+def test_autostart_on_starts_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    started = _starts(monkeypatch)
+    _autostart(tmp_path)
+    assert started == [] and not (paths.bridge_dir(HOST) / LINK_FILE).exists()
+
+
+def test_autostart_off_removes_the_record_and_keeps_the_link(
+    mesh: Mesh, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _autostart(tmp_path)
+    _show()
+    monkeypatch.setattr(bridge, "_running", lambda host: 12345)
+    killed: list[int] = []
+    monkeypatch.setattr(bridge.os, "kill", lambda pid, sig: killed.append(pid))
+    bridge.disable_autostart(HOST, {})
+    assert not (paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).exists()
+    assert killed == [] and (paths.bridge_dir(HOST) / LINK_FILE).exists()
+    assert bridge.status(mesh)[0]["autostart"] is False
+
+
+def test_autostart_off_for_a_host_with_no_record_changes_nothing() -> None:
+    assert "off" in bridge.disable_autostart(HOST, {})
+    assert not paths.bridge_dir(HOST).exists()
+
+
+@pytest.mark.parametrize("name", ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID"])
+def test_an_agent_session_does_not_change_autostart(tmp_path: Path, name: str) -> None:
+    _autostart(tmp_path)
+    record = paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE
+    before = record.read_text()
+    with pytest.raises(bridge.PeerError, match="owner"):
+        bridge.enable_autostart(HOST, {name: "s1", "PATH": str(tmp_path / "tools")})
+    with pytest.raises(bridge.PeerError, match="owner"):
+        bridge.disable_autostart(HOST, {name: "s1"})
+    assert record.read_text() == before
+
+
+def test_autostart_on_refuses_a_host_that_is_not_set_up(tmp_path: Path) -> None:
+    with pytest.raises(bridge.PeerError, match="peers bridge setup"):
+        bridge.enable_autostart(HOST, {"PATH": str(_tools(tmp_path))})
+    assert not paths.bridge_dir(HOST).exists()
+
+
+@pytest.mark.parametrize("missing", ["aws", "session-manager-plugin"])
+def test_autostart_on_names_a_tool_that_the_path_does_not_hold(
+    tmp_path: Path, missing: str
+) -> None:
+    tools = _tools(tmp_path)
+    (tools / missing).unlink()
+    _set_up()
+    with pytest.raises(bridge.PeerError, match=missing):
+        bridge.enable_autostart(HOST, {"PATH": str(tools)})
+    assert not (paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).exists()
+
+
+def test_status_shows_a_host_with_autostart_and_no_link_file(
+    mesh: Mesh, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _autostart(tmp_path)
+    assert not (paths.bridge_dir(HOST) / LINK_FILE).exists()
+    assert bridge.status(mesh) == [
+        {
+            "host": HOST,
+            "connected": False,
+            "running": False,
+            "waiting": 0,
+            "error": "",
+            "autostart": True,
+            "hold": False,
+        }
+    ]
+    assert cli.main(["bridge", "status"]) == 0
+    assert "autostart on  hold off" in capsys.readouterr().out
+    assert cli.main(["bridge", "status", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["autostart"] is True
+
+
+def test_status_shows_the_hold_after_off(mesh: Mesh, tmp_path: Path) -> None:
+    _set_up()
+    bridge.turn_off(mesh)
+    [entry] = bridge.status(mesh)
+    assert entry["hold"] is True and entry["autostart"] is False and entry["running"] is False
+
+
+def test_a_session_start_restores_a_link_with_autostart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = _starts(monkeypatch)
+    _autostart(tmp_path)
+    bridge.restore_links({})
+    assert started == [HOST]
+
+
+def test_a_host_without_a_record_does_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    started = _starts(monkeypatch)
+    _set_up()
+    bridge.restore_links({})
+    assert started == [] and not (paths.bridge_dir(HOST) / bridge.LINK_LOCK).exists()
+
+
+def test_a_session_start_leaves_a_held_link_off(
+    mesh: Mesh, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = _starts(monkeypatch)
+    _autostart(tmp_path)
+    bridge.turn_off(mesh)
+    bridge.restore_links({})
+    assert started == []
+
+
+def test_a_session_start_leaves_a_running_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = _starts(monkeypatch)
+    _autostart(tmp_path)
+    monkeypatch.setattr(bridge, "_running", lambda host: 12345)
+    bridge.restore_links({})
+    assert started == []
+
+
+def test_a_session_start_leaves_a_host_that_is_no_longer_set_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = _starts(monkeypatch)
+    _autostart(tmp_path)
+    (paths.bridge_dir(HOST) / bridge.REMOTE_FILE).unlink()
+    bridge.restore_links({})
+    assert started == []
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "not json",
+        "[]",
+        '{"path": "/bin", "env": {}}',
+        '{"path": ["relative"], "env": {}}',
+        '{"path": ["/bin"], "env": {"AWS_SECRET_ACCESS_KEY": "s"}}',
+        '{"path": ["/bin"], "env": {"CODEX_HOME": 1}}',
+    ],
+)
+def test_a_record_with_a_wrong_shape_starts_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record: str
+) -> None:
+    started = _starts(monkeypatch)
+    _autostart(tmp_path)
+    (paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).write_text(record)
+    bridge.restore_links({})
+    assert started == []
+
+
+def test_off_writes_the_hold_before_it_stops_the_link(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _show()
+    held: list[bool] = []
+    monkeypatch.setattr(bridge, "_running", lambda host: 12345 if not held else None)
+    monkeypatch.setattr(bridge.os, "kill", lambda pid, sig: held.append(bridge._held(HOST)))
+    bridge.turn_off(mesh)
+    assert held == [True]
+
+
+def test_off_holds_every_host_before_it_stops_the_first(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _show(host="host-a")
+    _show(host="host-b")
+    held: list[bool] = []
+    monkeypatch.setattr(bridge, "_running", lambda host: 12345 if not held else None)
+    monkeypatch.setattr(bridge.os, "kill", lambda pid, sig: held.append(bridge._held("host-b")))
+    bridge.turn_off(mesh)
+    assert held == [True]
+
+
+def test_on_ends_the_hold_of_its_host_only(mesh: Mesh, monkeypatch: pytest.MonkeyPatch) -> None:
+    started = _starts(monkeypatch)
+    for host in (HOST, "other-host"):
+        bridge.set_up(host, {}, {"target": "i-1", "home": "/w", "tmux": "/t", "label": "laptop"})
+    bridge.turn_off(mesh)
+    bridge.turn_on(HOST, {})
+    assert started == [HOST]
+    assert not bridge._held(HOST) and bridge._held("other-host")
+
+
+def test_a_refused_on_keeps_the_hold(mesh: Mesh) -> None:
+    _set_up()
+    bridge.turn_off(mesh)
+    with pytest.raises(bridge.PeerError, match="owner"):
+        bridge.turn_on(HOST, {"CODEX_THREAD_ID": "t1"})
+    assert bridge._held(HOST)
+
+
+def test_on_for_a_running_link_ends_the_hold_and_starts_nothing(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = _starts(monkeypatch)
+    _set_up()
+    bridge.turn_off(mesh)
+    monkeypatch.setattr(bridge, "_running", lambda host: 12345)
+    assert "already on" in bridge.turn_on(HOST, {})
+    assert started == [] and not bridge._held(HOST)
+
+
+def test_the_hold_outlasts_a_dead_link(
+    mesh: Mesh, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = _starts(monkeypatch)
+    _autostart(tmp_path)
+    bridge.turn_off(mesh)
+    # What a restart of the machine leaves: a link file whose process is gone.
+    state = {"pid": 999999, "started": "gone", "connected": True, "seen": 0.0}
+    (paths.bridge_dir(HOST) / LINK_FILE).write_text(json.dumps(state))
+    bridge.restore_links({})
+    assert started == [] and bridge._held(HOST)
+
+
+def test_autostart_on_says_that_a_hold_waits(mesh: Mesh, tmp_path: Path) -> None:
+    _set_up()
+    bridge.turn_off(mesh)
+    answer = bridge.enable_autostart(HOST, {"PATH": str(_tools(tmp_path))})
+    assert f"peers bridge on {HOST}" in answer and bridge._held(HOST)
+
+
+def test_the_link_env_is_an_allowlist(tmp_path: Path) -> None:
+    session = {
+        "HOME": "/home/u",
+        "USER": "u",
+        "LANG": "C",
+        "PATH": "/session/only",
+        "CLAUDE_CODE_SESSION_ID": "s1",
+        "CODEX_THREAD_ID": "t1",
+        "CODEX_SESSION_ID": "t2",
+        "AWS_ACCESS_KEY_ID": "a",
+        "AWS_SECRET_ACCESS_KEY": "b",
+        "AWS_SESSION_TOKEN": "c",
+        "AWS_PROFILE": "d",
+        "PEERMESH_BRIDGE_CONNECT": "/session/connect",
+        "PYTHONPATH": "/session/code",
+        "CODEX_HOME": "/session/codex",
+    }
+    record = {"path": ["/tools"], "env": {"CODEX_HOME": "/owner/codex"}}
+    assert bridge._link_env(record, session) == {
+        "HOME": "/home/u",
+        "USER": "u",
+        "LANG": "C",
+        "CODEX_HOME": "/owner/codex",
+        "PATH": os.pathsep.join(["/tools", *bridge._SYSTEM_PATH]),
+        "PEERMESH_HOME": str(paths.home()),
+    }
+
+
+def test_a_restored_link_keeps_no_session_identity_or_credentials(
+    mesh: Mesh, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PEERMESH_BRIDGE_CONNECT", raising=False)
+    _autostart(tmp_path)
+    session = {
+        "HOME": str(Path.home()),
+        "CLAUDE_CODE_SESSION_ID": "s1",
+        "CODEX_THREAD_ID": "t1",
+        "CODEX_SESSION_ID": "t2",
+        "AWS_ACCESS_KEY_ID": "a",
+        "AWS_SECRET_ACCESS_KEY": "b",
+        "AWS_SESSION_TOKEN": "c",
+    }
+    try:
+        bridge.restore_links(session)
+        dump = tmp_path / "env"
+        _until(lambda: dump.exists() and "PATH=" in dump.read_text())
+        names = {line.split("=", 1)[0] for line in dump.read_text().splitlines()}
+        assert not names & {*bridge._AGENT_ENV, "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"}
+        assert "AWS_SESSION_TOKEN" not in names
+    finally:
+        bridge.turn_off(mesh)
+
+
+def test_a_start_keeps_the_log_of_earlier_runs(
+    mesh: Mesh, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PEERMESH_BRIDGE_CONNECT", raising=False)
+    _autostart(tmp_path)
+    log = paths.bridge_dir(HOST) / bridge.LINK_LOG
+    log.write_text("an earlier line\n")
+    try:
+        bridge.restore_links({"HOME": str(Path.home())})
+        _until(lambda: _calls(tmp_path))
+        assert log.read_text().startswith("an earlier line\n")
+    finally:
+        bridge.turn_off(mesh)
+
+
+def test_a_failure_goes_to_the_log_of_its_host_and_leaves_the_others(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _autostart(tmp_path, "host-a")
+    _autostart(tmp_path, "host-b")
+    started: list[str] = []
+
+    def start(host: str, env: Any = None) -> None:
+        if host == "host-a":
+            raise OSError("the start failed")
+        started.append(host)
+
+    monkeypatch.setattr(bridge, "_start_link", start)
+    bridge.restore_links({})
+    assert started == ["host-b"]
+    assert "the start failed" in (paths.bridge_dir("host-a") / bridge.LINK_LOG).read_text()
+
+
+def test_the_autostart_commands_run_from_the_command_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _set_up()
+    monkeypatch.setenv("PATH", f"{_tools(tmp_path)}{os.pathsep}{os.environ['PATH']}")
+    record = paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE
+    assert cli.main(["bridge", "autostart", "on", HOST]) == 0
+    assert "Autostart is on" in capsys.readouterr().out and record.exists()
+    assert cli.main(["bridge", "autostart", "off", HOST]) == 0
+    assert "Autostart is off" in capsys.readouterr().out and not record.exists()
+
+
+class _StartedLink:
+    pid = os.getpid()
+
+
+def test_a_full_log_starts_again_only_when_no_link_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _autostart(tmp_path)
+    log = paths.bridge_dir(HOST) / bridge.LINK_LOG
+    log.write_text("full")
+    monkeypatch.setattr(bridge, "MAX_LINK_LOG", 4)
+    monkeypatch.setattr(bridge.subprocess, "Popen", lambda *args, **kwargs: _StartedLink())
+    monkeypatch.setattr(bridge, "proc_start", lambda pid: "a start time")
+    monkeypatch.setattr(bridge, "_running", lambda host: 12345)
+    bridge.restore_links({})
+    assert log.read_text() == "full"
+    monkeypatch.setattr(bridge, "_running", lambda host: None)
+    bridge.restore_links({})
+    assert log.read_text() == ""
+
+
+def test_a_failure_does_not_grow_a_full_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _autostart(tmp_path)
+    log = paths.bridge_dir(HOST) / bridge.LINK_LOG
+    log.write_text("full")
+    monkeypatch.setattr(bridge, "MAX_LINK_LOG", 4)
+
+    def fail(host: str) -> int:
+        raise OSError("no answer")
+
+    monkeypatch.setattr(bridge, "_running", fail)
+    bridge.restore_links({})
+    assert log.read_text() == "full"
+
+
+def _end_links(mesh: Mesh, folder: Path) -> None:
+    """Stop the link that the record names, and each other link that a failed test started."""
+    bridge.turn_off(mesh)
+    time.sleep(0.3)
+    for pid in _calls(folder):
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(int(pid), signal.SIGTERM)
+
+
+def test_a_session_start_right_after_another_starts_no_second_link(
+    mesh: Mesh, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PEERMESH_BRIDGE_CONNECT", raising=False)
+    _autostart(tmp_path)
+    session = {"HOME": str(Path.home())}
+    try:
+        bridge.restore_links(session)
+        # The new process has not had the time to write its own state.
+        pid = bridge._running(HOST)
+        assert pid is not None
+        bridge.restore_links(session)
+        _until(lambda: _calls(tmp_path))
+        time.sleep(1.0)
+        assert _calls(tmp_path) == [str(pid)]
+    finally:
+        _end_links(mesh, tmp_path)
+
+
+CONCURRENT_START = """
+import os, sys, time
+from peermesh import bridge
+while not os.path.exists(sys.argv[1]):
+    time.sleep(0.001)
+bridge.restore_links(os.environ)
+"""
+
+
+def test_concurrent_session_starts_start_one_link(
+    mesh: Mesh, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PEERMESH_BRIDGE_CONNECT", raising=False)
+    _autostart(tmp_path)
+    go = tmp_path / "go"
+    starts = [
+        subprocess.Popen([sys.executable, "-c", CONCURRENT_START, str(go)]) for _ in range(12)
+    ]
+    try:
+        # Each process has imported the bridge when it waits on the file.
+        time.sleep(1.5)
+        go.touch()
+        assert [start.wait(timeout=30) for start in starts] == [0] * len(starts)
+        _until(lambda: _calls(tmp_path))
+        pid = registry.link_state(HOST)["pid"]
+        time.sleep(1.0)
+        assert _calls(tmp_path) == [str(pid)]
+    finally:
+        _end_links(mesh, tmp_path)
 
 
 # Two real homes, joined by a stand-in for Session Manager
