@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from peermesh import cli, hooks, install, paths, registry
+from peermesh import bridge, cli, hooks, install, paths, registry
 from peermesh.ledger import Ledger
 from peermesh.registry import Peer, Registry
 from peermesh.service import Mesh
@@ -40,6 +40,66 @@ def test_session_start_registers_and_returns_context(make_peer: Callable[..., Pe
     assert "claude-other" in ctx["additionalContext"]
     peer = mesh.registry.get("codex:T1")
     assert peer is not None and peer.status == "idle"
+
+
+def test_session_start_restores_bridges_once_the_session_is_registered(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mesh = _mesh()
+    calls: list[tuple[Any, bool]] = []
+    monkeypatch.setattr(
+        bridge,
+        "restore_links",
+        lambda env: calls.append((env, mesh.registry.get("codex:T1") is not None)),
+    )
+    env = {"CODEX_THREAD_ID": "T1"}
+    payload = {"session_id": "T1", "cwd": os.getcwd()}
+    hooks.handle(mesh, "session-start", "codex", payload, env=env, host_pid=os.getpid())
+    assert calls == [(env, True)]
+    hooks.handle(mesh, "prompt", "codex", payload, env=env, host_pid=os.getpid())
+    assert len(calls) == 1
+
+
+def test_session_start_that_registers_nothing_restores_no_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mesh = _mesh()
+    calls: list[Any] = []
+    monkeypatch.setattr(bridge, "restore_links", calls.append)
+    monkeypatch.setattr(mesh, "claim", lambda *args: None)
+    payload = {"session_id": "T1", "cwd": os.getcwd()}
+    assert (
+        hooks.handle(mesh, "session-start", "codex", payload, env={}, host_pid=os.getpid()) is None
+    )
+    assert calls == []
+
+
+def test_a_failed_autostart_changes_neither_registration_nor_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {"session_id": "T1", "cwd": os.getcwd()}
+    expected = hooks.handle(
+        _mesh(), "session-start", "codex", payload, env={}, host_pid=os.getpid()
+    )
+
+    def fail(env: Any) -> None:
+        raise RuntimeError("the link did not start")
+
+    monkeypatch.setattr(bridge, "restore_links", fail)
+    mesh = _mesh()
+    emitted: list[dict[str, Any]] = []
+    out = hooks.handle(
+        mesh,
+        "session-start",
+        "codex",
+        payload,
+        env={},
+        host_pid=os.getpid(),
+        emit=emitted.append,
+    )
+    assert out == expected and emitted == [expected]
+    assert mesh.registry.get("codex:T1") is not None
+    assert "the link did not start" in (paths.home() / "hook-errors.log").read_text()
 
 
 def test_codex_hook_prefers_payload_over_inherited_env() -> None:

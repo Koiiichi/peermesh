@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `peers bridge autostart on <host>` lets the next registered agent session restore the bridge after this machine restarts, and `peers bridge autostart off <host>` removes that record and leaves a running connection alone. Both refuse to run in an agent session. The connection starts with the tool folders that `autostart on` recorded and no session id or `AWS_*` variable of the session. A failed start goes to the `link.log` of the host and does not affect the session.
+- `peers bridge status` shows the autostart and hold state of each host, also in `--json`, and lists a host that has autostart or a hold and no connection.
+
+### Changed
+
+- `peers bridge off` leaves a hold on every host, which outlasts a restart, so that a session start does not turn the bridge back on. `peers bridge on <host>` ends the hold of that host.
+- `link.log` keeps the lines of earlier runs, up to 256 KiB. Each start emptied it before.
+
+### Fixed
+
+- Two `peers bridge on` commands at the same moment could start two connection processes for one host. A lock for each host now covers the check and the start.
+
 ## 0.5.8 — 2026-11-09
 
 A session on the other side of a bridge answers to its bare name, and `peers_list` shows its automatic name, capabilities and last-seen time.
