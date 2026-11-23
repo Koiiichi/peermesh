@@ -10,11 +10,12 @@
 ### Changed
 
 - `peers bridge off` leaves a hold on every host, which outlasts a restart, so that a session start does not turn the bridge back on. `peers bridge on <host>` ends the hold of that host.
-- `link.log` keeps the lines of earlier runs, up to 256 KiB. Each start emptied it before.
+- `link.log` keeps the lines of earlier runs. At 256 KiB it moves to `link.log.1`. Each start emptied it before.
 
 ### Fixed
 
-- Two `peers bridge on` commands at the same moment could start two connection processes for one host. A lock for each host now covers the check and the start.
+- Two `peers bridge on` commands at the same moment could start two connection processes for one host. A lock for each host now covers the check and the start, and each connection process holds a second lock for its whole life.
+- A connection process no longer imports a `peermesh` folder from the directory where you ran `peers bridge on`, and `setup` stores `--plugin-dir` as an absolute path.
 
 ## 0.5.8 — 2026-11-09
 
