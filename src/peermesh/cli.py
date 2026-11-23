@@ -165,6 +165,8 @@ def _bridge(args: argparse.Namespace, mesh: Mesh) -> int:
     elif args.action == "autostart":
         change = bridge.enable_autostart if args.state == "on" else bridge.disable_autostart
         print(change(args.host, os.environ))
+    elif args.action == "restore":
+        bridge.restore_links(os.environ)
     elif args.action == "run":
         bridge.run_link(mesh, bridge.check_label(args.host))
     elif args.action == "serve":
@@ -250,6 +252,7 @@ def _parser() -> argparse.ArgumentParser:
     br_auto.add_argument("state", choices=["on", "off"])
     br_auto.add_argument("host")
     bridge.add_parser("status", parents=[output])
+    bridge.add_parser("restore", help=argparse.SUPPRESS)
     br_run = bridge.add_parser("run", help=argparse.SUPPRESS)
     br_run.add_argument("host")
     br_serve = bridge.add_parser("serve", help="take one connection on a private socket")

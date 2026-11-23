@@ -100,7 +100,7 @@ def _restore_bridges(env: Mapping[str, str]) -> None:
     try:
         from peermesh import bridge
 
-        bridge.restore_links(env)
+        bridge.request_restore(env)
     except Exception as exc:  # the session is registered and has its context
         _note(f"bridge autostart: {exc}")
 

@@ -49,7 +49,7 @@ def test_session_start_restores_bridges_once_the_session_is_registered(
     calls: list[tuple[Any, bool]] = []
     monkeypatch.setattr(
         bridge,
-        "restore_links",
+        "request_restore",
         lambda env: calls.append((env, mesh.registry.get("codex:T1") is not None)),
     )
     env = {"CODEX_THREAD_ID": "T1"}
@@ -65,7 +65,7 @@ def test_session_start_that_registers_nothing_restores_no_bridge(
 ) -> None:
     mesh = _mesh()
     calls: list[Any] = []
-    monkeypatch.setattr(bridge, "restore_links", calls.append)
+    monkeypatch.setattr(bridge, "request_restore", calls.append)
     monkeypatch.setattr(mesh, "claim", lambda *args: None)
     payload = {"session_id": "T1", "cwd": os.getcwd()}
     assert (
@@ -85,7 +85,7 @@ def test_a_failed_autostart_changes_neither_registration_nor_context(
     def fail(env: Any) -> None:
         raise RuntimeError("the link did not start")
 
-    monkeypatch.setattr(bridge, "restore_links", fail)
+    monkeypatch.setattr(bridge, "request_restore", fail)
     mesh = _mesh()
     emitted: list[dict[str, Any]] = []
     out = hooks.handle(
