@@ -38,7 +38,7 @@ from typing import IO, Any, cast
 import peermesh
 from peermesh import paths
 from peermesh.envelope import KINDS, URGENCIES
-from peermesh.errors import PeerError
+from peermesh.errors import PeerError, ProcessCheckError
 from peermesh.inbox import Waiting
 from peermesh.registry import (
     LINK_DEAD_S,
@@ -80,6 +80,7 @@ ERROR_LOG = "errors.log"
 LINK_LOG = "link.log"
 LINK_LOCK = "link.lock"
 LINK_LIFE = "link.life"
+LOG_LOCK = "link.log.lock"
 AUTOSTART_FILE = "autostart.json"
 HOLD_FILE = "hold"
 MAX_LINK_LOG = 256 * 1024
@@ -794,10 +795,9 @@ def set_up(host: str, env: Mapping[str, str], options: Mapping[str, str | None])
 
 
 @contextlib.contextmanager
-def _link_lock(host: str, *, wait: bool = True) -> Iterator[bool]:
-    """Hold the lock of `host` around a running check and what depends on it. Yields False when
-    `wait` is False and another process holds the lock."""
-    fd = os.open(paths.bridge_dir(host) / LINK_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+def _file_lock(path: Path, *, wait: bool = True) -> Iterator[bool]:
+    """Hold a lock on `path`. Yields False when `wait` is False and another process holds it."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
@@ -807,6 +807,11 @@ def _link_lock(host: str, *, wait: bool = True) -> Iterator[bool]:
         yield True
     finally:
         os.close(fd)
+
+
+def _link_lock(host: str, *, wait: bool = True) -> contextlib.AbstractContextManager[bool]:
+    """The lock of `host`, around a running check and what depends on it."""
+    return _file_lock(paths.bridge_dir(host) / LINK_LOCK, wait=wait)
 
 
 def _link_alive(host: str) -> bool:
@@ -832,9 +837,24 @@ def _link_runs(host: str) -> bool:
 
 
 def _rotate_log(log: Path) -> None:
-    """Move a full log aside. A running link keeps writing to the file that it has open."""
+    """Move a full log aside. A running link keeps writing to the file that it has open. The
+    caller holds the lock of the log, so that a second writer does not move a new log over the
+    old lines."""
     if log.exists() and log.stat().st_size >= MAX_LINK_LOG:
         os.replace(log, log.with_name(f"{LINK_LOG}.1"))
+
+
+def _home() -> str:
+    return os.path.abspath(paths.home())
+
+
+def _located(env: Mapping[str, str]) -> dict[str, str]:
+    """`env` with each location absolute, because a link runs in its private folder."""
+    found = {**env, "PEERMESH_HOME": _home()}
+    for name in _OWNER_ENV:
+        if found.get(name):
+            found[name] = os.path.abspath(found[name])
+    return found
 
 
 def _start_link(host: str, env: Mapping[str, str] | None = None) -> None:
@@ -842,7 +862,8 @@ def _start_link(host: str, env: Mapping[str, str] | None = None) -> None:
     the lock of the host and found no running link."""
     folder = paths.bridge_dir(host)
     log = folder / LINK_LOG
-    _rotate_log(log)
+    with _file_lock(folder / LOG_LOCK):
+        _rotate_log(log)
     life = os.open(folder / LINK_LIFE, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         # The child shares this lock through the descriptor, so no moment exists when the process
@@ -856,22 +877,13 @@ def _start_link(host: str, env: Mapping[str, str] | None = None) -> None:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=errors,
-                env=env,
+                env=_located(os.environ if env is None else env),
                 cwd=folder,
                 pass_fds=(life,),
                 start_new_session=True,
             )
     finally:
         os.close(life)
-
-
-def _absolute_plugin_dir(host: str, remote: dict[str, Any]) -> None:
-    """Resolve a relative plugin folder of an earlier setup, in the owner's folder. A link runs
-    in its private folder."""
-    plugin_dir = remote.get("plugin_dir")
-    if plugin_dir and not os.path.isabs(plugin_dir):
-        remote["plugin_dir"] = os.path.abspath(plugin_dir)
-        _write_json(paths.bridge_dir(host) / REMOTE_FILE, remote)
 
 
 def turn_on(host: str, env: Mapping[str, str]) -> str:
@@ -881,12 +893,17 @@ def turn_on(host: str, env: Mapping[str, str]) -> str:
     remote = _remote(host)
     if not remote:
         raise PeerError(f"The bridge to {host} is not set up. Run `peers bridge setup {host}`.")
+    link_env = None
+    plugin_dir = remote.get("plugin_dir")
+    if plugin_dir and not os.path.isabs(plugin_dir):
+        # An earlier setup stored it as given. It names a folder from where the owner is now.
+        search = f"{os.path.abspath(plugin_dir)}{os.pathsep}{os.environ.get('PATH', '')}"
+        link_env = {**os.environ, "PATH": search}
     with _link_lock(host):
-        _absolute_plugin_dir(host, remote)
         (paths.bridge_dir(host) / HOLD_FILE).unlink(missing_ok=True)
         if _link_runs(host):
             return f"The bridge to {host} is already on."
-        _start_link(host)
+        _start_link(host, link_env)
     return f"The bridge to {host} is on. Run `peers bridge status` to see the connection."
 
 
@@ -898,22 +915,29 @@ def enable_autostart(host: str, env: Mapping[str, str]) -> str:
     remote = _remote(host)
     if not remote:
         raise PeerError(f"The bridge to {host} is not set up. Run `peers bridge setup {host}`.")
-    _absolute_plugin_dir(host, remote)
+    plugin_dir = remote.get("plugin_dir")
+    if plugin_dir and not os.path.isabs(plugin_dir):
+        raise PeerError(
+            f"The plugin folder of {host} is a relative path. "
+            f"Run `peers bridge setup {host}` again with an absolute `--plugin-dir`."
+        )
     search = env.get("PATH", "")
-    plugin_search = os.pathsep.join(filter(None, (remote.get("plugin_dir"), search)))
+    plugin_search = os.pathsep.join(filter(None, (plugin_dir, search)))
     aws = shutil.which("aws", path=search)
     plugin = shutil.which("session-manager-plugin", path=plugin_search)
     if aws is None or plugin is None:
         missing = "aws" if aws is None else "session-manager-plugin"
         raise PeerError(f"Autostart for {host} needs `{missing}`, and this PATH does not hold it.")
-    # A delivery to a Codex session runs `codex`, and an npm install of it runs `node`.
-    delivery = (shutil.which(name, path=search) for name in ("codex", "node"))
-    folders = {os.path.dirname(os.path.abspath(t)) for t in (aws, plugin, *filter(None, delivery))}
+    # A delivery to a Codex session runs `codex`, and an npm install of it runs `node`. A plugin
+    # folder from setup applies to the connection only, so it stays out of this search.
+    tools = [aws, *([] if plugin_dir else [plugin])]
+    tools += filter(None, (shutil.which(name, path=search) for name in ("codex", "node")))
+    folders = {os.path.dirname(os.path.abspath(tool)) for tool in tools}
     # In the owner's order, so that each name finds the same program as it does for the owner.
-    order = [os.path.abspath(entry) for entry in plugin_search.split(os.pathsep)]
+    order = [os.path.abspath(entry) for entry in search.split(os.pathsep)]
     record = {
         "path": sorted(folders, key=order.index),
-        "env": {name: env[name] for name in _OWNER_ENV if env.get(name)},
+        "env": {name: os.path.abspath(env[name]) for name in _OWNER_ENV if env.get(name)},
     }
     _write_json(paths.bridge_dir(host) / AUTOSTART_FILE, record)
     if _held(host):
@@ -949,7 +973,10 @@ def _autostart_record(host: str) -> dict[str, Any] | None:
         return None
     if not all(isinstance(folder, str) and os.path.isabs(folder) for folder in folders):
         return None
-    if not all(name in _OWNER_ENV and isinstance(v, str) for name, v in owner_env.items()):
+    if not all(
+        name in _OWNER_ENV and isinstance(value, str) and os.path.isabs(value)
+        for name, value in owner_env.items()
+    ):
         return None
     return {"path": folders, "env": owner_env}
 
@@ -968,7 +995,7 @@ def _link_env(record: Mapping[str, Any], env: Mapping[str, str]) -> dict[str, st
         **_session_env(env),
         **record["env"],
         "PATH": os.pathsep.join([*record["path"], *_SYSTEM_PATH]),
-        "PEERMESH_HOME": str(paths.home()),
+        "PEERMESH_HOME": _home(),
     }
 
 
@@ -986,7 +1013,7 @@ def _restore_link(host: str, env: Mapping[str, str]) -> None:
 
 def _log_failure(host: str, failure: object) -> None:
     log = paths.bridge_dir(host) / LINK_LOG
-    with contextlib.suppress(OSError):
+    with contextlib.suppress(OSError), _file_lock(log.with_name(LOG_LOCK)):
         _rotate_log(log)
         with log.open("a") as fh:
             fh.write(f"{time.ctime()} autostart failed: {_printable(failure)}\n")
@@ -1002,16 +1029,22 @@ def restore_links(env: Mapping[str, str]) -> None:
             _log_failure(host, exc)
 
 
+def _wants_restore(host: str) -> bool:
+    try:
+        return (
+            (paths.bridge_dir(host) / AUTOSTART_FILE).exists()
+            and not _held(host)
+            and not _link_alive(host)
+        )
+    except OSError:
+        # The restore process meets the same failure and writes it to the log of this host.
+        return True
+
+
 def request_restore(env: Mapping[str, str]) -> None:
     """Start a detached process that runs `restore_links` for the session start with `env`. A
     hook has a short time limit, and a process check can take longer."""
-    hosts = [
-        host
-        for host in _hosts()
-        if (paths.bridge_dir(host) / AUTOSTART_FILE).exists()
-        and not _held(host)
-        and not _link_alive(host)
-    ]
+    hosts = [host for host in _hosts() if _wants_restore(host)]
     if not hosts:
         return
     try:
@@ -1023,7 +1056,7 @@ def request_restore(env: Mapping[str, str]) -> None:
             env={
                 **_session_env(env),
                 "PATH": os.pathsep.join(_SYSTEM_PATH),
-                "PEERMESH_HOME": str(paths.home()),
+                "PEERMESH_HOME": _home(),
             },
             cwd=paths.bridge_dir(),
             start_new_session=True,
@@ -1038,46 +1071,72 @@ def _hosts() -> list[str]:
     return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
 
 
-def _end_link(mesh: Mesh, host: str) -> str:
-    deadline = time.monotonic() + STOP_WAIT_S
-    signalled = None
+def _signal_link(pid: int) -> None:
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGTERM)
+
+
+def _end_link(mesh: Mesh, host: str, *, clean: bool = True) -> tuple[bool, str]:
+    """End the link of `host`. With `clean`, also forget its peers and end what waits for it. The
+    caller holds the lock of the host when `clean` is True."""
     try:
-        # A link that is starting holds its lifetime lock and has not named its pid yet.
+        signalled = _running(host)
+        if signalled is not None:
+            _signal_link(signalled)
+        # The wait starts after the signal, because the first process check can take longer.
+        deadline = time.monotonic() + STOP_WAIT_S
         while _link_runs(host) and time.monotonic() < deadline:
+            # A link that is starting holds its lifetime lock and has not named its pid yet.
             pid = _running(host)
             if pid is not None and pid != signalled:
-                with contextlib.suppress(ProcessLookupError):
-                    os.kill(pid, signal.SIGTERM)
+                _signal_link(pid)
                 signalled = pid
             time.sleep(0.1)
         if _link_runs(host):
             # The link file holds the only record of this process, so it stays.
             running = _running(host) or "unknown"
-            return f"The bridge to {host} did not stop: process {running} runs."
-        mesh.expire_outbox(host, every=True)
-        folder = paths.bridge_dir(host)
-        (folder / PEERS_FILE).unlink(missing_ok=True)
-        (folder / LINK_FILE).unlink(missing_ok=True)
-    except OSError as exc:
-        return f"The bridge to {host} did not finish stopping: {_printable(exc)}."
+            return False, f"The bridge to {host} did not stop: process {running} runs."
+        if clean:
+            mesh.expire_outbox(host, every=True)
+            folder = paths.bridge_dir(host)
+            (folder / PEERS_FILE).unlink(missing_ok=True)
+            (folder / LINK_FILE).unlink(missing_ok=True)
+    except (OSError, ProcessCheckError) as exc:
+        return False, f"The bridge to {host} did not finish stopping: {_printable(exc)}."
     waits = f" Autostart waits for `peers bridge on {host}`." if _autostart_record(host) else ""
-    return f"The bridge to {host} is off.{waits}"
+    return True, f"The bridge to {host} is off.{waits}"
 
 
-def _end_host(mesh: Mesh, host: str) -> str:
+def _end_host(mesh: Mesh, host: str) -> tuple[bool, str]:
     """Hold the link of `host` off and end it, under its lock, so that `on` runs before or after
-    the whole stop. A hold that cannot be written does not keep the link running."""
+    the whole stop. A hold or a lock that fails does not keep the link running."""
+    hold_failure = None
     try:
         with _link_lock(host):
-            (paths.bridge_dir(host) / HOLD_FILE).touch(mode=0o600)
-            return _end_link(mesh, host)
+            try:
+                (paths.bridge_dir(host) / HOLD_FILE).touch(mode=0o600)
+            except OSError as exc:
+                hold_failure = exc
+            stopped, line = _end_link(mesh, host)
     except OSError as exc:
-        return f"{_end_link(mesh, host)} Its hold was not written: {_printable(exc)}."
+        _, line = _end_link(mesh, host, clean=False)
+        return False, f"{line} Its lock failed, so its files stay: {_printable(exc)}."
+    if hold_failure is not None:
+        return False, f"{line} Its hold was not written: {_printable(hold_failure)}."
+    return stopped, line
 
 
-def turn_off(mesh: Mesh) -> list[str]:
-    """Hold each link off, end it, forget its peers, and end the messages that wait for it."""
-    return [_end_host(mesh, host) for host in _hosts()] or ["No bridge is on."]
+def turn_off(mesh: Mesh) -> tuple[list[str], bool]:
+    """Hold each link off, end it, forget its peers, and end the messages that wait for it.
+    Returns one line for each host, and whether each stop and each hold succeeded."""
+    hosts = _hosts()
+    # Before any process check, which can stall or fail. `_end_host` writes the hold again under
+    # the lock that it keeps, because an `on` can run between the two.
+    for host in hosts:
+        with contextlib.suppress(OSError), _link_lock(host):
+            (paths.bridge_dir(host) / HOLD_FILE).touch(mode=0o600)
+    results = [_end_host(mesh, host) for host in hosts]
+    return [line for _, line in results] or ["No bridge is on."], all(ok for ok, _ in results)
 
 
 def status(mesh: Mesh) -> list[dict[str, Any]]:
@@ -1088,12 +1147,13 @@ def status(mesh: Mesh) -> list[dict[str, Any]]:
         state = link_state(host)
         autostart = _autostart_record(host) is not None
         hold = _held(host)
-        if state or autostart or hold:
+        alive = _link_alive(host)
+        if state or autostart or hold or alive:
             found.append(
                 {
                     "host": host,
                     "connected": link_up(state, now),
-                    "running": _link_runs(host),
+                    "running": alive or _running(host) is not None,
                     "waiting": len(mesh.outbox(host).waiting(OUTBOX)),
                     "error": state.get("error", ""),
                     "autostart": autostart,

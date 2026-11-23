@@ -7,6 +7,7 @@ import io
 import json
 import os
 import pty
+import re
 import shlex
 import shutil
 import signal
@@ -940,14 +941,17 @@ def test_off_keeps_track_of_a_link_that_does_not_stop(
     monkeypatch.setattr(bridge, "_running", lambda host: 12345)
     monkeypatch.setattr(bridge.os, "kill", lambda pid, sig: None)
     monkeypatch.setattr(bridge, "STOP_WAIT_S", 0.01)
-    assert bridge.turn_off(mesh) == [f"The bridge to {HOST} did not stop: process 12345 runs."]
+    assert bridge.turn_off(mesh) == (
+        [f"The bridge to {HOST} did not stop: process 12345 runs."],
+        False,
+    )
     assert (paths.bridge_dir(HOST) / LINK_FILE).exists()
 
 
 def test_off_forgets_the_peers_and_ends_what_waits(mesh: Mesh, me: Peer) -> None:
     _show()
     [res] = mesh.send(me, OTHER_NAME, "Tests pass.", "request")
-    assert bridge.turn_off(mesh) == [f"The bridge to {HOST} is off."]
+    assert bridge.turn_off(mesh) == ([f"The bridge to {HOST} is off."], True)
     assert mesh.registry.remote() == []
     record = mesh.ledger.find(str(res.msg_id))
     assert record is not None and record["outcome"] == "undelivered"
@@ -957,7 +961,7 @@ def test_the_bridge_is_off_until_it_is_turned_on(mesh: Mesh, me: Peer) -> None:
     assert not paths.bridge_dir().exists()
     assert mesh.list_peers(me, "all") == []
     assert bridge.status(mesh) == []
-    assert bridge.turn_off(mesh) == ["No bridge is on."]
+    assert bridge.turn_off(mesh) == (["No bridge is on."], True)
 
 
 # Autostart
@@ -1019,7 +1023,7 @@ def test_autostart_on_records_the_folders_of_the_tools(tmp_path: Path) -> None:
     )
     record = json.loads((paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).read_text())
     assert record == {
-        "path": [str(plugin_dir), str(tools), str(codex_dir)],
+        "path": [str(tools), str(codex_dir)],
         "env": {"CODEX_HOME": "/c"},
     }
     assert stat.S_IMODE((paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).stat().st_mode) == 0o600
@@ -1226,7 +1230,7 @@ def test_a_link_that_is_starting_counts_as_running(
         bridge.restore_links({})
         assert started == [] and bridge.status(mesh)[0]["running"] is True
         monkeypatch.setattr(bridge, "STOP_WAIT_S", 0.01)
-        assert bridge.turn_off(mesh) == [
+        assert bridge.turn_off(mesh)[0] == [
             f"The bridge to {HOST} did not stop: process unknown runs."
         ]
     finally:
@@ -1249,23 +1253,101 @@ def test_a_link_that_finds_the_hold_leaves_at_once(
     assert connects == []
 
 
-def test_off_stops_the_other_hosts_when_one_hold_cannot_be_written(
+def test_off_stops_the_other_hosts_when_one_lock_cannot_be_opened(
     mesh: Mesh, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     if os.geteuid() == 0:
         pytest.skip("root ignores the folder mode")
     _show(host="host-a")
     _show(host="host-b")
-    (paths.bridge_dir("host-a") / PEERS_FILE).unlink()
     locked = paths.bridge_dir("host-a")
     locked.chmod(0o500)
     try:
-        first, second = bridge.turn_off(mesh)
+        (first, second), stopped = bridge.turn_off(mesh)
     finally:
         locked.chmod(0o700)
-    assert "hold was not written" in first
+    assert stopped is False and "lock failed" in first
+    assert (locked / LINK_FILE).exists() and (locked / PEERS_FILE).exists()
+    assert second == "The bridge to host-b is off." and bridge._held("host-b")
+
+
+def test_a_failed_hold_keeps_the_lock_through_the_stop(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _show()
+    (paths.bridge_dir(HOST) / bridge.LINK_LOCK).touch()
+    touch = Path.touch
+
+    def refuse_hold(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path.name == bridge.HOLD_FILE:
+            raise OSError("no room")
+        touch(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "touch", refuse_hold)
+    locked: list[bool] = []
+    end_link = bridge._end_link
+
+    def checked(mesh: Mesh, host: str, *, clean: bool = True) -> tuple[bool, str]:
+        with bridge._link_lock(host, wait=False) as free:
+            locked.append(not free)
+        return end_link(mesh, host, clean=clean)
+
+    monkeypatch.setattr(bridge, "_end_link", checked)
+    [line], stopped = bridge.turn_off(mesh)
+    assert locked == [True]
+    assert stopped is False and "hold was not written" in line
+
+
+def test_a_failed_process_check_leaves_the_other_hosts_held(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _show(host="host-a")
+    _show(host="host-b")
+    running = bridge._running
+
+    def check(host: str) -> int | None:
+        if host == "host-a":
+            raise bridge.ProcessCheckError("ps gave no answer")
+        return running(host)
+
+    monkeypatch.setattr(bridge, "_running", check)
+    (first, second), stopped = bridge.turn_off(mesh)
+    assert stopped is False and "ps gave no answer" in first
+    assert (paths.bridge_dir("host-a") / LINK_FILE).exists()
     assert second == "The bridge to host-b is off."
-    assert bridge._held("host-b") and not bridge._held("host-a")
+    assert bridge._held("host-a") and bridge._held("host-b")
+
+
+def test_off_signals_a_link_when_the_first_check_uses_the_whole_wait(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _show()
+    monkeypatch.setattr(bridge, "_running", lambda host: 12345)
+    signalled: list[int] = []
+    monkeypatch.setattr(bridge.os, "kill", lambda pid, sig: signalled.append(pid))
+    monkeypatch.setattr(bridge, "STOP_WAIT_S", 0.0)
+    bridge.turn_off(mesh)
+    assert signalled == [12345]
+
+
+@pytest.mark.parametrize("works", [True, False])
+def test_off_exits_with_its_result(
+    mesh: Mesh, monkeypatch: pytest.MonkeyPatch, works: bool
+) -> None:
+    _show()
+    monkeypatch.setattr(bridge, "turn_off", lambda mesh: (["a line"], works))
+    assert cli.main(["bridge", "off"]) == (0 if works else 1)
+
+
+def test_status_shows_a_link_that_holds_its_lock_and_has_no_file(mesh: Mesh) -> None:
+    folder = paths.ensure_private_dir(paths.bridge_dir(HOST))
+    fd = os.open(folder / bridge.LINK_LIFE, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        [entry] = bridge.status(mesh)
+    finally:
+        os.close(fd)
+    assert entry["running"] is True
 
 
 def test_on_ends_the_hold_of_its_host_only(mesh: Mesh, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1477,21 +1559,121 @@ def test_setup_stores_an_absolute_plugin_folder(
     assert bridge._remote(HOST)["plugin_dir"] == str(Path.cwd() / "tools")
 
 
-@pytest.mark.parametrize("command", ["autostart", "on"])
-def test_an_owner_command_resolves_a_relative_plugin_folder_of_an_earlier_setup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command: str
-) -> None:
-    _starts(monkeypatch)
-    tools = _tools(tmp_path)
+def _relative_plugin_dir() -> Path:
     _set_up()
     file = paths.bridge_dir(HOST) / bridge.REMOTE_FILE
     file.write_text(json.dumps(json.loads(file.read_text()) | {"plugin_dir": "tools"}))
+    return file
+
+
+def test_on_resolves_a_relative_plugin_folder_and_writes_no_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    file = _relative_plugin_dir()
+    before = file.read_text()
     monkeypatch.chdir(tmp_path)
-    if command == "on":
-        bridge.turn_on(HOST, {})
-    else:
-        bridge.enable_autostart(HOST, {"PATH": str(tools)})
-    assert bridge._remote(HOST)["plugin_dir"] == str(Path.cwd() / "tools")
+    envs: list[Any] = []
+    monkeypatch.setattr(bridge, "_start_link", lambda host, env=None: envs.append(env))
+    bridge.turn_on(HOST, {})
+    assert envs[0]["PATH"].split(os.pathsep)[0] == str(Path.cwd() / "tools")
+    assert file.read_text() == before
+
+
+def test_autostart_refuses_a_relative_plugin_folder_and_writes_no_settings(
+    tmp_path: Path,
+) -> None:
+    file = _relative_plugin_dir()
+    before = file.read_text()
+    with pytest.raises(bridge.PeerError, match="absolute"):
+        bridge.enable_autostart(HOST, {"PATH": str(_tools(tmp_path))})
+    assert file.read_text() == before
+    assert not (paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).exists()
+
+
+def test_a_plugin_folder_does_not_take_over_the_delivery_tools(tmp_path: Path) -> None:
+    owner, plugin = tmp_path / "owner", tmp_path / "plugin"
+    for folder, names in ((owner, ["aws", "codex"]), (plugin, ["session-manager-plugin", "codex"])):
+        folder.mkdir()
+        for name in names:
+            (folder / name).write_text("#!/bin/sh\n")
+            (folder / name).chmod(0o700)
+    _set_up(plugin_dir=str(plugin))
+    bridge.enable_autostart(HOST, {"PATH": str(owner)})
+    record = json.loads((paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).read_text())
+    assert record["path"] == [str(owner)]
+
+
+def test_a_link_gets_absolute_locations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PEERMESH_HOME", "state")
+    monkeypatch.setenv("PEERMESH_CODEX", "bin/codex")
+    _set_up()
+    calls: list[Any] = []
+    monkeypatch.setattr(
+        bridge.subprocess, "Popen", lambda args, **kwargs: calls.append(kwargs) or _StartedLink()
+    )
+    monkeypatch.setattr(bridge, "_running", lambda host: None)
+    bridge.turn_on(HOST, {})
+    assert calls[0]["env"]["PEERMESH_HOME"] == str(Path.cwd() / "state")
+    assert calls[0]["env"]["PEERMESH_CODEX"] == str(Path.cwd() / "bin" / "codex")
+
+
+def test_a_request_gives_the_restore_process_an_absolute_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PEERMESH_HOME", "state")
+    _autostart(tmp_path)
+    calls: list[Any] = []
+    monkeypatch.setattr(bridge.subprocess, "Popen", lambda args, **kwargs: calls.append(kwargs))
+    bridge.request_restore({})
+    assert calls[0]["env"]["PEERMESH_HOME"] == str(Path.cwd() / "state")
+
+
+def test_autostart_records_absolute_locations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_up()
+    monkeypatch.chdir(tmp_path)
+    bridge.enable_autostart(HOST, {"PATH": str(_tools(tmp_path)), "PEERMESH_CODEX": "bin/codex"})
+    record = json.loads((paths.bridge_dir(HOST) / bridge.AUTOSTART_FILE).read_text())
+    assert record["env"] == {"PEERMESH_CODEX": str(Path.cwd() / "bin" / "codex")}
+
+
+def test_an_unreadable_lock_of_one_host_does_not_stop_the_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root ignores the file mode")
+    _autostart(tmp_path, "host-a")
+    _autostart(tmp_path, "host-b")
+    life = paths.bridge_dir("host-a") / bridge.LINK_LIFE
+    life.touch(mode=0)
+    calls: list[Any] = []
+    monkeypatch.setattr(bridge.subprocess, "Popen", lambda args, **kwargs: calls.append(args))
+    try:
+        bridge.request_restore({})
+    finally:
+        life.chmod(0o600)
+    assert len(calls) == 1
+
+
+def test_concurrent_failures_keep_the_old_lines_of_a_full_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _autostart(tmp_path)
+    log = paths.bridge_dir(HOST) / bridge.LINK_LOG
+    log.write_text("x" * 1000)
+    monkeypatch.setattr(bridge, "MAX_LINK_LOG", 1000)
+    writers = [
+        threading.Thread(target=bridge._log_failure, args=(HOST, "no answer")) for _ in range(8)
+    ]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join(5)
+    assert (paths.bridge_dir(HOST) / f"{bridge.LINK_LOG}.1").read_text() == "x" * 1000
+    assert log.read_text().count("no answer") == 8
 
 
 def test_a_connection_does_not_search_a_relative_plugin_folder(
@@ -1592,7 +1774,8 @@ def _end_links(mesh: Mesh, folder: Path) -> None:
         shown = subprocess.run(
             ["ps", "eww", "-p", pid, "-o", "command="], capture_output=True, text=True
         ).stdout
-        if f"PEERMESH_HOME={paths.home()}" in shown and "bridge run" in shown:
+        home = rf"(^|\s)PEERMESH_HOME={re.escape(str(paths.home()))}(\s|$)"
+        if "bridge run" in shown and re.search(home, shown):
             with contextlib.suppress(ProcessLookupError):
                 os.kill(int(pid), signal.SIGTERM)
 
