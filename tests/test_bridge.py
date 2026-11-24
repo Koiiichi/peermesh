@@ -1460,6 +1460,82 @@ def test_the_codex_path_keeps_a_parent_step_after_a_symlink(
     assert codex_bin() == f"{folder}/codex"
 
 
+def test_a_plugin_folder_does_not_replace_the_aws_on_the_path(
+    mesh: Mesh, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner, plugin = tmp_path / "owner", tmp_path / "plugin"
+    for folder in (owner, plugin):
+        folder.mkdir()
+        (folder / "aws").write_text("#!/bin/sh\n")
+        (folder / "aws").chmod(0o700)
+    _set_up(plugin_dir=str(plugin))
+    monkeypatch.setenv("PATH", str(owner))
+    seen: list[Any] = []
+
+    def refuse(args: Any, **kwargs: Any) -> Any:
+        seen.append((args[0], kwargs["env"]["PATH"].split(os.pathsep)[0]))
+        raise OSError("stop here")
+
+    monkeypatch.setattr(bridge.subprocess, "Popen", refuse)
+    bridge._connect_once(mesh, HOST, threading.Event())
+    assert seen == [(str(owner / "aws"), str(plugin))]
+
+
+def test_a_link_keeps_relative_path_entries_of_the_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    here = str(Path.cwd())
+    found = bridge._located({"PATH": os.pathsep.join(["bin", "", "/usr/bin"])})["PATH"]
+    assert found.split(os.pathsep) == [f"{here}/bin", f"{here}/.", "/usr/bin"]
+
+
+def test_a_relative_path_entry_is_dropped_when_the_folder_is_gone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def gone() -> str:
+        raise FileNotFoundError("the current folder is gone")
+
+    monkeypatch.setattr(bridge.os.path, "realpath", lambda path: gone())
+    assert bridge._absolute_search(os.pathsep.join(["bin", "/usr/bin"])) == "/usr/bin"
+
+
+def test_a_request_does_not_wait_for_a_busy_log_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _autostart(tmp_path)
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("no process")
+
+    monkeypatch.setattr(bridge.subprocess, "Popen", refuse)
+    folder = paths.bridge_dir(HOST)
+    held = os.open(folder / bridge.LOG_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    request = threading.Thread(target=bridge.request_restore, args=({},), daemon=True)
+    request.start()
+    try:
+        request.join(2)
+        assert not request.is_alive()
+    finally:
+        os.close(held)
+    assert "no process" in (folder / bridge.LINK_LOG).read_text()
+
+
+def test_an_unreadable_host_folder_leaves_the_other_hosts_in_status(mesh: Mesh) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root ignores the folder mode")
+    _show(host="host-b")
+    closed = paths.ensure_private_dir(paths.bridge_dir("host-a"))
+    closed.chmod(0)
+    try:
+        first, second = bridge.status(mesh)
+    finally:
+        closed.chmod(0o700)
+    assert first["host"] == "host-a" and "cannot be read" in first["error"]
+    assert second["host"] == "host-b" and second["connected"] is True
+
+
 def test_a_failed_process_check_leaves_the_other_hosts_held(
     mesh: Mesh, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1999,10 +2075,10 @@ def test_concurrent_session_starts_start_one_link(
     monkeypatch.delenv("PEERMESH_BRIDGE_CONNECT", raising=False)
     _autostart(tmp_path)
     go = tmp_path / "go"
-    starts = [
-        subprocess.Popen([sys.executable, "-c", CONCURRENT_START, str(go)]) for _ in range(12)
-    ]
+    starts: list[subprocess.Popen[bytes]] = []
     try:
+        for _ in range(12):
+            starts.append(subprocess.Popen([sys.executable, "-c", CONCURRENT_START, str(go)]))
         # Each process has imported the bridge when it waits on the file.
         time.sleep(1.5)
         go.touch()
@@ -2011,6 +2087,11 @@ def test_concurrent_session_starts_start_one_link(
         time.sleep(1.5)
         assert _calls(tmp_path) == [str(registry.link_state(HOST)["pid"])]
     finally:
+        go.touch()
+        for start in starts:
+            if start.poll() is None:
+                start.kill()
+            start.wait()
         _end_links(mesh, tmp_path)
 
 
