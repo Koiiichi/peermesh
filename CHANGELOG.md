@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.5.9 — 2026-11-23
+
+An owner switch lets the next agent session bring the bridge back after this machine restarts, and `peers bridge off` now stays off until you turn the bridge on again.
+
+Autostart is tested with real Claude Code and Codex sessions and a stand-in for AWS. It has not yet run through a real machine restart, a session in the Claude desktop app, or a real AWS connection.
+
+### Upgrade
+
+1. Pull: `git pull`. The hooks, the Codex rule and the `AGENTS.md` block are the same as in 0.5.8, so you don't need to run `peers install`, and Codex does not ask you to trust the hooks again.
+2. If you use the Codex plugin, run `codex plugin add peermesh@peermesh` to show the new version; its hooks and tools are unchanged.
+3. Nothing else for a running session: it gets this version at its next hook or peermesh tool call.
+4. To use autostart, run `peers bridge autostart on <host>` from a terminal on the machine where you set up the bridge. You don't need to restart a running bridge or update the other machine: the bridge protocol is the same.
+5. If an earlier `peers bridge setup` stored `--plugin-dir` as a relative path, run `setup` again with an absolute path. `peers bridge on` refuses the relative one.
 
 ### Added
 
