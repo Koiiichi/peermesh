@@ -170,9 +170,9 @@ peers bridge setup workstation \
   --run-as agent --profile dev --region us-east-1 --as laptop
 peers bridge on workstation    # stays on until you run off, or until this machine restarts
 peers bridge status            # connected or offline, messages waiting, autostart, hold, the last error
-peers bridge off               # end the connection, forget the remote peers, and hold it off
-peers bridge autostart on workstation    # the next agent session that starts restores the connection
+peers bridge autostart on workstation    # after a restart, the next agent session restores the connection
 peers bridge autostart off workstation   # stop restoring it; a running connection stays
+peers bridge off               # end the connection, forget the remote peers, and hold it off until `on`
 ```
 
 `workstation` is the label of the host in peer addresses, and `--as` sets the label of this machine over there. `--remote-home` is `PEERMESH_HOME` in the service, `--run-as` is the user of the sessions, `--remote-peers` names the `peers` command there when it is not the one on the `PATH`, and `--plugin-dir` names the folder of `session-manager-plugin` when it is not on your `PATH`. These values stay in `~/.peermesh/bridge/`. Only the owner changes the bridge: `setup`, `on` and `autostart` refuse to run in an agent session.

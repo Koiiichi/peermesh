@@ -427,4 +427,9 @@ def handle(
         mesh.record_injected(items, "prompt")
         return out
 
-    return mesh.claim(peer_id, updated, me(), inject)
+    result = mesh.claim(peer_id, updated, me(), inject)
+    if registers and event == "prompt":
+        # Claude Code can run SessionStart before its inbox exists, and then this prompt is the
+        # start of the registered session.
+        _restore_bridges(env)
+    return result

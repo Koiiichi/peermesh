@@ -704,6 +704,10 @@ def _connect_once(mesh: Mesh, host: str, stop: threading.Event) -> tuple[bool, s
     """Run one connection. Returns whether the two sides spoke, and the reason it ended."""
     log = paths.bridge_dir(host) / "connect.log"
     env = dict(os.environ)
+    command = _connect_command(host)
+    # Before the plugin folder joins the PATH: it is there for `session-manager-plugin`, and an
+    # `aws` in it must not replace the one on the PATH.
+    command[0] = shutil.which(command[0], path=env.get("PATH")) or command[0]
     plugin_dir = _remote(host).get("plugin_dir")
     # A relative entry would name a folder of whichever project started this process.
     if plugin_dir and os.path.isabs(plugin_dir):
@@ -713,7 +717,7 @@ def _connect_once(mesh: Mesh, host: str, stop: threading.Event) -> tuple[bool, s
         # and a signal to its process group also reaches the plugin that `aws` starts.
         try:
             link = subprocess.Popen(
-                _connect_command(host),
+                command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=errors,
@@ -861,12 +865,24 @@ def _home() -> str:
     return _absolute(paths.home())
 
 
+def _absolute_search(search: str) -> str:
+    entries = []
+    for entry in search.split(os.pathsep):
+        # An empty entry means the current folder, and a relative entry starts there. It can be
+        # gone, and then the entry finds nothing.
+        with contextlib.suppress(FileNotFoundError):
+            entries.append(_absolute(entry or "."))
+    return os.pathsep.join(entries)
+
+
 def _located(env: Mapping[str, str]) -> dict[str, str]:
     """`env` with each location absolute, because a link runs in its private folder."""
     found = {**env, "PEERMESH_HOME": _home()}
     for name in _OWNER_ENV:
         if found.get(name):
             found[name] = _absolute(found[name])
+    if "PATH" in found:
+        found["PATH"] = _absolute_search(found["PATH"])
     return found
 
 
@@ -1028,7 +1044,9 @@ def _restore_link(host: str, env: Mapping[str, str]) -> None:
             _start_link(host, _link_env(record, env))
 
 
-def _log_failure(host: str, failure: object) -> None:
+def _log_failure(host: str, failure: object, *, wait: bool = True) -> None:
+    """Add `failure` to the log of `host`. With `wait` False, a busy log lock costs the rotation
+    and no time, for a caller with a short time limit."""
     log = paths.bridge_dir(host) / LINK_LOG
     line = f"{time.ctime()} autostart failed: {_printable(failure)}\n"
 
@@ -1038,9 +1056,10 @@ def _log_failure(host: str, failure: object) -> None:
 
     with contextlib.suppress(OSError):
         try:
-            with _file_lock(log.with_name(LOG_LOCK)):
-                with contextlib.suppress(OSError):
-                    _rotate_log(log)
+            with _file_lock(log.with_name(LOG_LOCK), wait=wait) as locked:
+                if locked:
+                    with contextlib.suppress(OSError):
+                        _rotate_log(log)
                 append()
         except OSError:
             # A log without a working lock still takes the reason.
@@ -1091,7 +1110,7 @@ def request_restore(env: Mapping[str, str]) -> None:
         )
     except OSError as exc:
         for host in hosts:
-            _log_failure(host, exc)
+            _log_failure(host, exc, wait=False)
 
 
 def _hosts() -> list[str]:
@@ -1193,20 +1212,26 @@ def status(mesh: Mesh) -> list[dict[str, Any]]:
     for host in _hosts():
         state = link_state(host)
         autostart = _autostart_record(host) is not None
-        hold = _held(host)
-        check_error = ""
+        problems = []
+        hold = running = False
+        waiting = 0
+        try:
+            hold = _held(host)
+            waiting = len(mesh.outbox(host).waiting(OUTBOX))
+        except OSError as exc:
+            problems.append(f"The host folder cannot be read: {_printable(exc)}")
         try:
             running = _link_alive(host) or _running(host) is not None
         except (OSError, ProcessCheckError) as exc:
-            running, check_error = False, f"The link cannot be checked: {_printable(exc)}"
-        if state or autostart or hold or running or check_error:
+            problems.append(f"The link cannot be checked: {_printable(exc)}")
+        if state or autostart or hold or running or problems:
             found.append(
                 {
                     "host": host,
                     "connected": link_up(state, now),
                     "running": running,
-                    "waiting": len(mesh.outbox(host).waiting(OUTBOX)),
-                    "error": check_error or state.get("error", ""),
+                    "waiting": waiting,
+                    "error": " ".join(problems) or state.get("error", ""),
                     "autostart": autostart,
                     "hold": hold,
                 }

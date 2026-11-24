@@ -60,6 +60,22 @@ def test_session_start_restores_bridges_once_the_session_is_registered(
     assert len(calls) == 1
 
 
+def test_the_prompt_that_registers_a_session_restores_bridges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mesh = _mesh()
+    calls: list[Any] = []
+    monkeypatch.setattr(bridge, "request_restore", calls.append)
+    payload = {"session_id": "C1", "cwd": os.getcwd()}
+    hooks.handle(mesh, "session-start", "claude", payload, env={}, host_pid=os.getpid())
+    assert mesh.registry.get("claude:C1") is None and calls == []
+    env = {"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}
+    hooks.handle(mesh, "prompt", "claude", payload, env=env, host_pid=os.getpid())
+    assert mesh.registry.get("claude:C1") is not None and calls == [env]
+    hooks.handle(mesh, "prompt", "claude", payload, env=env, host_pid=os.getpid())
+    assert calls == [env]
+
+
 def test_session_start_that_registers_nothing_restores_no_bridge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
